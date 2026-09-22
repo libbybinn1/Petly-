@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}PetMatch{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/petmatch.css') }}">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐾</text></svg>">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar__inner">
+    <a class="brand" href="{{ url_for('home.index') }}">
+      <span class="brand__mark" aria-hidden="true">🐾</span>
+      PetMatch
+    </a>
+
+    <nav class="topbar__nav">
+      <a class="navlink {% if request.endpoint == 'animals.search' %}navlink--active{% endif %}"
+         href="{{ url_for('animals.search') }}">Browse animals</a>
+
+      {% if current_user.is_authenticated %}
+        {% if current_user.is_staff %}
+          <a class="navlink {% if request.endpoint == 'animals.manage' %}navlink--active{% endif %}"
+             href="{{ url_for('animals.manage') }}">Manage</a>
+        {% endif %}
+
+        <span class="avatar" title="{{ current_user.full_name }}">{{ current_user.initials }}</span>
+        <form method="post" action="{{ url_for('auth.logout') }}" style="display:inline">
+          <button type="submit" class="btn btn--ghost btn--small">Sign out</button>
+        </form>
+      {% else %}
+        <a class="navlink" href="{{ url_for('auth.login') }}">Sign in</a>
+        <a class="btn btn--primary btn--small" href="{{ url_for('auth.register') }}">Join</a>
+      {% endif %}
+    </nav>
+  </div>
+</header>
+
+<main class="page">
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      <div class="stack" style="margin-bottom: var(--space-5)">
+        {% for category, message in messages %}
+          <div class="alert alert--{{ category }}">{{ message }}</div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  {% endwith %}
+
+  {% block content %}{% endblock %}
+</main>
+
+<footer class="footer">
+  PetMatch &middot; an adoption matching system &middot; every match is reviewed by a person
+</footer>
+
+</body>
+</html>

@@ -51,7 +51,7 @@ def check_database() -> CheckResult:
             timeout=30,
             login_timeout=30,
         )
-    except Exception as error:  # noqa: BLE001 - report any failure to the user
+    except Exception as error:  # - report any failure to the user
         return CheckResult("Cloud database", False, f"{type(error).__name__}: {error}")
 
     with connection:
@@ -80,7 +80,7 @@ def check_ollama_chat() -> CheckResult:
             options={"temperature": 0},
         )
         json.loads(response["message"]["content"])
-    except Exception as error:  # noqa: BLE001
+    except Exception as error:
         return CheckResult("Ollama chat", False, f"{type(error).__name__}: {error}")
 
     return CheckResult("Ollama chat", True, f"{model_name} responded with valid JSON")
@@ -94,7 +94,7 @@ def check_ollama_embeddings() -> CheckResult:
     try:
         client = ollama.Client(host=os.environ["OLLAMA_BASE_URL"])
         vector = client.embeddings(model=model_name, prompt="a calm indoor rabbit")["embedding"]
-    except Exception as error:  # noqa: BLE001
+    except Exception as error:
         return CheckResult("Ollama embeddings", False, f"{type(error).__name__}: {error}")
 
     if not vector:
@@ -125,7 +125,7 @@ def check_vector_database() -> CheckResult:
         document = "rabbits are quiet indoor companions suited to small homes"
         collection.add(ids=["a"], documents=[document], embeddings=[embed(document)])
         results = collection.query(query_embeddings=[embed("calm small pet")], n_results=1)
-    except Exception as error:  # noqa: BLE001
+    except Exception as error:
         return CheckResult("Vector database", False, f"{type(error).__name__}: {error}")
 
     if not results["ids"][0]:
@@ -146,10 +146,11 @@ def check_web_search() -> CheckResult:
 
     try:
         response = TavilyClient(api_key=api_key).search(query="dog adoption", max_results=1)
-    except Exception as error:  # noqa: BLE001
+    except Exception as error:
         return CheckResult("Web search", False, f"{type(error).__name__}: {error}")
 
-    return CheckResult("Web search", True, f"Tavily returned {len(response.get('results', []))} result(s)")
+    result_count = len(response.get("results", []))
+    return CheckResult("Web search", True, f"Tavily returned {result_count} result(s)")
 
 
 ALL_CHECKS = (

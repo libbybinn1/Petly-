@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Sign in — PetMatch{% endblock %}
+{% block content %}
+<div class="auth-shell">
+  <div class="auth-card">
+    <h1>Welcome back</h1>
+    <p class="auth-card__lead">Sign in to see your matches, applications and invitations.</p>
+
+    <form method="post" action="{{ url_for('auth.login') }}">
+      <div class="field">
+        <label class="field__label" for="email">Email</label>
+        <input class="input" type="email" id="email" name="email" value="{{ email or '' }}"
+               required autocomplete="email" autofocus>
+      </div>
+      <div class="field">
+        <label class="field__label" for="password">Password</label>
+        <input class="input" type="password" id="password" name="password"
+               required autocomplete="current-password">
+      </div>
+      <button class="btn btn--primary btn--block" type="submit">Sign in</button>
+    </form>
+
+    <div class="demo-hint">
+      <strong>Demo accounts</strong><br>
+      Staff: <code>dana@petmatch.org</code><br>
+      Adopter: <code>maya@example.com</code><br>
+      Password: <code>Password123!</code>
+    </div>
+
+    <div class="auth-card__footer">
+      New here? <a href="{{ url_for('auth.register') }}">Create an account</a>
+    </div>
+  </div>
+</div>
+{% endblock %}

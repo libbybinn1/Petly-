@@ -13,6 +13,8 @@ requires-python = ">=3.12"
 line-length = 100
 target-version = "py312"
 src = ["app", "agent_service", "mcp_server", "tests"]
+# Vendored third-party skills are not our code and are not ours to restyle.
+extend-exclude = [".claude", ".venv", "data"]
 
 [tool.ruff.lint]
 select = [
@@ -46,7 +48,7 @@ ignore = [
 # Tests may use asserts, long names and need no module docstrings.
 "tests/**" = ["D100", "D103", "D104", "ANN201", "PLR2004", "ARG001"]
 "alembic/**" = ["D", "ANN", "INP001"]
-"scripts/**" = ["T20"]   # CLI scripts are allowed to print
+"scripts/*.py" = ["T201", "T203"]   # CLI scripts report progress to the terminal
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

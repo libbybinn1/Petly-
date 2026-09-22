@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Manage animals — PetMatch{% endblock %}
+
+{% block content %}
+<div class="section-heading">
+  <div>
+    <h1>Animal management</h1>
+    <p>{{ animals|length }} animal{{ '' if animals|length == 1 else 's' }} in the organization's care.</p>
+  </div>
+</div>
+
+<form method="get" action="{{ url_for('animals.manage') }}" class="filter-bar">
+  <div class="field">
+    <label class="field__label" for="status">Status</label>
+    <select class="select" id="status" name="status">
+      <option value="">All statuses</option>
+      {% for value in ['AVAILABLE','RESERVED','ADOPTION_IN_PROGRESS','ADOPTED','UNAVAILABLE'] %}
+        <option value="{{ value }}" {% if selected_status == value %}selected{% endif %}>{{ value|humanize }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="field">
+    <label class="field__label" for="species">Species</label>
+    <select class="select" id="species" name="species">
+      <option value="">All species</option>
+      {% for value in options.species %}
+        <option value="{{ value }}" {% if selected_species == value %}selected{% endif %}>{{ value|humanize }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="filter-bar__actions">
+    <button class="btn btn--primary" type="submit">Filter</button>
+    <a class="btn btn--ghost" href="{{ url_for('animals.manage') }}">Clear</a>
+  </div>
+</form>
+
+{% if animals %}
+<div class="table-wrap">
+  <table class="table">
+    <thead>
+      <tr>
+        <th></th>
+        <th>Name</th>
+        <th>Species</th>
+        <th>Age</th>
+        <th>Size</th>
+        <th>Temperament</th>
+        <th>Location</th>
+        <th>Status</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for animal in animals %}
+      <tr>
+        <td>
+          {% if animal.image_url %}
+            <img class="table__thumb" src="{{ animal.image_url }}" alt="" loading="lazy">
+          {% else %}
+            <div class="table__thumb" style="display:grid;place-items:center">🐾</div>
+          {% endif %}
+        </td>
+        <td><strong>{{ animal.name }}</strong>{% if animal.breed %}<br><span style="color:var(--text-muted);font-size:0.85rem">{{ animal.breed }}</span>{% endif %}</td>
+        <td>{{ animal.species_label }}</td>
+        <td>{{ animal.age_label }}</td>
+        <td>{{ animal.size|humanize }}</td>
+        <td>{{ animal.temperament|humanize }}</td>
+        <td>{{ animal.city }}</td>
+        <td>
+          {% if animal.status == 'AVAILABLE' %}
+            <span class="tag tag--success">Available</span>
+          {% elif animal.status == 'ADOPTED' %}
+            <span class="tag tag--info">Adopted</span>
+          {% elif animal.status == 'UNAVAILABLE' %}
+            <span class="tag tag--danger">Unavailable</span>
+          {% else %}
+            <span class="tag tag--warning">{{ animal.status|humanize }}</span>
+          {% endif %}
+        </td>
+        <td><a class="btn btn--secondary btn--small" href="{{ url_for('animals.details', animal_id=animal.animal_id) }}">Open</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="empty">
+  <div class="empty__icon">📋</div>
+  <h3>No animals match those filters</h3>
+  <a class="btn btn--secondary" href="{{ url_for('animals.manage') }}">Clear filters</a>
+</div>
+{% endif %}
+{% endblock %}

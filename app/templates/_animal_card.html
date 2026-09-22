@@ -1,0 +1,24 @@
+{# Reusable animal card. Expects `animal` (an AnimalCard view model). #}
+<a class="animal-card" href="{{ url_for('animals.details', animal_id=animal.animal_id) }}">
+  <div class="animal-card__media">
+    {% if animal.image_url %}
+      <img src="{{ animal.image_url }}" alt="{{ animal.name }}, a {{ animal.species_label|lower }}" loading="lazy">
+    {% else %}
+      <div class="animal-card__placeholder" aria-hidden="true">🐾</div>
+    {% endif %}
+  </div>
+  <div class="animal-card__body">
+    <h3 class="animal-card__name">{{ animal.name }}</h3>
+    <p class="animal-card__meta">
+      {{ animal.species_label }}{% if animal.breed %} &middot; {{ animal.breed }}{% endif %}<br>
+      {{ animal.age_label }} &middot; {{ animal.size|humanize }} &middot; {{ animal.city }}
+    </p>
+    <div class="tag-row">
+      <span class="tag tag--brand">{{ animal.temperament|humanize }}</span>
+      <span class="tag">{{ animal.activity_level|humanize }} energy</span>
+      {% if animal.good_with_children %}<span class="tag tag--success">Good with kids</span>{% endif %}
+      {% if animal.has_special_needs %}<span class="tag tag--warning">Special needs</span>{% endif %}
+      {% if not animal.is_available %}<span class="tag tag--info">{{ animal.status|humanize }}</span>{% endif %}
+    </div>
+  </div>
+</a>

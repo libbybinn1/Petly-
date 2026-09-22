@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}PetMatch — find the animal that fits your life{% endblock %}
+
+{% block content %}
+<section class="hero">
+  <h1>Find the animal that fits your life</h1>
+  <p class="hero__lead">
+    PetMatch looks at your home, your routine and what you are actually looking for —
+    then explains why each animal might suit you. Every recommendation is reviewed by a
+    person before anything is decided.
+  </p>
+  <div class="hero__actions">
+    <a class="btn btn--primary" href="{{ url_for('animals.search') }}">Browse {{ available_count }} animals</a>
+    {% if not is_signed_in %}
+      <a class="btn btn--secondary" href="{{ url_for('auth.register') }}">Create a profile</a>
+    {% endif %}
+  </div>
+</section>
+
+<div class="section-heading">
+  <div>
+    <h2>Looking for a home</h2>
+    <p>A few of the animals currently available for adoption.</p>
+  </div>
+  <a class="btn btn--secondary btn--small" href="{{ url_for('animals.search') }}">See all</a>
+</div>
+
+{% if featured_animals %}
+  <div class="grid-animals">
+    {% for animal in featured_animals %}
+      {% include "_animal_card.html" %}
+    {% endfor %}
+  </div>
+{% else %}
+  <div class="empty">
+    <div class="empty__icon">🐾</div>
+    <h3>No animals listed yet</h3>
+    <p>Once the organization adds animals, they will appear here.</p>
+  </div>
+{% endif %}
+{% endblock %}

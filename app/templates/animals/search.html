@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}Browse animals — PetMatch{% endblock %}
+
+{% block content %}
+<div class="section-heading">
+  <div>
+    <h1>Browse animals</h1>
+    <p>{{ results.total_count }} animal{{ '' if results.total_count == 1 else 's' }} match your search.</p>
+  </div>
+</div>
+
+<form method="get" action="{{ url_for('animals.search') }}">
+  <div class="searchbar">
+    <input class="input" type="search" name="q" value="{{ filters.text or '' }}"
+           placeholder="Search by name, breed or description…" aria-label="Search animals">
+    <button class="btn btn--primary" type="submit">Search</button>
+  </div>
+
+  <div class="filter-bar">
+    <div class="field">
+      <label class="field__label" for="species">Species</label>
+      <select class="select" id="species" name="species">
+        <option value="">Any</option>
+        {% for value in options.species %}
+          <option value="{{ value }}" {% if filters.species == value %}selected{% endif %}>{{ value|humanize }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="field">
+      <label class="field__label" for="size">Size</label>
+      <select class="select" id="size" name="size">
+        <option value="">Any</option>
+        {% for value in options.size %}
+          <option value="{{ value }}" {% if filters.size == value %}selected{% endif %}>{{ value|humanize }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="field">
+      <label class="field__label" for="activity_level">Energy level</label>
+      <select class="select" id="activity_level" name="activity_level">
+        <option value="">Any</option>
+        {% for value in options.activity_level %}
+          <option value="{{ value }}" {% if filters.activity_level == value %}selected{% endif %}>{{ value|humanize }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="field">
+      <span class="field__label">Must be</span>
+      <label class="checkbox">
+        <input type="checkbox" name="good_with_children" value="1"
+               {% if filters.good_with_children %}checked{% endif %}>
+        Good with children
+      </label>
+      <label class="checkbox">
+        <input type="checkbox" name="good_with_other_animals" value="1"
+               {% if filters.good_with_other_animals %}checked{% endif %}>
+        Good with other animals
+      </label>
+    </div>
+
+    <div class="filter-bar__actions">
+      <button class="btn btn--primary" type="submit">Apply filters</button>
+      <a class="btn btn--ghost" href="{{ url_for('animals.search') }}">Clear</a>
+    </div>
+  </div>
+</form>
+
+{% if results.animals %}
+  <div class="grid-animals">
+    {% for animal in results.animals %}
+      {% include "_animal_card.html" %}
+    {% endfor %}
+  </div>
+
+  {% if results.page_count > 1 %}
+    <nav class="pagination">
+      {% if results.has_previous %}
+        <a class="btn btn--secondary btn--small"
+           href="{{ url_for('animals.search', **dict(request.args, page=results.page - 1)) }}">Previous</a>
+      {% endif %}
+      <span class="pagination__status">Page {{ results.page }} of {{ results.page_count }}</span>
+      {% if results.has_next %}
+        <a class="btn btn--secondary btn--small"
+           href="{{ url_for('animals.search', **dict(request.args, page=results.page + 1)) }}">Next</a>
+      {% endif %}
+    </nav>
+  {% endif %}
+{% else %}
+  <div class="empty">
+    <div class="empty__icon">🔍</div>
+    <h3>No animals match those filters</h3>
+    <p>Try widening your search — removing a filter or two usually helps.</p>
+    <a class="btn btn--secondary" href="{{ url_for('animals.search') }}">Clear filters</a>
+  </div>
+{% endif %}
+{% endblock %}

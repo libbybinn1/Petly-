@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}{{ animal.name }} — PetMatch{% endblock %}
+
+{% block content %}
+<p style="margin-bottom: var(--space-4)">
+  <a href="{{ url_for('animals.search') }}">&larr; Back to all animals</a>
+</p>
+
+<div class="detail-layout">
+  <div>
+    <div class="detail-photo">
+      {% if animal.image_url %}
+        <img src="{{ animal.image_url }}" alt="{{ animal.name }}, a {{ animal.species_label|lower }}">
+      {% else %}
+        <div class="animal-card__placeholder" aria-hidden="true">🐾</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div>
+    <div class="tag-row" style="margin-bottom: var(--space-3)">
+      {% if animal.is_available %}
+        <span class="tag tag--success">Available for adoption</span>
+      {% else %}
+        <span class="tag tag--info">{{ animal.status|humanize }}</span>
+      {% endif %}
+      {% if animal.has_special_needs %}<span class="tag tag--warning">Special needs</span>{% endif %}
+    </div>
+
+    <h1>{{ animal.name }}</h1>
+    <p style="color: var(--text-muted); font-size: 1.05rem; margin-top: calc(-1 * var(--space-2))">
+      {{ animal.species_label }}{% if animal.breed %} &middot; {{ animal.breed }}{% endif %}
+    </p>
+
+    {% if animal.description %}
+      <p>{{ animal.description }}</p>
+    {% endif %}
+
+    <div class="card card--padded" style="margin-bottom: var(--space-4)">
+      <div class="spec-list">
+        <div class="spec">
+          <div class="spec__label">Age</div>
+          <div class="spec__value">{{ animal.age_label }}</div>
+        </div>
+        <div class="spec">
+          <div class="spec__label">Size</div>
+          <div class="spec__value">{{ animal.size|humanize }}</div>
+        </div>
+        <div class="spec">
+          <div class="spec__label">Temperament</div>
+          <div class="spec__value">{{ animal.temperament|humanize }}</div>
+        </div>
+        <div class="spec">
+          <div class="spec__label">Energy level</div>
+          <div class="spec__value">{{ animal.activity_level|humanize }}</div>
+        </div>
+        <div class="spec">
+          <div class="spec__label">Space needed</div>
+          <div class="spec__value">{{ animal.required_space|humanize }}</div>
+        </div>
+        <div class="spec">
+          <div class="spec__label">Location</div>
+          <div class="spec__value">{{ animal.city }}</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card card--padded" style="margin-bottom: var(--space-4)">
+      <h3 style="font-size: 0.95rem; margin-bottom: var(--space-3)">Living with {{ animal.name }}</h3>
+      <div class="tag-row" style="padding-top: 0">
+        <span class="tag {% if animal.good_with_children %}tag--success{% else %}tag--danger{% endif %}">
+          {{ 'Good with children' if animal.good_with_children else 'Not suited to young children' }}
+        </span>
+        <span class="tag {% if animal.good_with_other_animals %}tag--success{% else %}tag--danger{% endif %}">
+          {{ 'Good with other animals' if animal.good_with_other_animals else 'Prefers to be the only pet' }}
+        </span>
+      </div>
+      {% if animal.special_needs_description %}
+        <div class="alert alert--warning" style="margin-top: var(--space-3); margin-bottom: 0">
+          {{ animal.special_needs_description }}
+        </div>
+      {% endif %}
+    </div>
+
+    {% if current_user.is_authenticated and current_user.is_staff %}
+      <div class="card card--padded">
+        <h3 style="font-size: 0.95rem">Staff view</h3>
+        <p style="margin-bottom: 0; color: var(--text-muted)">
+          {{ animal.active_application_count }} active application{{ '' if animal.active_application_count == 1 else 's' }}
+          for {{ animal.name }}.
+        </p>
+      </div>
+    {% elif animal.is_available %}
+      <a class="btn btn--primary btn--block" href="#">Apply to adopt {{ animal.name }}</a>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
