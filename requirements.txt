@@ -18,7 +18,9 @@ truststore==0.10.4
 
 # ---- Configuration ----
 python-dotenv==1.0.1
-pydantic==2.8.2
+# mcp 2.x and chromadb both require a newer pydantic than 2.8; pinning the
+# older version made a clean install from this file impossible.
+pydantic==2.13.5
 
 # ---- Vector DB + RAG ----
 chromadb==0.5.3
