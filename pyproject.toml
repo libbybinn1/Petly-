@@ -1,0 +1,106 @@
+[project]
+name = "petmatch"
+version = "0.1.0"
+description = "AI-assisted information system for an animal adoption organization"
+requires-python = ">=3.12"
+
+# ---------------------------------------------------------------------------
+# Ruff - enforces the Clean Code skill mechanically.
+# Rules chosen to match the project's stated style directives:
+# descriptive names, early returns, shallow nesting, small functions.
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["app", "agent_service", "mcp_server", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",    # pycodestyle
+    "F",         # pyflakes
+    "I",         # import sorting
+    "N",         # pep8-naming
+    "UP",        # pyupgrade
+    "B",         # bugbear
+    "A",         # builtin shadowing
+    "C4",        # comprehensions
+    "DTZ",       # timezone-aware datetimes (important for 72h invitation expiry)
+    "T20",       # no print() in application code
+    "SIM",       # simplify - catches deep nesting and negated conditions
+    "PTH",       # use pathlib
+    "RET",       # early returns - directly enforces the Clean Code directive
+    "ARG",       # unused arguments
+    "PL",        # pylint subset
+    "RUF",
+    "D",         # docstrings - Clean Code directive requires them
+    "ANN",       # type annotations - strict typing directive
+]
+ignore = [
+    "D203",   # conflicts with D211
+    "D213",   # conflicts with D212
+    "ANN101", # deprecated: annotating `self`
+    "ANN102", # deprecated: annotating `cls`
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests may use asserts, long names and need no module docstrings.
+"tests/**" = ["D100", "D103", "D104", "ANN201", "PLR2004", "ARG001"]
+"alembic/**" = ["D", "ANN", "INP001"]
+"scripts/**" = ["T20"]   # CLI scripts are allowed to print
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.pylint]
+max-args = 6
+max-branches = 8        # keeps nesting shallow
+max-statements = 40
+
+[tool.ruff.format]
+quote-style = "double"
+
+# ---------------------------------------------------------------------------
+# Mypy - strict typing directive
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+disallow_untyped_defs = true
+disallow_any_generics = true
+no_implicit_optional = true
+show_error_codes = true
+plugins = []
+
+[[tool.mypy.overrides]]
+module = ["chromadb.*", "pymssql.*", "tavily.*", "ollama.*", "flask_login.*", "flask_wtf.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+
+# ---------------------------------------------------------------------------
+# Pytest - suite markers drive the Testing skill
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-ra --strict-markers"
+markers = [
+    "unit: pure logic, no I/O, no database",
+    "integration: touches the database or multiple services",
+    "api: HTTP endpoint behaviour, auth and validation",
+    "agent: agent loop, RAG, MCP tools and LLM output structure",
+    "e2e: full browser workflows via Playwright",
+    "slow: needs a live LLM or network access",
+]
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.coverage.run]
+source = ["app", "agent_service", "mcp_server"]
+omit = ["*/tests/*", "*/alembic/*", "*/__init__.py"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
