@@ -46,7 +46,9 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 # Tests may use asserts, long names and need no module docstrings.
-"tests/**" = ["D100", "D103", "D104", "ANN201", "PLR2004", "ARG001"]
+# ARG002: test doubles must match the protocol signature even when a
+# particular argument is irrelevant to that double.
+"tests/**" = ["D100", "D103", "D104", "ANN201", "PLR2004", "ARG001", "ARG002"]
 "alembic/**" = ["D", "ANN", "INP001"]
 "scripts/*.py" = ["T201", "T203"]   # CLI scripts report progress to the terminal
 
