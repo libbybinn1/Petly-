@@ -67,6 +67,7 @@
               {% else %}
                 {{ source.reference }}
               {% endif %}
+              {% if source.cited %}<span class="source-kind">cited</span>{% endif %}
             </li>
           {% endfor %}
         </ul>
@@ -77,6 +78,20 @@
         <p class="pending">No external sources were consulted.</p>
       {% endif %}
     </div>
+
+    {% if analysis.reasoning_trace %}
+      <div class="card card--padded">
+        <h3 class="panel-title">How the agent reasoned</h3>
+        <ol class="source-list">
+          {% for step in analysis.reasoning_trace %}
+            <li>
+              <span class="source-kind">{{ step.step or loop.index }}</span>
+              {{ step.action }} &middot; {{ step.detail }}
+            </li>
+          {% endfor %}
+        </ol>
+      </div>
+    {% endif %}
   </div>
 
   <div class="card card--padded">

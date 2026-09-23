@@ -4,53 +4,99 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}PetMatch{% endblock %}</title>
+  <meta name="color-scheme" content="light dark">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/petmatch.css') }}">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐾</text></svg>">
+  <link rel="icon" type="image/svg+xml"
+        href="{{ url_for('static', filename='img/favicon.svg') }}">
+  {#- The chosen theme is applied before the first paint. Reading it from
+      petmatch.js after load would show one frame of the wrong colours on
+      every navigation. Wrapped in try/catch because storage access throws
+      outright in a private window, and a broken theme must not break the
+      page. -#}
+  <script>
+    try {
+      var storedTheme = window.localStorage.getItem("petmatch-theme");
+      if (storedTheme === "light" || storedTheme === "dark") {
+        document.documentElement.setAttribute("data-theme", storedTheme);
+      }
+    } catch (error) {
+      /* Storage unavailable: fall back to the operating system setting. */
+    }
+  </script>
 </head>
 <body>
+
+{#- First focusable thing on the page, so a keyboard user reaches the content
+    without walking the whole navigation on every screen. -#}
+<a class="skip-link" href="#main">Skip to main content</a>
+
+{% include "_icons.html" %}
+
+{#- One definition for a navigation link, so `aria-current` cannot be
+    forgotten on one of the six. -#}
+{%- macro navlink(endpoint, target, label, aside="") -%}
+  {%- set is_here = request.endpoint == endpoint -%}
+  <a class="navlink{% if is_here %} navlink--active{% endif %}" href="{{ target }}"
+     {%- if is_here %} aria-current="page"{% endif %}>{{ label }}{% if aside %}<span class="navlink__aside">{{ aside }}</span>{% endif %}</a>
+{%- endmacro -%}
 
 <header class="topbar">
   <div class="topbar__inner">
     <a class="brand" href="{{ url_for('home.index') }}">
-      <span class="brand__mark" aria-hidden="true">🐾</span>
-      PetMatch
+      <span class="brand__mark" aria-hidden="true">
+        <svg class="icon icon--filled"><use href="#icon-paw"></use></svg>
+      </span>
+      <span class="brand__word">PetMatch</span>
     </a>
 
-    <nav class="topbar__nav">
-      <a class="navlink {% if request.endpoint == 'animals.search' %}navlink--active{% endif %}"
-         href="{{ url_for('animals.search') }}">Browse animals</a>
+    <nav class="topbar__nav" aria-label="Main">
+      {{ navlink('animals.search', url_for('animals.search'), 'Browse', ' animals') }}
 
       {% if current_user.is_authenticated %}
         {% if current_user.is_staff %}
-          <a class="navlink {% if request.endpoint == 'dashboard.dashboard' %}navlink--active{% endif %}"
-             href="{{ url_for('dashboard.dashboard') }}">Dashboard</a>
-          <a class="navlink {% if request.endpoint == 'animals.manage' %}navlink--active{% endif %}"
-             href="{{ url_for('animals.manage') }}">Manage</a>
+          {{ navlink('dashboard.dashboard', url_for('dashboard.dashboard'), 'Dashboard') }}
+          {{ navlink('animals.manage', url_for('animals.manage'), 'Manage') }}
         {% else %}
-          <a class="navlink {% if request.endpoint == 'matches.find_my_pet' %}navlink--active{% endif %}"
-             href="{{ url_for('matches.find_my_pet') }}">My matches</a>
-          <a class="navlink {% if request.endpoint == 'personal.my_applications' %}navlink--active{% endif %}"
-             href="{{ url_for('personal.my_applications') }}">Applications</a>
-          <a class="navlink {% if request.endpoint == 'personal.my_invitations' %}navlink--active{% endif %}"
-             href="{{ url_for('personal.my_invitations') }}">Invitations</a>
-          <a class="navlink {% if request.endpoint == 'personal.my_profile' %}navlink--active{% endif %}"
-             href="{{ url_for('personal.my_profile') }}">Profile</a>
+          {{ navlink('matches.find_my_pet', url_for('matches.find_my_pet'), 'My matches') }}
+          {{ navlink('personal.my_applications', url_for('personal.my_applications'), 'Applications') }}
+          {{ navlink('personal.my_invitations', url_for('personal.my_invitations'), 'Invitations') }}
+          {{ navlink('personal.my_profile', url_for('personal.my_profile'), 'Profile') }}
         {% endif %}
 
         <span class="avatar" title="{{ current_user.full_name }}">{{ current_user.initials }}</span>
-        <form method="post" action="{{ url_for('auth.logout') }}" style="display:inline">
+        {#- Sign-out is a POST so a third-party page cannot sign the user out
+            by embedding an image (docs/UX.md section 5). -#}
+        <form method="post" action="{{ url_for('auth.logout') }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit" class="btn btn--ghost btn--small">Sign out</button>
         </form>
       {% else %}
-        <a class="navlink" href="{{ url_for('auth.login') }}">Sign in</a>
+        {{ navlink('auth.login', url_for('auth.login'), 'Sign in') }}
         <a class="btn btn--primary btn--small" href="{{ url_for('auth.register') }}">Join</a>
       {% endif %}
     </nav>
+
+    {#- Light / dark / system. `aria-pressed` reports which one is chosen;
+        petmatch.js sets it, so without JavaScript the group is simply inert
+        rather than misleading. -#}
+    <div class="theme-toggle" role="group" aria-label="Colour theme">
+      <button type="button" class="theme-toggle__btn" data-theme-choice="light" aria-pressed="false">
+        <svg class="icon" aria-hidden="true"><use href="#icon-sun"></use></svg>
+        <span class="sr-only">Light theme</span>
+      </button>
+      <button type="button" class="theme-toggle__btn" data-theme-choice="dark" aria-pressed="false">
+        <svg class="icon" aria-hidden="true"><use href="#icon-moon"></use></svg>
+        <span class="sr-only">Dark theme</span>
+      </button>
+      <button type="button" class="theme-toggle__btn" data-theme-choice="system" aria-pressed="true">
+        <svg class="icon" aria-hidden="true"><use href="#icon-monitor"></use></svg>
+        <span class="sr-only">Match the system theme</span>
+      </button>
+    </div>
   </div>
 </header>
 
-<main class="page">
+<main class="page" id="main">
   {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
       <div class="stack" style="margin-bottom: var(--space-5)">
@@ -68,5 +114,6 @@
   PetMatch &middot; an adoption matching system &middot; every match is reviewed by a person
 </footer>
 
+<script src="{{ url_for('static', filename='js/petmatch.js') }}" defer></script>
 </body>
 </html>

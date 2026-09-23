@@ -1,0 +1,30 @@
+{# The match score, drawn as a ring. Expects `score` (a MatchScore).
+
+   This is the single score renderer for the whole application; matches/
+   _score_badge.html now includes it, so every screen that already includes
+   the badge picks the ring up unchanged.
+
+   The ring is one element: a conic gradient, a hole punched by ::before, and
+   an animation over the registered custom property `--ring-fill` (petmatch.css
+   near "score-ring-fill"). `--ring-target` is the only thing this template
+   sets. The keyframes have no `to`, so if the animation never runs - reduced
+   motion, or an older engine - the ring renders complete instead of empty.
+
+   `role="img"` with an explicit label, because "87 match" read aloud as two
+   separate strings is not a sentence. Spec section 8: the number is
+   arithmetic, so it is stated, never hedged. #}
+{% if score.is_disqualified %}
+  <span class="score score--blocked" role="img"
+        title="{{ score.disqualification_reason }}"
+        aria-label="Not eligible: {{ score.disqualification_reason }}">
+    <span class="score__value">&mdash;</span>
+    <span class="score__label">Not eligible</span>
+  </span>
+{% else %}
+  <span class="score {% if score.score >= 75 %}score--strong{% elif score.score >= 50 %}score--fair{% else %}score--weak{% endif %}"
+        style="--ring-target: {{ score.score }}"
+        role="img" aria-label="{{ score.score }} out of 100 match">
+    <span class="score__value">{{ score.score }}</span>
+    <span class="score__label">match</span>
+  </span>
+{% endif %}

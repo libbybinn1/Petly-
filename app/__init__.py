@@ -115,6 +115,10 @@ def _register_handlers(bus: MessageBus) -> None:
     from app.cqrs.commands.application_commands import (
         ApproveApplicationCommand,
         ApproveApplicationHandler,
+        MarkApplicationUnderReviewCommand,
+        MarkApplicationUnderReviewHandler,
+        RejectApplicationCommand,
+        RejectApplicationHandler,
         ReverseApprovalCommand,
         ReverseApprovalHandler,
         SubmitApplicationCommand,
@@ -184,6 +188,10 @@ def _register_handlers(bus: MessageBus) -> None:
     bus.register_command(WithdrawApplicationCommand, WithdrawApplicationHandler())
     bus.register_command(ApproveApplicationCommand, ApproveApplicationHandler())
     bus.register_command(ReverseApprovalCommand, ReverseApprovalHandler())
+    bus.register_command(RejectApplicationCommand, RejectApplicationHandler())
+    bus.register_command(
+        MarkApplicationUnderReviewCommand, MarkApplicationUnderReviewHandler()
+    )
     bus.register_command(SaveAdopterProfileCommand, SaveAdopterProfileHandler())
     bus.register_command(SendInvitationCommand, SendInvitationHandler())
     bus.register_command(MarkInvitationViewedCommand, MarkInvitationViewedHandler())

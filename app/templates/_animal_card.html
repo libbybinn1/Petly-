@@ -1,24 +1,54 @@
-{# Reusable animal card. Expects `animal` (an AnimalCard view model). #}
+{# Reusable animal card. Expects `animal` (an AnimalCard view model).
+
+   One partial for the home page, search results, natural-language results and
+   every match grid, so those four screens cannot drift apart (docs/UX.md 3).
+
+   `loop` is the enclosing grid's loop when there is one, so the first four
+   cards - the ones above the fold at every width - load eagerly and the rest
+   stay lazy. `loading="lazy"` on a card the visitor is already looking at
+   delays the image rather than saving anything. #}
+{% set card_position = loop.index if loop is defined else 1 %}
 <a class="animal-card" href="{{ url_for('animals.details', animal_id=animal.animal_id) }}">
   <div class="animal-card__media">
     {% if animal.image_url %}
-      <img src="{{ animal.image_url }}" alt="{{ animal.name }}, a {{ animal.species_label|lower }}" loading="lazy">
+      <img src="{{ animal.image_url }}"
+           alt="{{ animal.name }}, a {{ animal.species_label|lower }}"
+           decoding="async"
+           {% if card_position > 4 %}loading="lazy"{% endif %}>
     {% else %}
-      <div class="animal-card__placeholder" aria-hidden="true">🐾</div>
+      <div class="animal-card__placeholder" aria-hidden="true">
+        <svg class="icon icon--filled icon--xl"><use href="#icon-paw"></use></svg>
+      </div>
     {% endif %}
   </div>
   <div class="animal-card__body">
-    <h3 class="animal-card__name">{{ animal.name }}</h3>
+    {#- A paragraph, not a heading: this card sits under an h1 on the browse
+        page and under an h2 on the home page, so any fixed heading level
+        skips a level somewhere. The animal is named by the card's own link
+        text either way. -#}
+    <p class="animal-card__name">{{ animal.name }}</p>
     <p class="animal-card__meta">
       {{ animal.species_label }}{% if animal.breed %} &middot; {{ animal.breed }}{% endif %}<br>
       {{ animal.age_label }} &middot; {{ animal.size|humanize }} &middot; {{ animal.city }}
     </p>
+    {#- Two colour families at most: the neutral facts, and the one flag that
+        would change somebody's mind. Five families of tag read as confetti
+        and stopped meaning anything. -#}
     <div class="tag-row">
-      <span class="tag tag--brand">{{ animal.temperament|humanize }}</span>
+      <span class="tag">{{ animal.temperament|humanize }}</span>
       <span class="tag">{{ animal.activity_level|humanize }} energy</span>
-      {% if animal.good_with_children %}<span class="tag tag--success">Good with kids</span>{% endif %}
-      {% if animal.has_special_needs %}<span class="tag tag--warning">Special needs</span>{% endif %}
-      {% if not animal.is_available %}<span class="tag tag--info">{{ animal.status|humanize }}</span>{% endif %}
+      {% if not animal.is_available %}<span class="tag">{{ animal.status|humanize }}</span>{% endif %}
+      {% if animal.has_special_needs %}
+        <span class="tag tag--warning">
+          <svg class="icon" aria-hidden="true"><use href="#icon-alert"></use></svg>
+          Special needs
+        </span>
+      {% elif animal.good_with_children %}
+        <span class="tag tag--success">
+          <svg class="icon" aria-hidden="true"><use href="#icon-check"></use></svg>
+          Good with kids
+        </span>
+      {% endif %}
     </div>
   </div>
 </a>

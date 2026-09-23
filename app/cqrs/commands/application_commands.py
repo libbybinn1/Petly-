@@ -21,8 +21,10 @@ from app.domain.application_rules import (
     ApplicationSnapshot,
     animal_status_after_approval,
     animal_status_after_reversal,
+    ensure_application_may_be_approved,
     ensure_application_may_be_submitted,
     ensure_application_transition_allowed,
+    ensure_approval_may_be_reversed,
     select_applications_to_close,
     select_applications_to_reopen,
 )
@@ -204,6 +206,127 @@ class WithdrawApplicationHandler(CommandHandler[None]):
 
 
 # --------------------------------------------------------------------------
+# Reject, and move into review
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class RejectApplicationCommand(Command):
+    """A staff member declines one application on its own merits.
+
+    Distinct from the cascade closure an approval causes elsewhere. This is
+    a decision somebody made about this application, which is why reversing
+    an unrelated approval must never reopen it.
+    """
+
+    application_id: str
+    staff_user_id: str
+    reason: str | None = None
+
+
+class RejectApplicationHandler(CommandHandler[None]):
+    """Rejects one application."""
+
+    def handle(self, command: Command, session: Session) -> None:
+        """Record the rejection and tell the adopter.
+
+        The animal is deliberately left alone. Rejecting one applicant does
+        not change the animal's availability - the others are still in the
+        running, and the animal was never promised to this one.
+
+        Raises:
+            RecordNotFoundError: The application does not exist.
+            IllegalTransitionError: It is already in a final state.
+        """
+        assert isinstance(command, RejectApplicationCommand)
+
+        application = session.get(AdoptionApplication, command.application_id)
+        if application is None:
+            raise RecordNotFoundError("Application does not exist.")
+
+        ensure_application_transition_allowed(
+            ApplicationStatus(application.status), ApplicationStatus.REJECTED
+        )
+
+        application.status = ApplicationStatus.REJECTED.value
+        application.decided_at = _now()
+        application.decided_by_user_id = command.staff_user_id
+
+        payload: dict[str, str] = {"animal_id": application.animal_id}
+        if command.reason:
+            payload["reason"] = command.reason
+
+        EventStore(session).append(
+            DomainEventType.APPLICATION_REJECTED,
+            AggregateType.APPLICATION,
+            application.application_id,
+            payload=payload,
+            actor_user_id=command.staff_user_id,
+        )
+
+        _notify(
+            session,
+            _user_id_of(session, application.adopter_profile_id),
+            NotificationType.APPLICATION_STATUS_CHANGED,
+            "An update on your application",
+            command.reason
+            or "After review, this application was not taken forward this time.",
+        )
+
+
+@dataclass(frozen=True)
+class MarkApplicationUnderReviewCommand(Command):
+    """A staff member picks an application up to look at properly."""
+
+    application_id: str
+    staff_user_id: str
+
+
+class MarkApplicationUnderReviewHandler(CommandHandler[None]):
+    """Moves one application into review."""
+
+    def handle(self, command: Command, session: Session) -> None:
+        """Record that review has begun.
+
+        Worth recording rather than being a silent staff-side note: the
+        adopter sees that somebody is looking, and the dashboard's stale
+        count can tell a submission nobody has touched from one already in
+        hand.
+
+        Raises:
+            RecordNotFoundError: The application does not exist.
+            IllegalTransitionError: It cannot move into review from here.
+        """
+        assert isinstance(command, MarkApplicationUnderReviewCommand)
+
+        application = session.get(AdoptionApplication, command.application_id)
+        if application is None:
+            raise RecordNotFoundError("Application does not exist.")
+
+        ensure_application_transition_allowed(
+            ApplicationStatus(application.status), ApplicationStatus.UNDER_REVIEW
+        )
+
+        application.status = ApplicationStatus.UNDER_REVIEW.value
+
+        EventStore(session).append(
+            DomainEventType.APPLICATION_UNDER_REVIEW,
+            AggregateType.APPLICATION,
+            application.application_id,
+            payload={"animal_id": application.animal_id},
+            actor_user_id=command.staff_user_id,
+        )
+
+        _notify(
+            session,
+            _user_id_of(session, application.adopter_profile_id),
+            NotificationType.APPLICATION_STATUS_CHANGED,
+            "Your application is being reviewed",
+            "A staff member has started reviewing your application.",
+        )
+
+
+# --------------------------------------------------------------------------
 # Approve, with the spec 7.5 cascade
 # --------------------------------------------------------------------------
 
@@ -243,8 +366,12 @@ class ApproveApplicationHandler(CommandHandler[int]):
         if application is None:
             raise RecordNotFoundError("Application does not exist.")
 
-        ensure_application_transition_allowed(
-            ApplicationStatus(application.status), ApplicationStatus.APPROVED
+        animal = session.get(Animal, application.animal_id)
+        if animal is None:
+            raise RecordNotFoundError("Animal does not exist.")
+
+        ensure_application_may_be_approved(
+            ApplicationStatus(application.status), AnimalStatus(animal.status)
         )
 
         event_store = EventStore(session)
@@ -385,9 +512,7 @@ class ReverseApprovalHandler(CommandHandler[int]):
         if approved is None:
             raise RecordNotFoundError("Application does not exist.")
 
-        ensure_application_transition_allowed(
-            ApplicationStatus(approved.status), ApplicationStatus.WITHDRAWN
-        )
+        ensure_approval_may_be_reversed(ApplicationStatus(approved.status))
 
         event_store = EventStore(session)
 

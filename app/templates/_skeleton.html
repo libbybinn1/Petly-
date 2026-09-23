@@ -1,0 +1,8 @@
+{# Placeholder bars for content that is being generated right now.
+   Optional `bars` (default 3).
+
+   Hidden from assistive technology: a screen reader user is told what is
+   happening by the sentence next to it, not by three grey rectangles. #}
+<div class="skeleton" aria-hidden="true">
+  {% for _ in range(bars|default(3)) %}<span class="skeleton__bar"></span>{% endfor %}
+</div>

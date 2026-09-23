@@ -16,9 +16,22 @@ from sqlalchemy.orm import Session
 
 from app.cqrs.base import Query, QueryHandler
 from app.cqrs.queries.dashboard_queries import EVENT_DESCRIPTIONS
-from app.domain.enums import AggregateType
+from app.domain.enums import AggregateType, DomainEventType
 from app.eventstore.store import EventStore, RecordedEvent
-from app.infrastructure.models import Animal, User
+from app.infrastructure.models import (
+    AdopterProfile,
+    AdoptionApplication,
+    AdoptionInvitation,
+    Animal,
+    User,
+)
+
+_MODEL_FOR_AGGREGATE: dict[AggregateType, type[Any]] = {
+    AggregateType.ANIMAL: Animal,
+    AggregateType.APPLICATION: AdoptionApplication,
+    AggregateType.INVITATION: AdoptionInvitation,
+    AggregateType.ADOPTER_PROFILE: AdopterProfile,
+}
 
 
 @dataclass(frozen=True)
@@ -27,6 +40,7 @@ class HistoryEntry:
 
     sequence_number: int
     event_type: str
+    event_label: str
     description: str
     occurred_at: datetime
     actor_name: str
@@ -64,7 +78,18 @@ class GetAggregateHistoryHandler(QueryHandler[AggregateHistory | None]):
     """Answers GetAggregateHistoryQuery."""
 
     def handle(self, query: Query, session: Session) -> AggregateHistory | None:
-        """Return the aggregate's events oldest first, or None if unknown."""
+        """Return one aggregate's history, or None if it does not exist.
+
+        "No events yet" and "no such record" are different answers and used
+        to give the same 404. An animal only gains an event of its own when
+        its status changes, so every animal that had not yet been approved
+        for adoption - almost all of them - answered 404 to a History link
+        that the staff table rendered anyway.
+
+        Returns:
+            The history, empty entries included, or None when the aggregate
+            itself cannot be found.
+        """
         assert isinstance(query, GetAggregateHistoryQuery)
 
         try:
@@ -72,8 +97,8 @@ class GetAggregateHistoryHandler(QueryHandler[AggregateHistory | None]):
         except ValueError:
             return None
 
-        events = EventStore(session).read_aggregate_stream(query.aggregate_id)
-        if not events:
+        events = _events_about(session, aggregate_type, query.aggregate_id)
+        if not events and not _aggregate_exists(session, aggregate_type, query.aggregate_id):
             return None
 
         actor_names = _resolve_actors(session, events)
@@ -86,6 +111,7 @@ class GetAggregateHistoryHandler(QueryHandler[AggregateHistory | None]):
                 HistoryEntry(
                     sequence_number=event.sequence_number,
                     event_type=event.event_type.value,
+                    event_label=_humanise_event_type(event.event_type),
                     description=EVENT_DESCRIPTIONS.get(
                         event.event_type, event.event_type.value
                     ),
@@ -98,6 +124,59 @@ class GetAggregateHistoryHandler(QueryHandler[AggregateHistory | None]):
                 for event in events
             ],
         )
+
+
+def _events_about(
+    session: Session, aggregate_type: AggregateType, aggregate_id: str
+) -> list[RecordedEvent]:
+    """Collect the events that tell this aggregate's story, oldest first.
+
+    For an application or an invitation that is exactly its own stream. An
+    animal is different: its own stream holds only status changes, while
+    the events a person means by "this animal's history" - who applied, who
+    was invited, which application was approved - belong to the application
+    and invitation aggregates and name the animal in their payload. Showing
+    only the animal's own stream answered a question nobody asked.
+
+    Args:
+        session: A read-only session.
+        aggregate_type: The kind of aggregate being viewed.
+        aggregate_id: Its identifier.
+
+    Returns:
+        The relevant events, ordered oldest first.
+    """
+    own_stream = EventStore(session).read_aggregate_stream(aggregate_id)
+    if aggregate_type is not AggregateType.ANIMAL:
+        return own_stream
+
+    referencing = [
+        event
+        for event in EventStore(session).read_all()
+        if event.aggregate_id != aggregate_id
+        and event.payload.get("animal_id") == aggregate_id
+    ]
+    combined = own_stream + referencing
+    return sorted(combined, key=lambda event: event.sequence_number)
+
+
+def _aggregate_exists(
+    session: Session, aggregate_type: AggregateType, aggregate_id: str
+) -> bool:
+    """Whether the record behind this history actually exists.
+
+    Distinguishes an empty history from a wrong identifier, so a mistyped
+    URL still answers 404 rather than rendering a convincing blank page.
+    """
+    model = _MODEL_FOR_AGGREGATE.get(aggregate_type)
+    if model is None:
+        return False
+    return session.get(model, aggregate_id) is not None
+
+
+def _humanise_event_type(event_type: DomainEventType) -> str:
+    """Turn APPLICATION_SUBMITTED into "Application submitted"."""
+    return event_type.value.replace("_", " ").capitalize()
 
 
 def _resolve_actors(

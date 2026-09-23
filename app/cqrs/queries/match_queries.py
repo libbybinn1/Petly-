@@ -24,6 +24,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.cqrs.base import Query, QueryHandler
+from app.domain.application_rules import ALLOWED_APPLICATION_TRANSITIONS
 from app.domain.enums import (
     ActivityLevel,
     AnimalSize,
@@ -96,6 +97,62 @@ class RankedCandidate:
         The score is already correct; only the prose is outstanding.
         """
         return self.analysis is None
+
+    @property
+    def current_status(self) -> ApplicationStatus | None:
+        """This candidate's application status, if they applied at all."""
+        if self.application_status is None:
+            return None
+        try:
+            return ApplicationStatus(self.application_status)
+        except ValueError:
+            return None
+
+    @property
+    def can_approve(self) -> bool:
+        """Whether an Approve control should be offered for this candidate.
+
+        The template asks rather than deciding: which transitions are legal
+        belongs in the domain, and the same table the handler enforces is
+        what answers here - so a button can never offer something the
+        command would refuse.
+        """
+        status = self.current_status
+        return status is not None and ApplicationStatus.APPROVED in (
+            ALLOWED_APPLICATION_TRANSITIONS.get(status, frozenset())
+        )
+
+    @property
+    def can_reject(self) -> bool:
+        """Whether a Reject control should be offered."""
+        status = self.current_status
+        return status is not None and ApplicationStatus.REJECTED in (
+            ALLOWED_APPLICATION_TRANSITIONS.get(status, frozenset())
+        )
+
+    @property
+    def can_mark_under_review(self) -> bool:
+        """Whether a "start reviewing" control should be offered."""
+        status = self.current_status
+        return status is not None and ApplicationStatus.UNDER_REVIEW in (
+            ALLOWED_APPLICATION_TRANSITIONS.get(status, frozenset())
+        )
+
+    @property
+    def can_reverse(self) -> bool:
+        """Whether this approval can be undone.
+
+        Only an approved application, matching `ensure_approval_may_be_reversed`.
+        """
+        return self.current_status is ApplicationStatus.APPROVED
+
+    @property
+    def status_label(self) -> str:
+        """The application status in prose, or a note that they did not apply."""
+        status = self.current_status
+        if status is None:
+            return "Has not applied"
+        return status.value.replace("_", " ").capitalize()
 
     @property
     def top_criteria(self) -> list[tuple[str, int]]:
@@ -198,7 +255,9 @@ class RankApplicantsHandler(QueryHandler[RankingResult | None]):
         )
 
         animal_facts = _animal_facts(animal)
-        analyses = _analyses_for_animal(session, query.animal_id)
+        analyses = _analyses_for_animal(
+            session, query.animal_id, MatchDirection.ANIMAL_TO_ADOPTER
+        )
 
         candidates: list[RankedCandidate] = []
         excluded = 0
@@ -269,7 +328,9 @@ class FindMoreAdoptersHandler(QueryHandler[RankingResult | None]):
 
         eligible_profiles = self._eligible_profiles(session, already_applied)
         animal_facts = _animal_facts(animal)
-        analyses = _analyses_for_animal(session, query.animal_id)
+        analyses = _analyses_for_animal(
+            session, query.animal_id, MatchDirection.ANIMAL_TO_ADOPTER
+        )
 
         candidates: list[RankedCandidate] = []
         disqualified = 0
@@ -343,7 +404,9 @@ class FindMyPetHandler(QueryHandler[list[RankedAnimal]]):
         )
 
         adopter_facts = _adopter_facts(profile)
-        analyses = _analyses_for_adopter(session, query.adopter_profile_id)
+        analyses = _analyses_for_adopter(
+            session, query.adopter_profile_id, MatchDirection.ADOPTER_TO_ANIMAL
+        )
 
         ranked: list[RankedAnimal] = []
         for animal in animals:
@@ -471,16 +534,35 @@ def _build_candidate(
     )
 
 
-def _analyses_for_animal(session: Session, animal_id: str) -> dict[str, StoredAnalysis]:
-    """Stored analyses for one animal, keyed by adopter.
+def _analyses_for_animal(
+    session: Session, animal_id: str, direction: MatchDirection
+) -> dict[str, StoredAnalysis]:
+    """Stored analyses for one animal in one direction, keyed by adopter.
 
     Fetched in one query rather than per candidate: ranking twenty applicants
     should not issue twenty round trips to a shared cloud database.
+
+    Filtering on direction matters more than it looks. The same pair is
+    scored from both sides with different weightings, so an unfiltered
+    lookup returned whichever row was written last - and the explanation on
+    screen would then belong to a different number than the score beside it
+    (FR-9.7). `ix_analyses_animal_direction` exists for exactly this filter.
+
+    Args:
+        session: A read-only session.
+        animal_id: The animal being ranked for.
+        direction: Which side's weighting the caller is displaying.
+
+    Returns:
+        The most recent matching analysis per adopter.
     """
     rows = (
         session.execute(
             select(MatchAnalysis)
-            .where(MatchAnalysis.animal_id == animal_id)
+            .where(
+                MatchAnalysis.animal_id == animal_id,
+                MatchAnalysis.direction == direction.value,
+            )
             .order_by(MatchAnalysis.generated_at)
         )
         .scalars()
@@ -491,13 +573,25 @@ def _analyses_for_animal(session: Session, animal_id: str) -> dict[str, StoredAn
 
 
 def _analyses_for_adopter(
-    session: Session, adopter_profile_id: str
+    session: Session, adopter_profile_id: str, direction: MatchDirection
 ) -> dict[str, StoredAnalysis]:
-    """Stored analyses for one adopter, keyed by animal."""
+    """Stored analyses for one adopter in one direction, keyed by animal.
+
+    Args:
+        session: A read-only session.
+        adopter_profile_id: The adopter being ranked for.
+        direction: Which side's weighting the caller is displaying.
+
+    Returns:
+        The most recent matching analysis per animal.
+    """
     rows = (
         session.execute(
             select(MatchAnalysis)
-            .where(MatchAnalysis.adopter_profile_id == adopter_profile_id)
+            .where(
+                MatchAnalysis.adopter_profile_id == adopter_profile_id,
+                MatchAnalysis.direction == direction.value,
+            )
             .order_by(MatchAnalysis.generated_at)
         )
         .scalars()

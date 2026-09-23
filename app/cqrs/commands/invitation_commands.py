@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.cqrs.base import Command, CommandHandler
 from app.cqrs.commands.application_commands import NotYourRecordError, RecordNotFoundError
+from app.domain.application_rules import ensure_application_may_be_submitted
 from app.domain.enums import (
     AggregateType,
     AnalysisJobStatus,
@@ -296,7 +297,42 @@ class RespondToInvitationHandler(CommandHandler[str | None]):
         invitation: AdoptionInvitation,
         command: RespondToInvitationCommand,
     ) -> str:
-        """Create the application an accepted invitation leads into."""
+        """Create the application an accepted invitation leads into.
+
+        Applies the ordinary submission rule rather than inserting straight
+        into the table. FR-7.3 allows an application only for an available
+        animal, and the 72-hour window makes the race likely rather than
+        theoretical: an invitation sent while an animal was free is quite
+        often answered after somebody else has been approved for it.
+        Without this check, accepting produced an application for an animal
+        already promised elsewhere, and told the adopter it had worked.
+
+        Raises:
+            ApplicationNotAllowedError: The animal is no longer open to
+                applications, or the adopter already has an active one.
+        """
+        animal = session.get(Animal, invitation.animal_id)
+        if animal is None:
+            raise RecordNotFoundError("Animal does not exist.")
+
+        existing_active = [
+            row.application_id
+            for row in session.execute(
+                select(AdoptionApplication).where(
+                    AdoptionApplication.adopter_profile_id
+                    == invitation.adopter_profile_id,
+                    AdoptionApplication.animal_id == invitation.animal_id,
+                )
+            ).scalars()
+            if ApplicationStatus(row.status).is_active
+        ]
+
+        ensure_application_may_be_submitted(
+            AnimalStatus(animal.status),
+            adopter_profile_is_complete=True,
+            existing_active_application_ids=existing_active,
+        )
+
         application_id = new_identifier()
         submitted_at = _naive(_utc_now())
 

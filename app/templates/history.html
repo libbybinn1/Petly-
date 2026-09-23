@@ -11,6 +11,13 @@
 </div>
 
 <div class="card card--padded">
+  {% if not history.entries %}
+  <p class="pending">
+    Nothing has happened to this {{ history.aggregate_type|lower }} yet. Its
+    history will appear here as applications, invitations and decisions are
+    recorded.
+  </p>
+  {% endif %}
   <ol class="timeline">
     {% for entry in history.entries %}
     <li class="timeline__item">
@@ -22,7 +29,7 @@
         </div>
         <div class="timeline__meta">
           {{ entry.occurred_at.strftime('%d %b %Y, %H:%M') }} ·
-          step {{ entry.sequence_number }} · {{ entry.event_type }}
+          step {{ entry.sequence_number }} · {{ entry.event_label }}
         </div>
       </div>
     </li>

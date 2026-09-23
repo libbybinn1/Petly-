@@ -3,11 +3,13 @@
    Warm, calm and friendly: this is a product about finding homes for animals,
    so the palette leans warm rather than corporate-blue. Everything is driven
    by tokens so the whole interface stays consistent and can be re-themed in
-   one place.
+   one place. See docs/UX.md sections 1-3 for the principles these encode.
    ========================================================================== */
 
 :root {
-  /* Brand - warm terracotta, softened so large areas stay comfortable */
+  /* Brand - warm terracotta, softened so large areas stay comfortable.
+     500 is the identity colour; 600 is the *action* colour, because white on
+     500 measures 3.74:1 and fails WCAG AA. */
   --brand-50:  #fdf4f0;
   --brand-100: #fae5dc;
   --brand-200: #f4c7b6;
@@ -17,7 +19,11 @@
   --brand-600: #bd4d2d;
   --brand-700: #9c3d24;
 
-  /* Accent - muted teal, used sparingly for contrast against the warmth */
+  /* Accent - muted teal, used sparingly for contrast against the warmth.
+     700 is the dependable end of the ramp in light mode and, after the dark
+     override, in dark mode too - so `color: var(--accent-700)` over
+     `background: var(--accent-100)` reads correctly in both themes with no
+     media query anywhere. */
   --accent-100: #dcf0ee;
   --accent-300: #8fcfc8;
   --accent-500: #3d9b90;
@@ -31,92 +37,243 @@
 
   --text-strong:  #2b2321;
   --text-normal:  #4e433f;
-  --text-muted:   #857772;
+  --text-muted:   #6e615c;   /* 5.3:1 on the page, 4.9:1 on a sunken surface */
   --text-inverse: #ffffff;
 
-  --border-soft:   #ece3da;
-  --border-normal: #ddd0c4;
+  --border-soft:   #ece3da;  /* card edges: decorative */
+  --border-normal: #ddd0c4;  /* dividers and secondary buttons */
+  --border-input:  #8c7d74;  /* a real 3.9:1 boundary around a control */
 
   --success-bg: #e7f4ec;  --success-fg: #1f6b40;
   --warning-bg: #fdf1dc;  --warning-fg: #8a5a12;
   --danger-bg:  #fbe9e7;  --danger-fg:  #a3301f;
   --info-bg:    #e6f0f7;  --info-fg:    #1f5d86;
 
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 18px;
-  --radius-pill: 999px;
+  /* Foreground for anything painted with the brand or accent colour. White in
+     light mode, near-black in dark mode, where the brand ramp inverts. */
+  --on-brand: #ffffff;
+  /* Brand text on a brand-tinted chip. Separate from --brand-700 because the
+     tint it sits on inverts between themes. */
+  --brand-tag-fg: #9c3d24;
 
   --shadow-sm: 0 1px 2px rgba(59, 42, 35, 0.06), 0 1px 3px rgba(59, 42, 35, 0.04);
   --shadow-md: 0 4px 10px rgba(59, 42, 35, 0.07), 0 2px 4px rgba(59, 42, 35, 0.05);
   --shadow-lg: 0 14px 32px rgba(59, 42, 35, 0.11), 0 4px 10px rgba(59, 42, 35, 0.06);
 
+  --scroll-shadow: rgba(59, 42, 35, 0.16);
+  --skeleton-highlight: #ece3da;
+  --hero-gradient: linear-gradient(150deg, var(--brand-50) 0%, var(--surface-card) 62%);
+  /* Scrim that lets hero copy sit over a photograph on narrow screens. */
+  --hero-scrim: linear-gradient(100deg,
+                  rgba(255, 255, 255, 0.95) 0%,
+                  rgba(255, 255, 255, 0.90) 62%,
+                  rgba(255, 255, 255, 0.78) 100%);
+
   --space-1: 4px;  --space-2: 8px;  --space-3: 12px; --space-4: 16px;
   --space-5: 24px; --space-6: 32px; --space-7: 48px; --space-8: 64px;
+
+  /* Control metrics. Spacing on .btn, .input and .tag used to be hardcoded in
+     six places; it now lives here so a density change is one edit. */
+  --btn-pad-y: 10px;       --btn-pad-x: 18px;
+  --btn-pad-y-small: 6px;  --btn-pad-x-small: 12px;
+  --input-pad-y: 10px;     --input-pad-x: 13px;
+  --tag-pad-y: 3px;        --tag-pad-x: 10px;
+  --tap-target: 44px;
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 18px;
+  --radius-pill: 999px;
+
+  /* Segoe UI Variable supports arbitrary weights; the fallback stack does
+     not, so the system sticks to weights every font actually ships. */
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
 
   --font-sans: "Segoe UI Variable Display", "Segoe UI", system-ui, -apple-system,
                "Helvetica Neue", Arial, sans-serif;
 
   --content-width: 1180px;
   --transition: 160ms cubic-bezier(0.4, 0, 0.2, 1);
+
+  --focus-ring: var(--brand-600);
+  --score-hole: var(--surface-card);
+}
+
+/* ==========================================================================
+   Dark theme - one set of values, two selectors
+   --------------------------------------------------------------------------
+   The dark palette used to be written out twice and the two copies had
+   already drifted: the [data-theme] copy was missing every shadow, and three
+   component fixes existed only inside the media query, so they never applied
+   to a manually chosen dark theme.
+
+   CSS cannot share one declaration block between a media query and a plain
+   selector, so the *mapping* below is unavoidably written twice. The
+   authoritative *values* are declared exactly once, as --dark-* custom
+   properties. The two mapping blocks are byte-identical and contain no
+   literal colours, so they cannot drift again.
+
+   Anything defined as an alias (--focus-ring: var(--brand-600)) needs no
+   entry: it is re-resolved against whichever palette is active.
+   ========================================================================== */
+
+:root {
+  --dark-surface-page:   #191513;
+  --dark-surface-card:   #221d1a;
+  --dark-surface-sunken: #2b2421;
+  --dark-surface-hover:  #2f2724;
+
+  --dark-text-strong: #f6f0ea;
+  --dark-text-normal: #ddd2c9;
+  --dark-text-muted:  #a5978f;
+
+  /* Lightened from #332b27/#433933: at the old values a card had no visible
+     edge against the page, so the whole interface read as one flat sheet. */
+  --dark-border-soft:   #453a34;
+  --dark-border-normal: #5a4c44;
+  --dark-border-input:  #7a6a61;
+
+  /* The ramp inverts: on a dark surface the *higher* numbers are the lighter,
+     more legible end, which keeps `color: var(--brand-700)` correct in both
+     themes without a single component-level media query. */
+  --dark-brand-50:  #2a1d17;
+  --dark-brand-100: #3a261e;
+  --dark-brand-200: #4d3026;
+  --dark-brand-300: #6d4433;
+  --dark-brand-400: #c9714f;
+  --dark-brand-500: #e2805f;
+  --dark-brand-600: #ec9174;
+  --dark-brand-700: #f5a88e;
+
+  --dark-accent-100: #12312e;
+  --dark-accent-300: #9ad8d1;
+  --dark-accent-500: #62c0b4;
+  --dark-accent-700: #4fb3a7;
+
+  --dark-success-bg: #17301f; --dark-success-fg: #86d3a3;
+  --dark-warning-bg: #322511; --dark-warning-fg: #e8c07d;
+  --dark-danger-bg:  #341a17; --dark-danger-fg:  #ef9f93;
+  --dark-info-bg:    #14283a; --dark-info-fg:    #91c2e6;
+
+  --dark-on-brand: #2a1d17;
+  --dark-brand-tag-fg: #f5a88e;
+
+  --dark-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --dark-shadow-md: 0 4px 10px rgba(0, 0, 0, 0.45);
+  --dark-shadow-lg: 0 14px 32px rgba(0, 0, 0, 0.55);
+
+  --dark-scroll-shadow: rgba(0, 0, 0, 0.55);
+  --dark-skeleton-highlight: #3a322d;
+  --dark-hero-gradient: linear-gradient(150deg, #402719 0%, #2b201a 52%, var(--surface-card) 100%);
+  --dark-hero-scrim: linear-gradient(100deg,
+                       rgba(25, 21, 19, 0.95) 0%,
+                       rgba(25, 21, 19, 0.90) 62%,
+                       rgba(25, 21, 19, 0.76) 100%);
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --surface-page:   #191513;
-    --surface-card:   #221d1a;
-    --surface-sunken: #2b2421;
-    --surface-hover:  #2f2724;
-
-    --text-strong:  #f6f0ea;
-    --text-normal:  #ddd2c9;
-    --text-muted:   #a5978f;
-
-    --border-soft:   #332b27;
-    --border-normal: #433933;
-
-    --brand-50:  #2a1d17;
-    --brand-100: #3a261e;
-    --brand-500: #e2805f;
-    --brand-600: #ec9174;
-
-    --success-bg: #17301f; --success-fg: #86d3a3;
-    --warning-bg: #322511; --warning-fg: #e8c07d;
-    --danger-bg:  #341a17; --danger-fg:  #ef9f93;
-    --info-bg:    #14283a; --info-fg:    #91c2e6;
-
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-    --shadow-md: 0 4px 10px rgba(0, 0, 0, 0.45);
-    --shadow-lg: 0 14px 32px rgba(0, 0, 0, 0.55);
+    --surface-page: var(--dark-surface-page);
+    --surface-card: var(--dark-surface-card);
+    --surface-sunken: var(--dark-surface-sunken);
+    --surface-hover: var(--dark-surface-hover);
+    --text-strong: var(--dark-text-strong);
+    --text-normal: var(--dark-text-normal);
+    --text-muted: var(--dark-text-muted);
+    --border-soft: var(--dark-border-soft);
+    --border-normal: var(--dark-border-normal);
+    --border-input: var(--dark-border-input);
+    --brand-50: var(--dark-brand-50);
+    --brand-100: var(--dark-brand-100);
+    --brand-200: var(--dark-brand-200);
+    --brand-300: var(--dark-brand-300);
+    --brand-400: var(--dark-brand-400);
+    --brand-500: var(--dark-brand-500);
+    --brand-600: var(--dark-brand-600);
+    --brand-700: var(--dark-brand-700);
+    --accent-100: var(--dark-accent-100);
+    --accent-300: var(--dark-accent-300);
+    --accent-500: var(--dark-accent-500);
+    --accent-700: var(--dark-accent-700);
+    --success-bg: var(--dark-success-bg);
+    --success-fg: var(--dark-success-fg);
+    --warning-bg: var(--dark-warning-bg);
+    --warning-fg: var(--dark-warning-fg);
+    --danger-bg: var(--dark-danger-bg);
+    --danger-fg: var(--dark-danger-fg);
+    --info-bg: var(--dark-info-bg);
+    --info-fg: var(--dark-info-fg);
+    --on-brand: var(--dark-on-brand);
+    --brand-tag-fg: var(--dark-brand-tag-fg);
+    --shadow-sm: var(--dark-shadow-sm);
+    --shadow-md: var(--dark-shadow-md);
+    --shadow-lg: var(--dark-shadow-lg);
+    --scroll-shadow: var(--dark-scroll-shadow);
+    --skeleton-highlight: var(--dark-skeleton-highlight);
+    --hero-gradient: var(--dark-hero-gradient);
+    --hero-scrim: var(--dark-hero-scrim);
   }
 }
 
 :root[data-theme="dark"] {
-  --surface-page:   #191513;
-  --surface-card:   #221d1a;
-  --surface-sunken: #2b2421;
-  --surface-hover:  #2f2724;
-  --text-strong:  #f6f0ea;
-  --text-normal:  #ddd2c9;
-  --text-muted:   #a5978f;
-  --border-soft:   #332b27;
-  --border-normal: #433933;
-  --brand-50:  #2a1d17;
-  --brand-100: #3a261e;
-  --brand-500: #e2805f;
-  --brand-600: #ec9174;
-  --success-bg: #17301f; --success-fg: #86d3a3;
-  --warning-bg: #322511; --warning-fg: #e8c07d;
-  --danger-bg:  #341a17; --danger-fg:  #ef9f93;
-  --info-bg:    #14283a; --info-fg:    #91c2e6;
+    --surface-page: var(--dark-surface-page);
+    --surface-card: var(--dark-surface-card);
+    --surface-sunken: var(--dark-surface-sunken);
+    --surface-hover: var(--dark-surface-hover);
+    --text-strong: var(--dark-text-strong);
+    --text-normal: var(--dark-text-normal);
+    --text-muted: var(--dark-text-muted);
+    --border-soft: var(--dark-border-soft);
+    --border-normal: var(--dark-border-normal);
+    --border-input: var(--dark-border-input);
+    --brand-50: var(--dark-brand-50);
+    --brand-100: var(--dark-brand-100);
+    --brand-200: var(--dark-brand-200);
+    --brand-300: var(--dark-brand-300);
+    --brand-400: var(--dark-brand-400);
+    --brand-500: var(--dark-brand-500);
+    --brand-600: var(--dark-brand-600);
+    --brand-700: var(--dark-brand-700);
+    --accent-100: var(--dark-accent-100);
+    --accent-300: var(--dark-accent-300);
+    --accent-500: var(--dark-accent-500);
+    --accent-700: var(--dark-accent-700);
+    --success-bg: var(--dark-success-bg);
+    --success-fg: var(--dark-success-fg);
+    --warning-bg: var(--dark-warning-bg);
+    --warning-fg: var(--dark-warning-fg);
+    --danger-bg: var(--dark-danger-bg);
+    --danger-fg: var(--dark-danger-fg);
+    --info-bg: var(--dark-info-bg);
+    --info-fg: var(--dark-info-fg);
+    --on-brand: var(--dark-on-brand);
+    --brand-tag-fg: var(--dark-brand-tag-fg);
+    --shadow-sm: var(--dark-shadow-sm);
+    --shadow-md: var(--dark-shadow-md);
+    --shadow-lg: var(--dark-shadow-lg);
+    --scroll-shadow: var(--dark-scroll-shadow);
+    --skeleton-highlight: var(--dark-skeleton-highlight);
+    --hero-gradient: var(--dark-hero-gradient);
+    --hero-scrim: var(--dark-hero-scrim);
 }
 
 /* --------------------------------------------------------------- reset -- */
 
 *, *::before, *::after { box-sizing: border-box; }
 
+html {
+  /* A sticky top bar would otherwise cover whatever an in-page jump, or a
+     focused invalid field, scrolls to. */
+  scroll-padding-top: 88px;
+}
+
 body {
   margin: 0;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;   /* keeps the footer at the bottom on short pages */
   background: var(--surface-page);
   color: var(--text-normal);
   font-family: var(--font-sans);
@@ -129,7 +286,7 @@ h1, h2, h3, h4 {
   color: var(--text-strong);
   line-height: 1.25;
   margin: 0 0 var(--space-3);
-  font-weight: 650;
+  font-weight: var(--weight-bold);
   letter-spacing: -0.015em;
 }
 
@@ -139,14 +296,70 @@ h3 { font-size: 1.15rem; }
 
 p { margin: 0 0 var(--space-4); }
 
-a { color: var(--brand-600); text-decoration: none; }
-a:hover { text-decoration: underline; }
+/* Prose links carry an underline as well as a colour, so a link inside a
+   sentence is distinguishable without relying on hue (WCAG 1.4.1). */
+a {
+  color: var(--brand-600);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
+}
+a:hover { text-decoration-color: currentColor; }
+
+/* Components that happen to be anchors are not prose, and are recognisable by
+   their own shape. Listed by name rather than reset globally, so that a new
+   prose link is underlined by default rather than by remembering to ask. */
+.brand, .navlink, .btn, .animal-card, .match-thumb, .chip, .skip-link,
+.stat--link, .notification-item {
+  text-decoration: none;
+}
 
 img { max-width: 100%; display: block; }
+
+/* Progressive disclosure sets `hidden`, and several containers set a display
+   value that would otherwise win. */
+[hidden] { display: none !important; }
+
+/* ------------------------------------------------- accessibility basics -- */
+
+/* A visible ring on every focusable thing, never removed (docs/UX.md 8). */
+:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.skip-link {
+  position: fixed;
+  top: -100px;
+  left: var(--space-4);
+  z-index: 200;
+  padding: 10px var(--space-4);
+  background: var(--surface-card);
+  color: var(--text-strong);
+  border: 1px solid var(--border-input);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg);
+  font-weight: var(--weight-semibold);
+  transition: top var(--transition);
+}
+.skip-link:focus { top: var(--space-2); }
 
 /* ------------------------------------------------------------- layout -- */
 
 .page {
+  flex: 1;                  /* pushes the footer down, whatever the content */
+  width: 100%;
   max-width: var(--content-width);
   margin: 0 auto;
   padding: var(--space-6) var(--space-4) var(--space-8);
@@ -163,6 +376,28 @@ img { max-width: 100%; display: block; }
   margin-bottom: var(--space-5);
 }
 .section-heading p { margin: 0; color: var(--text-muted); }
+
+/* --------------------------------------------------------------- icons -- */
+
+/* One sprite of SVG <symbol>s, included once by base.html. An icon inherits
+   the current colour and scales with the current font size, so it needs no
+   per-use styling. */
+.icon-sprite { display: none; }
+
+.icon {
+  width: 1.15em;
+  height: 1.15em;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex-shrink: 0;
+  vertical-align: -0.16em;
+}
+.icon--filled { fill: currentColor; stroke: none; }
+.icon--lg { width: 1.75rem; height: 1.75rem; }
+.icon--xl { width: 2.6rem; height: 2.6rem; }
 
 /* ------------------------------------------------------------ top bar -- */
 
@@ -181,59 +416,96 @@ img { max-width: 100%; display: block; }
   padding: var(--space-3) var(--space-4);
   display: flex;
   align-items: center;
-  gap: var(--space-5);
+  gap: var(--space-4);
 }
 
 .brand {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  font-weight: 700;
+  font-weight: var(--weight-bold);
   font-size: 1.15rem;
   color: var(--text-strong);
   letter-spacing: -0.02em;
+  flex-shrink: 0;
 }
-.brand:hover { text-decoration: none; }
 .brand__mark {
   width: 32px; height: 32px;
   display: grid; place-items: center;
-  background: var(--brand-500);
-  color: #fff;
+  background: var(--brand-600);
+  color: var(--on-brand);
   border-radius: var(--radius-md);
-  font-size: 1rem;
 }
+.brand__mark .icon { width: 19px; height: 19px; }
 
+/* One row at every width. The bar used to wrap at 375px and orphan the "Join"
+   button on a second line; the nav now scrolls sideways instead, which keeps
+   the bar a single row without hiding anything permanently. */
 .topbar__nav {
   display: flex;
   align-items: center;
   gap: var(--space-1);
   margin-left: auto;
-  flex-wrap: wrap;
+  min-width: 0;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
+.topbar__nav::-webkit-scrollbar { display: none; }
 
 .navlink {
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-sm);
   color: var(--text-normal);
-  font-weight: 500;
+  font-weight: var(--weight-medium);
   font-size: 0.94rem;
+  white-space: nowrap;
   transition: background var(--transition), color var(--transition);
 }
-.navlink:hover { background: var(--surface-hover); color: var(--text-strong); text-decoration: none; }
+.navlink:hover { background: var(--surface-hover); color: var(--text-strong); }
+/* Token-driven in both themes: --brand-700 is the legible end of the ramp
+   whichever palette is active, so this needs no media query. */
 .navlink--active { background: var(--brand-50); color: var(--brand-700); }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .navlink--active { color: var(--brand-600); }
-}
 
 .avatar {
   width: 34px; height: 34px;
   border-radius: var(--radius-pill);
-  background: var(--accent-500);
-  color: #fff;
+  background: var(--accent-700);
+  color: var(--on-brand);
   display: grid; place-items: center;
-  font-size: 0.8rem; font-weight: 650;
+  font-size: 0.8rem; font-weight: var(--weight-bold);
   flex-shrink: 0;
 }
+
+/* Three-state colour theme control: light, dark, or follow the system. */
+.theme-toggle {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+  padding: 3px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-pill);
+}
+.theme-toggle__btn {
+  display: grid; place-items: center;
+  width: 28px; height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition);
+}
+.theme-toggle__btn:hover { color: var(--text-strong); background: var(--surface-hover); }
+.theme-toggle__btn[aria-pressed="true"] {
+  background: var(--surface-card);
+  color: var(--brand-700);
+  box-shadow: var(--shadow-sm);
+}
+.theme-toggle__btn .icon { width: 16px; height: 16px; }
 
 /* ------------------------------------------------------------ buttons -- */
 
@@ -242,23 +514,26 @@ img { max-width: 100%; display: block; }
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
-  padding: 10px 18px;
+  padding: var(--btn-pad-y) var(--btn-pad-x);
   border-radius: var(--radius-sm);
   border: 1px solid transparent;
   font: inherit;
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   font-size: 0.94rem;
   cursor: pointer;
   transition: background var(--transition), border-color var(--transition),
               transform var(--transition), box-shadow var(--transition);
-  text-decoration: none;
   white-space: nowrap;
 }
-.btn:hover { text-decoration: none; }
 .btn:active { transform: translateY(1px); }
 
-.btn--primary { background: var(--brand-500); color: #fff; box-shadow: var(--shadow-sm); }
-.btn--primary:hover { background: var(--brand-600); box-shadow: var(--shadow-md); }
+/* brand-600, not 500: white on 500 measures 3.74:1 and fails AA. */
+.btn--primary {
+  background: var(--brand-600);
+  color: var(--on-brand);
+  box-shadow: var(--shadow-sm);
+}
+.btn--primary:hover { background: var(--brand-700); box-shadow: var(--shadow-md); }
 
 .btn--secondary {
   background: var(--surface-card);
@@ -267,11 +542,33 @@ img { max-width: 100%; display: block; }
 }
 .btn--secondary:hover { background: var(--surface-hover); border-color: var(--brand-300); }
 
-.btn--ghost { background: transparent; color: var(--text-normal); }
-.btn--ghost:hover { background: var(--surface-hover); }
+/* A ghost button still has a boundary. Six real controls used this class and
+   were invisible until hovered. */
+.btn--ghost {
+  background: transparent;
+  color: var(--text-normal);
+  border-color: var(--border-input);
+}
+.btn--ghost:hover {
+  background: var(--surface-hover);
+  color: var(--text-strong);
+  border-color: var(--border-normal);
+}
+
+/* For destructive-but-secondary actions (Withdraw, Decline). Pair it with
+   `data-confirm` on the form so the click is never the whole decision. */
+.btn--danger-ghost {
+  background: transparent;
+  color: var(--danger-fg);
+  border-color: color-mix(in srgb, var(--danger-fg) 45%, transparent);
+}
+.btn--danger-ghost:hover {
+  background: var(--danger-bg);
+  border-color: var(--danger-fg);
+}
 
 .btn--block { width: 100%; }
-.btn--small { padding: 6px 12px; font-size: 0.86rem; }
+.btn--small { padding: var(--btn-pad-y-small) var(--btn-pad-x-small); font-size: 0.86rem; }
 
 /* -------------------------------------------------------------- cards -- */
 
@@ -290,6 +587,10 @@ img { max-width: 100%; display: block; }
   gap: var(--space-5);
 }
 
+/* The home page shows exactly six. A three-column track means two full rows
+   rather than a row of four and an orphaned pair. */
+.grid-animals--featured { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
 .animal-card {
   background: var(--surface-card);
   border: 1px solid var(--border-soft);
@@ -305,8 +606,7 @@ img { max-width: 100%; display: block; }
 .animal-card:hover {
   transform: translateY(-3px);
   box-shadow: var(--shadow-lg);
-  border-color: var(--brand-200);
-  text-decoration: none;
+  border-color: var(--brand-300);
 }
 
 .animal-card__media {
@@ -332,8 +632,11 @@ img { max-width: 100%; display: block; }
 
 .animal-card__body { padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-2); flex: 1; }
 
+/* A paragraph, not a heading: the card appears under an h1 on the browse page
+   and under an h2 on the home page, so any fixed level skips somewhere. The
+   animal is named by the card's own link text. */
 .animal-card__name {
-  font-size: 1.1rem; font-weight: 650; color: var(--text-strong);
+  font-size: 1.1rem; font-weight: var(--weight-bold); color: var(--text-strong);
   margin: 0; line-height: 1.3;
 }
 .animal-card__meta { color: var(--text-muted); font-size: 0.88rem; margin: 0; }
@@ -346,46 +649,112 @@ img { max-width: 100%; display: block; }
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 3px 10px;
+  padding: var(--tag-pad-y) var(--tag-pad-x);
   border-radius: var(--radius-pill);
   font-size: 0.76rem;
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   background: var(--surface-sunken);
   color: var(--text-normal);
   border: 1px solid var(--border-soft);
   line-height: 1.5;
 }
-.tag--brand   { background: var(--brand-50);    color: var(--brand-700); border-color: transparent; }
+.tag .icon { width: 12px; height: 12px; }
+.tag--brand   { background: var(--brand-50);    color: var(--brand-tag-fg); border-color: transparent; }
 .tag--success { background: var(--success-bg);  color: var(--success-fg); border-color: transparent; }
 .tag--warning { background: var(--warning-bg);  color: var(--warning-fg); border-color: transparent; }
 .tag--danger  { background: var(--danger-bg);   color: var(--danger-fg);  border-color: transparent; }
 .tag--info    { background: var(--info-bg);     color: var(--info-fg);    border-color: transparent; }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .tag--brand { color: var(--brand-600); }
+/* --------------------------------------------------- filter chips (W15) -- */
+
+/* Shows which filters are currently narrowing a result set, so "32 animals
+   match your search" is never a mystery. Each chip links to the same search
+   with that one filter dropped. */
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
 }
+.chip-row__label {
+  font-size: 0.8rem;
+  font-weight: var(--weight-semibold);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 4px 6px 4px var(--space-3);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-soft);
+  background: var(--brand-50);
+  color: var(--brand-tag-fg);
+  font-size: 0.82rem;
+  font-weight: var(--weight-semibold);
+  transition: background var(--transition), border-color var(--transition);
+}
+.chip:hover { border-color: var(--brand-300); }
+.chip__remove {
+  display: grid; place-items: center;
+  width: 18px; height: 18px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, currentColor 16%, transparent);
+}
+.chip__remove .icon { width: 11px; height: 11px; }
+.chip--clear {
+  background: transparent;
+  color: var(--text-normal);
+  border-color: var(--border-input);
+  padding-inline: var(--space-3);
+}
+.chip--clear:hover { background: var(--surface-hover); }
 
 /* -------------------------------------------------------------- forms -- */
 
 .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: var(--space-4); }
-.field__label { font-size: 0.88rem; font-weight: 600; color: var(--text-strong); }
+.field__label { font-size: 0.88rem; font-weight: var(--weight-semibold); color: var(--text-strong); }
 .field__hint  { font-size: 0.82rem; color: var(--text-muted); }
+
+/* A field is as wide as the answer it wants. A city name in a 1100px box
+   reads as an invitation to write an essay. */
+.field--short  { max-width: 160px; }
+.field--medium { max-width: 340px; }
+.form-narrow   { max-width: 680px; }
+
+/* Groups the fields of a long form into named sections. */
+.form-section {
+  font-size: 1.05rem;
+  color: var(--text-strong);
+  margin: var(--space-6) 0 var(--space-4);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border-soft);
+}
+.form-section:first-child { margin-top: 0; }
 
 .input, .select, .textarea {
   width: 100%;
-  padding: 10px 13px;
+  padding: var(--input-pad-y) var(--input-pad-x);
   font: inherit;
   font-size: 0.95rem;
   color: var(--text-strong);
   background: var(--surface-card);
-  border: 1px solid var(--border-normal);
+  border: 1px solid var(--border-input);
   border-radius: var(--radius-sm);
   transition: border-color var(--transition), box-shadow var(--transition);
 }
 .input:focus, .select:focus, .textarea:focus {
-  outline: none;
-  border-color: var(--brand-400);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand-400) 22%, transparent);
+  border-color: var(--brand-500);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand-500) 32%, transparent);
+}
+/* The tinted glow is decoration; the ring is the accessible part, so keyboard
+   focus keeps it rather than replacing it with `outline: none`. */
+.input:focus-visible, .select:focus-visible, .textarea:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 .textarea { min-height: 110px; resize: vertical; }
 
@@ -393,7 +762,7 @@ img { max-width: 100%; display: block; }
   display: inline-flex; align-items: center; gap: var(--space-2);
   font-size: 0.9rem; cursor: pointer; color: var(--text-normal);
 }
-.checkbox input { width: 17px; height: 17px; accent-color: var(--brand-500); cursor: pointer; }
+.checkbox input { width: 17px; height: 17px; accent-color: var(--brand-600); cursor: pointer; }
 
 /* ------------------------------------------------------------- search -- */
 
@@ -401,8 +770,9 @@ img { max-width: 100%; display: block; }
   display: flex;
   gap: var(--space-2);
   margin-bottom: var(--space-4);
+  flex-wrap: wrap;
 }
-.searchbar .input { flex: 1; }
+.searchbar .input { flex: 1 1 260px; }
 
 .filter-bar {
   display: flex;
@@ -416,31 +786,50 @@ img { max-width: 100%; display: block; }
   box-shadow: var(--shadow-sm);
   margin-bottom: var(--space-5);
 }
-.filter-bar .field { margin-bottom: 0; min-width: 150px; flex: 1 1 150px; }
+.filter-bar .field { margin-bottom: 0; min-width: 150px; flex: 0 1 200px; }
 .filter-bar__actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
 
 /* -------------------------------------------------------------- table -- */
 
+/* The gradients are a scroll shadow: the two `local` layers sit on the edges
+   of the *content* and slide away as it scrolls, uncovering the two `scroll`
+   layers pinned to the viewport of the box. The effect is that a shadow
+   appears on whichever side has more table to see. */
 .table-wrap {
-  background: var(--surface-card);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-sm);
-  overflow-x: auto;
+  overflow: auto;
+  background-color: var(--surface-card);
+  background-image:
+    linear-gradient(to right, var(--surface-card) 40%, transparent),
+    linear-gradient(to left,  var(--surface-card) 40%, transparent),
+    linear-gradient(to right, var(--scroll-shadow), transparent),
+    linear-gradient(to left,  var(--scroll-shadow), transparent);
+  background-repeat: no-repeat;
+  background-position: left center, right center, left center, right center;
+  background-size: 44px 100%, 44px 100%, 15px 100%, 15px 100%;
+  background-attachment: local, local, scroll, scroll;
 }
+/* Opt-in: caps the height so a 40-row table scrolls under its own sticky
+   header instead of running off the page. */
+.table-wrap--tall { max-height: min(78vh, 900px); }
 
 .table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
 .table th {
   text-align: left;
   padding: var(--space-3) var(--space-4);
   font-size: 0.78rem;
-  font-weight: 700;
+  font-weight: var(--weight-bold);
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: var(--text-muted);
+  color: var(--text-normal);
   background: var(--surface-sunken);
-  border-bottom: 1px solid var(--border-soft);
+  border-bottom: 1px solid var(--border-normal);
   white-space: nowrap;
+  position: sticky;
+  top: 0;
+  z-index: 1;
 }
 .table td {
   padding: var(--space-3) var(--space-4);
@@ -451,11 +840,53 @@ img { max-width: 100%; display: block; }
 .table tbody tr { transition: background var(--transition); }
 .table tbody tr:hover { background: var(--surface-hover); }
 
+/* min-width, not width: `img { max-width: 100% }` beat the old `width: 44px`
+   inside a squeezed column and collapsed every thumbnail to nothing. */
 .table__thumb {
-  width: 44px; height: 44px;
+  width: var(--tap-target); height: var(--tap-target);
+  min-width: var(--tap-target);
   border-radius: var(--radius-sm);
   object-fit: cover;
   background: var(--surface-sunken);
+  display: grid; place-items: center;
+  color: var(--text-muted);
+}
+
+/* Table-to-cards. A nine-column roster cannot be read through a 375px window
+   however well it scrolls, so below 760px each row becomes a card and every
+   cell shows the column name from its own `data-label`. Opt-in per table,
+   because a cell with no `data-label` would otherwise lose its header. */
+@media (max-width: 760px) {
+  .table--cards, .table--cards tbody, .table--cards tr, .table--cards td {
+    display: block;
+    width: 100%;
+  }
+  .table--cards thead { display: none; }
+  .table--cards tr {
+    padding: var(--space-3) var(--space-4);
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .table--cards tbody tr:last-child { border-bottom: none; }
+  .table--cards td {
+    padding: 3px 0;
+    border-bottom: none;
+    display: flex;
+    gap: var(--space-3);
+    align-items: baseline;
+    justify-content: space-between;
+  }
+  .table--cards td[data-label]::before {
+    content: attr(data-label);
+    flex: 0 0 38%;
+    font-size: 0.72rem;
+    font-weight: var(--weight-bold);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+  }
+  /* A cell with no label is a thumbnail or an action row: let it fill. */
+  .table--cards td:not([data-label]) { justify-content: flex-start; flex-wrap: wrap; }
+  .table-wrap:has(.table--cards) { background-image: none; }
 }
 
 /* ------------------------------------------------------------- alerts -- */
@@ -465,7 +896,7 @@ img { max-width: 100%; display: block; }
   border-radius: var(--radius-md);
   margin-bottom: var(--space-3);
   font-size: 0.93rem;
-  font-weight: 500;
+  font-weight: var(--weight-medium);
   display: flex; align-items: center; gap: var(--space-2);
 }
 .alert--success { background: var(--success-bg); color: var(--success-fg); }
@@ -473,10 +904,24 @@ img { max-width: 100%; display: block; }
 .alert--info    { background: var(--info-bg);    color: var(--info-fg); }
 .alert--warning { background: var(--warning-bg); color: var(--warning-fg); }
 
+/* A count on a bell or a tab. Text as well as colour: the number *is* the
+   information, so the colour only draws the eye. */
+.badge {
+  display: inline-grid; place-items: center;
+  min-width: 19px; height: 19px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--brand-600);
+  color: var(--on-brand);
+  font-size: 0.7rem;
+  font-weight: var(--weight-bold);
+  line-height: 1;
+}
+
 /* ---------------------------------------------------------------- hero -- */
 
 .hero {
-  background: linear-gradient(150deg, var(--brand-50) 0%, var(--surface-card) 62%);
+  background: var(--hero-gradient);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-lg);
   padding: var(--space-7) var(--space-6);
@@ -487,10 +932,67 @@ img { max-width: 100%; display: block; }
 .hero__lead {
   font-size: 1.1rem;
   color: var(--text-normal);
-  max-width: 56ch;
+  max-width: 46ch;
   margin-bottom: var(--space-5);
 }
 .hero__actions { display: flex; gap: var(--space-3); flex-wrap: wrap; }
+
+/* Two columns: the proposition and a way in on the left, animals on the
+   right. docs/UX.md 1 says photographs lead every screen; the hero was the
+   one place that had none. */
+.hero--split {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+  gap: var(--space-6);
+  align-items: center;
+  position: relative;
+  overflow: hidden;
+}
+.hero__copy { position: relative; z-index: 2; min-width: 0; }
+
+.hero__search {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-4);
+  max-width: 480px;
+}
+.hero__search .input { flex: 1 1 200px; }
+
+.hero__trust {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-5) 0 0;
+  font-size: 0.88rem;
+  color: var(--text-muted);
+}
+.hero__trust .icon { color: var(--success-fg); }
+
+/* Three photographs, fanned. Every box has a fixed aspect ratio and an
+   absolute position, so the hero occupies the same space before and after
+   the images decode: nothing moves under the pointer. */
+.hero__fan {
+  position: relative;
+  min-height: 330px;
+  align-self: stretch;
+}
+.hero__photo {
+  position: absolute;
+  width: 47%;
+  aspect-ratio: 4 / 5;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  border: 4px solid var(--surface-card);
+  box-shadow: var(--shadow-lg);
+  background: var(--surface-sunken);
+  display: grid; place-items: center;
+  color: var(--text-muted);
+}
+.hero__photo img { width: 100%; height: 100%; object-fit: cover; }
+.hero__photo--1 { left: 0;    top: 12%;   rotate: -7deg; z-index: 1; }
+.hero__photo--2 { right: 2%;  top: 0;     rotate: 5deg;  z-index: 3; width: 50%; }
+.hero__photo--3 { left: 24%;  bottom: 0;  rotate: -2deg; z-index: 2; width: 44%; }
 
 /* -------------------------------------------------------------- stats -- */
 
@@ -506,8 +1008,21 @@ img { max-width: 100%; display: block; }
   padding: var(--space-4);
   box-shadow: var(--shadow-sm);
 }
-.stat__value { font-size: 1.9rem; font-weight: 700; color: var(--text-strong); line-height: 1.1; }
+.stat__value { font-size: 1.9rem; font-weight: var(--weight-bold); color: var(--text-strong); line-height: 1.1; }
 .stat__label { font-size: 0.85rem; color: var(--text-muted); margin-top: 2px; }
+
+/* A figure that implies an action should be the way to take it (spec 22). */
+.stat--link {
+  display: block;
+  color: inherit;
+  transition: transform var(--transition), box-shadow var(--transition),
+              border-color var(--transition);
+}
+.stat--link:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+  border-color: var(--brand-300);
+}
 
 /* ------------------------------------------------------------- detail -- */
 
@@ -529,25 +1044,38 @@ img { max-width: 100%; display: block; }
 .detail-photo img { width: 100%; height: 100%; object-fit: cover; }
 
 .spec-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: var(--space-4); }
-.spec { }
 .spec__label {
   font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.05em;
-  color: var(--text-muted); font-weight: 700; margin-bottom: 2px;
+  color: var(--text-muted); font-weight: var(--weight-bold); margin-bottom: 2px;
 }
-.spec__value { font-size: 0.98rem; color: var(--text-strong); font-weight: 550; }
+.spec__value { font-size: 0.98rem; color: var(--text-strong); font-weight: var(--weight-semibold); }
 
 /* --------------------------------------------------------- empty state -- */
 
+/* Solid, not dashed: a dashed rectangle reads as a drop zone, and none of
+   these are droppable. Constrained, because a sentence of guidance stretched
+   to 1180px is harder to read than the same sentence in a column. */
 .empty {
   text-align: center;
-  padding: var(--space-8) var(--space-5);
+  padding: var(--space-7) var(--space-5);
   background: var(--surface-card);
-  border: 1px dashed var(--border-normal);
+  border: 1px solid var(--border-normal);
   border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  max-width: 640px;
+  margin-inline: auto;
 }
-.empty__icon { font-size: 2.6rem; margin-bottom: var(--space-3); }
+.empty--page { margin-block: var(--space-8); }
+.empty__icon {
+  display: grid; place-items: center;
+  font-size: 2.6rem;
+  color: var(--text-muted);
+  margin-bottom: var(--space-3);
+}
+.empty h1 { margin-bottom: var(--space-2); font-size: clamp(1.5rem, 1.2rem + 1vw, 2rem); }
 .empty h3 { margin-bottom: var(--space-2); }
 .empty p { color: var(--text-muted); margin-bottom: var(--space-4); }
+.empty__actions { display: flex; gap: var(--space-3); flex-wrap: wrap; justify-content: center; }
 
 /* --------------------------------------------------------- pagination -- */
 
@@ -571,7 +1099,7 @@ img { max-width: 100%; display: block; }
 /* ------------------------------------------------------- auth screens -- */
 
 .auth-shell {
-  min-height: 78vh;
+  min-height: 70vh;
   display: grid;
   place-items: center;
   padding: var(--space-6) var(--space-4);
@@ -602,22 +1130,60 @@ img { max-width: 100%; display: block; }
   color: var(--text-muted);
   line-height: 1.7;
 }
-.demo-hint code { color: var(--text-strong); font-weight: 600; }
+.demo-hint code { color: var(--text-strong); font-weight: var(--weight-semibold); }
 
 /* --------------------------------------------------------- responsive -- */
 
+@media (max-width: 900px) {
+  .grid-animals--featured { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
 @media (max-width: 860px) {
   .detail-layout { grid-template-columns: 1fr; }
+
+  /* The fan collapses to a single photograph behind the copy. The scrim is a
+     near-opaque wash rather than a tint, so the text keeps its contrast
+     whatever the photograph happens to be. */
+  .hero--split { grid-template-columns: 1fr; }
+  .hero--split::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    background: var(--hero-scrim);
+  }
+  .hero__fan { position: absolute; inset: 0; min-height: 0; z-index: 0; }
+  .hero__photo--1, .hero__photo--3 { display: none; }
+  .hero__photo--2 {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    aspect-ratio: auto;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    rotate: none;
+  }
 }
 
 @media (max-width: 640px) {
   .page { padding: var(--space-5) var(--space-4) var(--space-7); }
   .hero { padding: var(--space-6) var(--space-4); }
-  .topbar__inner { gap: var(--space-3); }
+  .topbar__inner { gap: var(--space-2); }
   .topbar__nav { gap: 0; }
-  .navlink { padding: var(--space-2); font-size: 0.88rem; }
-  .grid-animals { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: var(--space-3); }
+  .navlink { padding: var(--space-2) var(--space-2); font-size: 0.88rem; }
+  /* Frees roughly 90px for the nav, which is what keeps the bar one row. */
+  .brand__word, .navlink__aside { display: none; }
+  /* 150px-wide cards cropped every animal's face; one column at a time is
+     better than two of nothing. */
+  .grid-animals { grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr)); gap: var(--space-4); }
+  .grid-animals--featured { grid-template-columns: 1fr; }
   .filter-bar { padding: var(--space-3); }
+  .filter-bar .field { flex: 1 1 100%; }
+}
+
+@media (max-width: 480px) {
+  .hero__search .btn { width: 100%; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -626,27 +1192,94 @@ img { max-width: 100%; display: block; }
     transition-duration: 0.01ms !important;
   }
   .animal-card:hover { transform: none; }
+  .stat--link:hover { transform: none; }
 }
 
 /* ==========================================================================
    Matching screens: scores, criteria breakdowns and candidate cards
    ========================================================================== */
 
+/* The score ring. Registering the custom property is what makes it
+   animatable: an unregistered property has no type, so the browser cannot
+   interpolate it and the ring would snap from 0 to the score. */
+@property --ring-fill {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 0;
+}
+
+@keyframes score-ring-fill {
+  from { --ring-fill: 0; }
+}
+
+/* `--ring-target` is set inline by the partial, from the score. There is
+   deliberately no `to` keyframe: an implicit one uses the element's own
+   value, which means the animation needs no knowledge of the target and the
+   ring still renders complete if the animation never runs at all. */
 .score {
+  position: relative;
+  width: 74px; height: 74px;
+  border-radius: 50%;
   display: grid;
   place-items: center;
-  width: 68px; height: 68px;
-  border-radius: var(--radius-md);
   flex-shrink: 0;
   line-height: 1.1;
+  --ring-fill: var(--ring-target, 100);
+  background: conic-gradient(from -90deg,
+                var(--ring-color) calc(var(--ring-fill) * 1%),
+                var(--surface-sunken) 0);
+  animation: score-ring-fill 700ms cubic-bezier(0.4, 0, 0.2, 1) both;
 }
-.score__value { font-size: 1.6rem; font-weight: 700; }
-.score__label { font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.06em; opacity: 0.8; }
+.score::before {
+  content: "";
+  position: absolute;
+  inset: 7px;
+  border-radius: 50%;
+  background: var(--score-hole);
+}
+.score__value {
+  position: relative;
+  font-size: 1.5rem;
+  font-weight: var(--weight-bold);
+}
+.score__label {
+  position: relative;
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
 
-.score--strong  { background: var(--success-bg); color: var(--success-fg); }
-.score--fair    { background: var(--warning-bg); color: var(--warning-fg); }
-.score--weak    { background: var(--surface-sunken); color: var(--text-muted); }
-.score--blocked { background: var(--danger-bg); color: var(--danger-fg); }
+/* The same three bands the flat badge used, so nothing re-learns a colour. */
+.score--strong  { --ring-color: var(--success-fg); }
+.score--strong  .score__value { color: var(--success-fg); }
+.score--fair    { --ring-color: var(--warning-fg); }
+.score--fair    .score__value { color: var(--warning-fg); }
+.score--weak    { --ring-color: var(--text-muted); }
+.score--weak    .score__value { color: var(--text-normal); }
+
+/* No ring, because there is no score to draw: a disqualified pairing failed a
+   rule rather than scoring badly. Auto width and a wrapping label, because
+   "Not eligible" does not fit across 74px and used to overflow. */
+.score--blocked {
+  width: auto;
+  min-width: 74px;
+  max-width: 108px;
+  height: auto;
+  min-height: 74px;
+  padding: var(--space-2);
+  border-radius: var(--radius-md);
+  background: var(--danger-bg);
+  animation: none;
+}
+.score--blocked::before { display: none; }
+.score--blocked .score__value { font-size: 1.4rem; color: var(--danger-fg); }
+.score--blocked .score__label {
+  color: var(--danger-fg);
+  white-space: normal;
+  text-align: center;
+  line-height: 1.25;
+}
 
 .candidate__head {
   display: flex;
@@ -666,13 +1299,17 @@ img { max-width: 100%; display: block; }
   padding-top: var(--space-4);
   border-top: 1px solid var(--border-soft);
 }
+/* Was used on both columns of every ranking card and defined nowhere.
+   min-width: 0 is the point: without it a long unbroken RAG reference makes
+   the grid track wider than its share and the card overflows. */
+.candidate__column { min-width: 0; }
 
 .panel-title {
   font-size: 0.76rem;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--text-muted);
-  font-weight: 700;
+  font-weight: var(--weight-bold);
   margin: 0 0 var(--space-2);
 }
 
@@ -684,48 +1321,84 @@ img { max-width: 100%; display: block; }
 
 .pending { color: var(--text-muted); font-size: 0.88rem; font-style: italic; margin: 0; }
 
-/* Full criterion breakdown */
+/* The waiting state for an explanation the agent has not written yet. The
+   score beside it is already final, which is the one thing this has to say. */
+.pending-block { display: flex; flex-direction: column; gap: var(--space-3); align-items: flex-start; }
+.pending-block .pending { font-style: normal; }
+.pending__meta { font-size: 0.8rem; color: var(--text-muted); margin: 0; }
+
+.skeleton { display: flex; flex-direction: column; gap: var(--space-2); width: 100%; max-width: 420px; }
+.skeleton__bar {
+  height: 11px;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(90deg,
+                var(--surface-sunken) 0%,
+                var(--skeleton-highlight) 45%,
+                var(--surface-sunken) 90%);
+  background-size: 260% 100%;
+  animation: skeleton-shimmer 1500ms linear infinite;
+}
+/* Staggered, so the block reads as one surface being filled in rather than
+   three bars flashing in lockstep. */
+.skeleton__bar:nth-child(2) { width: 88%; animation-delay: 160ms; }
+.skeleton__bar:nth-child(3) { width: 66%; animation-delay: 320ms; }
+
+@keyframes skeleton-shimmer {
+  from { background-position: 130% 0; }
+  to   { background-position: -130% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton__bar { animation: none; background: var(--surface-sunken); }
+}
+
+/* Full criterion breakdown - the single renderer, matches/_criteria_bars.html */
 .criteria { display: flex; flex-direction: column; gap: var(--space-4); }
+.criterion { min-width: 0; }
 .criterion__head { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-2); }
-.criterion__name { font-size: 0.9rem; font-weight: 600; color: var(--text-strong); }
-.criterion__score { font-size: 0.9rem; font-weight: 700; color: var(--text-strong); white-space: nowrap; }
-.criterion__weight { font-weight: 500; color: var(--text-muted); font-size: 0.78rem; margin-left: 4px; }
+.criterion__name { font-size: 0.9rem; font-weight: var(--weight-semibold); color: var(--text-strong); }
+.criterion__score { font-size: 0.9rem; font-weight: var(--weight-bold); color: var(--text-strong); white-space: nowrap; }
+.criterion__weight { font-weight: var(--weight-medium); color: var(--text-muted); font-size: 0.78rem; margin-left: 4px; }
 .criterion__track {
-  height: 7px; border-radius: var(--radius-pill);
-  background: var(--surface-sunken); overflow: hidden; margin: 5px 0 5px;
+  height: 10px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-soft);
+  overflow: hidden;
+  margin: 6px 0;
 }
 .criterion__fill { height: 100%; border-radius: var(--radius-pill); }
 .criterion__why { font-size: 0.84rem; color: var(--text-muted); margin: 0; }
 
 /* Compact criterion rows used on the ranking cards */
 .mini-criteria { display: flex; flex-direction: column; gap: var(--space-2); }
-.mini-criterion { display: grid; grid-template-columns: 1fr 88px 30px; align-items: center; gap: var(--space-2); }
+.mini-criterion { display: grid; grid-template-columns: 1fr 110px 30px; align-items: center; gap: var(--space-2); }
 .mini-criterion__name { font-size: 0.84rem; color: var(--text-normal); }
 .mini-criterion__track {
-  height: 6px; border-radius: var(--radius-pill);
+  height: 8px; border-radius: var(--radius-pill);
   background: var(--surface-sunken); overflow: hidden; display: block;
+  border: 1px solid var(--border-soft);
 }
 .mini-criterion__fill { height: 100%; border-radius: var(--radius-pill); display: block; }
-.mini-criterion__value { font-size: 0.82rem; font-weight: 700; color: var(--text-strong); text-align: right; }
+.mini-criterion__value { font-size: 0.82rem; font-weight: var(--weight-bold); color: var(--text-strong); text-align: right; }
 
 .is-strong { background: var(--success-fg); }
 .is-fair   { background: var(--warning-fg); }
-.is-weak   { background: var(--danger-fg); }
+.is-weak   { background: var(--brand-500); }
 
 .source-list { list-style: none; margin: 0; padding: 0; }
 .source-list li {
   font-size: 0.82rem; color: var(--text-muted);
   padding: 4px 0; word-break: break-word;
 }
+/* Token-driven in both themes: the accent ramp inverts, so accent-700 on
+   accent-100 is legible either way with no media query. */
 .source-kind {
   display: inline-block;
   font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.05em;
-  font-weight: 700; color: var(--accent-700);
+  font-weight: var(--weight-bold); color: var(--accent-700);
   background: var(--accent-100);
   padding: 1px 6px; border-radius: var(--radius-sm); margin-right: 6px;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .source-kind { background: var(--surface-sunken); color: var(--accent-300); }
 }
 
 .match-thumb {
@@ -733,6 +1406,7 @@ img { max-width: 100%; display: block; }
   border-radius: var(--radius-md); overflow: hidden;
   background: var(--surface-sunken);
   display: grid; place-items: center; font-size: 1.6rem;
+  color: var(--text-muted);
 }
 .match-thumb img { width: 100%; height: 100%; object-fit: cover; }
 
@@ -763,7 +1437,9 @@ img { max-width: 100%; display: block; }
 }
 .coverage__row:last-child { border-bottom: none; }
 .coverage__label { font-size: 0.9rem; color: var(--text-normal); }
-.coverage__value { font-size: 1.15rem; font-weight: 700; color: var(--text-strong); }
+.coverage__value { font-size: 1.15rem; font-weight: var(--weight-bold); color: var(--text-strong); }
+/* Colour alone would be the only signal, so the value also gains an icon
+   slot the template can fill. */
 .coverage__value.is-warning { color: var(--warning-fg); }
 
 .activity { list-style: none; margin: 0; padding: 0; }
@@ -788,7 +1464,7 @@ img { max-width: 100%; display: block; }
 .field__error {
   font-size: 0.83rem;
   color: var(--danger-fg);
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 .field:has(.field__error) .input,
 .field:has(.field__error) .select,
@@ -811,6 +1487,31 @@ img { max-width: 100%; display: block; }
   margin-top: var(--space-4);
 }
 
+/* ------------------------------------------------------ notifications -- */
+
+/* An unread row is marked by a border and a weight as well as a tint, so it
+   is still identifiable without colour. */
+.notification-item {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  padding: var(--space-3) var(--space-4);
+  border-left: 3px solid transparent;
+  border-bottom: 1px solid var(--border-soft);
+  color: inherit;
+}
+.notification-item:last-child { border-bottom: none; }
+.notification-item:hover { background: var(--surface-hover); }
+.notification-item--unread {
+  border-left-color: var(--brand-500);
+  background: var(--brand-50);
+}
+.notification-item--unread .notification-item__title { font-weight: var(--weight-bold); }
+.notification-item__icon { color: var(--text-muted); margin-top: 3px; }
+.notification-item__body { flex: 1; min-width: 0; }
+.notification-item__title { font-size: 0.94rem; color: var(--text-strong); }
+.notification-item__meta { font-size: 0.8rem; color: var(--text-muted); }
+
 /* Event timeline */
 .timeline { list-style: none; margin: 0; padding: 0; }
 .timeline__item { display: grid; grid-template-columns: 18px 1fr; gap: var(--space-3); padding-bottom: var(--space-4); position: relative; }
@@ -824,6 +1525,28 @@ img { max-width: 100%; display: block; }
   box-shadow: 0 0 0 3px var(--surface-card);
 }
 .timeline__marker.is-system { background: var(--text-muted); }
+.timeline__body { min-width: 0; }
 .timeline__head { font-size: 0.93rem; color: var(--text-normal); }
 .timeline__detail { color: var(--text-muted); }
 .timeline__meta { font-size: 0.78rem; color: var(--text-muted); margin-top: 2px; }
+
+/* A day heading breaks a long event log into the units people actually ask
+   about ("what happened on Tuesday"). */
+.timeline__day {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: var(--space-5) 0 var(--space-3);
+  font-size: 0.78rem;
+  font-weight: var(--weight-bold);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+.timeline__day::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border-soft);
+}
+.timeline__day:first-child { margin-top: 0; }

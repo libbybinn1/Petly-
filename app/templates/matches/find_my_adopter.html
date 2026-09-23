@@ -74,6 +74,46 @@
               <button class="btn btn--primary btn--small" type="submit">Send invitation</button>
             </form>
           {% endif %}
+          {% if not is_discovery and candidate.application_id %}
+            {% if candidate.can_mark_under_review %}
+              <form method="post" action="{{ url_for('matches.decide_application', application_id=candidate.application_id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="animal_id" value="{{ ranking.animal_id }}">
+                <input type="hidden" name="decision" value="REVIEW">
+                <button class="btn btn--secondary btn--small" type="submit">Start review</button>
+              </form>
+            {% endif %}
+            {% if candidate.can_approve %}
+              <form method="post"
+                    action="{{ url_for('matches.decide_application', application_id=candidate.application_id) }}"
+                    data-confirm="Approve {{ candidate.full_name }} for {{ ranking.animal_name }}? This closes their other active applications.">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="animal_id" value="{{ ranking.animal_id }}">
+                <input type="hidden" name="decision" value="APPROVE">
+                <button class="btn btn--primary btn--small" type="submit">Approve</button>
+              </form>
+            {% endif %}
+            {% if candidate.can_reject %}
+              <form method="post"
+                    action="{{ url_for('matches.decide_application', application_id=candidate.application_id) }}"
+                    data-confirm="Reject {{ candidate.full_name }}'s application for {{ ranking.animal_name }}?">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="animal_id" value="{{ ranking.animal_id }}">
+                <input type="hidden" name="decision" value="REJECT">
+                <button class="btn btn--ghost btn--small" type="submit">Reject</button>
+              </form>
+            {% endif %}
+            {% if candidate.can_reverse %}
+              <form method="post"
+                    action="{{ url_for('matches.decide_application', application_id=candidate.application_id) }}"
+                    data-confirm="Undo this approval? {{ ranking.animal_name }} becomes available again and the applications this approval closed are reopened.">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="animal_id" value="{{ ranking.animal_id }}">
+                <input type="hidden" name="decision" value="REVERSE">
+                <button class="btn btn--ghost btn--small" type="submit">Reverse approval</button>
+              </form>
+            {% endif %}
+          {% endif %}
         </div>
       </div>
 

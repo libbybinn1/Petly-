@@ -1,10 +1,24 @@
 {% extends "base.html" %}
 {% block title %}{{ title }} — PetMatch{% endblock %}
 {% block content %}
-<div class="empty" style="max-width:520px;margin:var(--space-8) auto">
-  <div class="empty__icon">{% if code == 404 %}🔍{% elif code == 403 %}🔒{% else %}🐾{% endif %}</div>
-  <h3>{{ title }}</h3>
+{#- An error page is still a page: it needs an h1, or every automated check
+    reports a document with no heading. Two ways out rather than one, because
+    "Home" is rarely what somebody who hit a dead end actually wanted. -#}
+<div class="empty empty--page">
+  <div class="empty__icon">
+    {% if code == 404 %}
+      <svg class="icon icon--xl" aria-hidden="true"><use href="#icon-search"></use></svg>
+    {% elif code == 403 %}
+      <svg class="icon icon--xl" aria-hidden="true"><use href="#icon-alert"></use></svg>
+    {% else %}
+      <svg class="icon icon--filled icon--xl" aria-hidden="true"><use href="#icon-paw"></use></svg>
+    {% endif %}
+  </div>
+  <h1>{{ title }}</h1>
   <p>{{ message }}</p>
-  <a class="btn btn--primary" href="{{ url_for('home.index') }}">Back to home</a>
+  <div class="empty__actions">
+    <a class="btn btn--primary" href="{{ url_for('animals.search') }}">Browse animals</a>
+    <a class="btn btn--secondary" href="{{ url_for('home.index') }}">Home</a>
+  </div>
 </div>
 {% endblock %}

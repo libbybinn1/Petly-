@@ -14,7 +14,13 @@ from flask_login import current_user
 from werkzeug.wrappers import Response
 
 from app.controllers.helpers import get_bus, get_configuration
-from app.cqrs.commands.application_commands import RecordNotFoundError
+from app.cqrs.commands.application_commands import (
+    ApproveApplicationCommand,
+    MarkApplicationUnderReviewCommand,
+    RecordNotFoundError,
+    RejectApplicationCommand,
+    ReverseApprovalCommand,
+)
 from app.cqrs.commands.invitation_commands import SendInvitationCommand
 from app.cqrs.queries.animal_queries import (
     DEFAULT_PAGE_SIZE,
@@ -26,6 +32,10 @@ from app.cqrs.queries.match_queries import (
     FindMyPetQuery,
     GetMatchAnalysisQuery,
     RankApplicantsQuery,
+)
+from app.domain.application_rules import (
+    ApplicationNotAllowedError,
+    IllegalTransitionError,
 )
 from app.domain.invitation_rules import InvitationNotAllowedError
 from app.security.authorization import require_adopter, require_sign_in, require_staff
@@ -75,6 +85,124 @@ def find_my_adopter(animal_id: str) -> str:
         ranking=ranking,
         mode="applicants",
     )
+
+
+# The decisions a staff member may record. Field names and the first two
+# values come from the contract in docs/API.md section 5; REVIEW and REVERSE
+# extend it, because FR-7.4 has four states and the table listed two.
+# A membership test rather than a chain of branches, so an unrecognised
+# value is refused by lookup instead of falling through to a default.
+_DECISIONS = ("APPROVE", "REJECT", "REVIEW", "REVERSE")
+
+
+@match_blueprint.route("/applications/<application_id>/decide", methods=["POST"])
+@require_sign_in
+@require_staff()
+def decide_application(application_id: str) -> Response:
+    """Record a staff decision on one application (FR-7.4, FR-7.5).
+
+    This is the route the whole event-sourced design exists to serve, and
+    until now nothing dispatched those commands - the approval cascade
+    could only be triggered from a test or a script.
+
+    The decision is a human one. Nothing the agent produces reaches this
+    path; the ranking beside the button is advice, and a staff member
+    presses it (rule R4).
+
+    Args:
+        application_id: The application being decided.
+
+    Returns:
+        A redirect back to the ranking screen the decision was made from.
+    """
+    decision = (request.form.get("decision") or "").strip().upper()
+    if decision not in _DECISIONS:
+        abort(400)
+
+    animal_id = (request.form.get("animal_id") or "").strip()
+    note = (request.form.get("note") or "").strip() or None
+
+    try:
+        message = _dispatch_decision(application_id, decision, note)
+    except (ApplicationNotAllowedError, IllegalTransitionError) as error:
+        flash(str(error), "error")
+        return _back_to_ranking(animal_id)
+    except RecordNotFoundError:
+        abort(404)
+
+    flash(message, "success")
+    return _back_to_ranking(animal_id)
+
+
+def _dispatch_decision(
+    application_id: str, decision: str, note: str | None
+) -> str:
+    """Send the command one decision corresponds to.
+
+    Args:
+        application_id: The application being decided.
+        decision: One of `_DECISIONS`, already validated.
+        note: Optional free text recorded with a rejection or reversal.
+
+    Returns:
+        The message to show the staff member.
+    """
+    bus = get_bus()
+    staff_user_id = current_user.user_id
+
+    if decision == "APPROVE":
+        closed = bus.dispatch_command(
+            ApproveApplicationCommand(
+                application_id=application_id, staff_user_id=staff_user_id
+            )
+        )
+        if closed:
+            return (
+                f"Approved. {closed} other active application"
+                f"{'s' if closed != 1 else ''} from this adopter "
+                f"{'were' if closed != 1 else 'was'} closed."
+            )
+        return "Approved. The adopter has been notified."
+
+    if decision == "REJECT":
+        bus.dispatch_command(
+            RejectApplicationCommand(
+                application_id=application_id,
+                staff_user_id=staff_user_id,
+                reason=note,
+            )
+        )
+        return "Application rejected. The adopter has been notified."
+
+    if decision == "REVIEW":
+        bus.dispatch_command(
+            MarkApplicationUnderReviewCommand(
+                application_id=application_id, staff_user_id=staff_user_id
+            )
+        )
+        return "Marked as under review."
+
+    reopened = bus.dispatch_command(
+        ReverseApprovalCommand(
+            application_id=application_id,
+            staff_user_id=staff_user_id,
+            reason=note or "Reversed by staff.",
+        )
+    )
+    if reopened:
+        return (
+            f"Approval reversed. {reopened} application"
+            f"{'s' if reopened != 1 else ''} closed by it "
+            f"{'were' if reopened != 1 else 'was'} reopened."
+        )
+    return "Approval reversed. The animal is available again."
+
+
+def _back_to_ranking(animal_id: str) -> Response:
+    """Return to the applicant ranking, or the dashboard if it is unknown."""
+    if not animal_id:
+        return redirect(url_for("dashboard.dashboard"))
+    return redirect(url_for("matches.find_my_adopter", animal_id=animal_id))
 
 
 @match_blueprint.route("/animals/<animal_id>/discover")

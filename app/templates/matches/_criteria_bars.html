@@ -1,10 +1,22 @@
-{# Per-criterion breakdown. Expects `criteria` (list of CriterionScore). #}
+{# Per-criterion breakdown. Expects `criteria` (a list of CriterionScore).
+
+   The single criteria renderer. The analysis screen used to duplicate this
+   markup inline and, in copying it, dropped the word "weight" - leaving a
+   bare "18%" next to a score of 64 with nothing to say which was which. The
+   word is back, and it lives in exactly one place.
+
+   `item.criterion` arrives as an enum from the matcher and as an already
+   humanised string from the analysis view model, so the label accepts both
+   rather than making one of the two callers convert. #}
 <div class="criteria">
   {% for item in criteria %}
+  {% set criterion_label = (item.criterion.value if item.criterion.value is defined else item.criterion)|humanize %}
   <div class="criterion">
     <div class="criterion__head">
-      <span class="criterion__name">{{ item.criterion.value|humanize }}</span>
-      <span class="criterion__score">{{ item.score }}<span class="criterion__weight">· {{ (item.weight * 100)|round|int }}% weight</span></span>
+      <span class="criterion__name">{{ criterion_label }}</span>
+      <span class="criterion__score">
+        {{ item.score }}<span class="criterion__weight">&middot; {{ (item.weight * 100)|round|int }}% weight</span>
+      </span>
     </div>
     <div class="criterion__track">
       <div class="criterion__fill {% if item.score >= 75 %}is-strong{% elif item.score >= 50 %}is-fair{% else %}is-weak{% endif %}"

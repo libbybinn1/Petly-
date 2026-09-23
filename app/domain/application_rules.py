@@ -151,6 +151,63 @@ def ensure_application_may_be_submitted(
         )
 
 
+def ensure_application_may_be_approved(
+    application_status: ApplicationStatus, animal_status: AnimalStatus
+) -> None:
+    """Raise unless this application may be approved right now.
+
+    The status transition is not the whole rule. An animal already promised
+    to somebody is the case that matters: two staff members looking at two
+    different applications for the same animal would each see a perfectly
+    approvable application, and approving both promises one animal to two
+    homes - with two adopters told they had succeeded.
+
+    The animal's status is the shared fact that settles it, because the
+    first approval moves the animal out of AVAILABLE.
+
+    Args:
+        application_status: The application's present status.
+        animal_status: The status of the animal it is for.
+
+    Raises:
+        ApplicationNotAllowedError: The animal is no longer available.
+        IllegalTransitionError: The application cannot be approved from its
+            current status.
+    """
+    ensure_application_transition_allowed(
+        application_status, ApplicationStatus.APPROVED
+    )
+
+    if animal_status is not AnimalStatus.AVAILABLE:
+        raise ApplicationNotAllowedError(
+            f"This animal is {animal_status.value.replace('_', ' ').lower()}. "
+            f"Reverse the existing approval first if this is a correction."
+        )
+
+
+def ensure_approval_may_be_reversed(application_status: ApplicationStatus) -> None:
+    """Raise unless this application is one whose approval can be undone.
+
+    Guarding on the transition to WITHDRAWN was not enough: SUBMITTED and
+    UNDER_REVIEW both permit WITHDRAWN, so a never-approved application
+    passed. The damage was the side effect rather than the status change -
+    the handler then forced the animal back to AVAILABLE, discarding an
+    ADOPTION_IN_PROGRESS that a *different* adopter's genuine approval had
+    set.
+
+    Args:
+        application_status: The application's present status.
+
+    Raises:
+        IllegalTransitionError: It was not in an approved state.
+    """
+    if application_status is not ApplicationStatus.APPROVED:
+        raise IllegalTransitionError(
+            f"Only an approved application can be reversed; this one is "
+            f"{application_status.value.replace('_', ' ').lower()}."
+        )
+
+
 def select_applications_to_close(
     approved_application_id: str, adopter_applications: list[ApplicationSnapshot]
 ) -> list[ApplicationSnapshot]:

@@ -1,0 +1,31 @@
+{# The waiting state for an explanation the agent has not written yet.
+
+   Optional `queued_at_label` (a relative string such as "4 minutes ago") and
+   `refresh_url` (defaults to this page).
+
+   There used to be three different sentences for this one state across two
+   screens, none of which said what a visitor wanted to know: whether the
+   score was trustworthy, and whether waiting would help. Both are answered
+   here, in one place.
+
+   Explanations are written by a separate process on CPU-only hardware, which
+   takes tens of seconds per pairing (CLAUDE.md R4) - so this is a normal
+   state, not an error, and the score beside it is already final.
+
+   The Refresh link is the reason this works without JavaScript. When
+   petmatch.js is running and the page also carries
+   `data-analysis-status-url`, it reloads on its own. #}
+<div class="pending-block">
+  {% include "_skeleton.html" %}
+  <p class="pending">
+    The agent is still writing this explanation. The score is already final —
+    it is arithmetic, not model output.
+  </p>
+  {% if queued_at_label %}
+    <p class="pending__meta">
+      <svg class="icon" aria-hidden="true"><use href="#icon-clock"></use></svg>
+      Queued {{ queued_at_label }}
+    </p>
+  {% endif %}
+  <a class="btn btn--ghost btn--small" href="{{ refresh_url or request.path }}">Refresh</a>
+</div>

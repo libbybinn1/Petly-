@@ -270,13 +270,28 @@ def _count_available_animals_without_suitable_applicants(session: Session) -> in
         ).scalars()
     )
 
+    # Restricted to the adopters who actually applied. Taking MAX over every
+    # analysis for the animal counted discovery scores for adopters who never
+    # applied, so one enthusiastic non-applicant hid an animal whose real
+    # applicants all scored badly - precisely the animal this tile exists to
+    # surface.
     best_score_by_animal = {
         animal_id: int(score)
         for animal_id, score in session.execute(
-            select(MatchAnalysis.animal_id, func.max(MatchAnalysis.score)).group_by(
-                MatchAnalysis.animal_id
+            select(MatchAnalysis.animal_id, func.max(MatchAnalysis.score))
+            .join(
+                AdoptionApplication,
+                (AdoptionApplication.animal_id == MatchAnalysis.animal_id)
+                & (
+                    AdoptionApplication.adopter_profile_id
+                    == MatchAnalysis.adopter_profile_id
+                ),
             )
-        ).all()
+            .where(AdoptionApplication.status.in_(_active_application_statuses()))
+            .group_by(MatchAnalysis.animal_id)
+        )
+        .tuples()
+        .all()
     }
 
     return sum(

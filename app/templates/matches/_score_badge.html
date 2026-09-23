@@ -1,12 +1,10 @@
-{# Score badge. Expects `score` (a MatchScore). #}
-{% if score.is_disqualified %}
-  <span class="score score--blocked" title="{{ score.disqualification_reason }}">
-    <span class="score__value">—</span>
-    <span class="score__label">Not eligible</span>
-  </span>
-{% else %}
-  <span class="score {% if score.score >= 75 %}score--strong{% elif score.score >= 50 %}score--fair{% else %}score--weak{% endif %}">
-    <span class="score__value">{{ score.score }}</span>
-    <span class="score__label">match</span>
-  </span>
-{% endif %}
+{# Kept under its original name because four screens already include it.
+
+   There used to be three renderings of the same number - this badge, a
+   bespoke inline one on the analysis page, and the ranking cards' own markup.
+   The ring in _score_ring.html is now the only one, and this file is the
+   alias that makes every existing `{% include "matches/_score_badge.html" %}`
+   pick it up without editing those screens.
+
+   Expects `score` (a MatchScore), exactly as before. #}
+{% include "matches/_score_ring.html" %}

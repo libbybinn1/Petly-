@@ -448,24 +448,11 @@ class TestTheRouteSurfaceMatchesTheDocumentation:
         assert "/animals/new" in paths
         assert "/animals/<animal_id>/edit" in paths
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "MISSING FEATURE: ApproveApplicationCommand and "
-            "ReverseApprovalCommand are registered on the bus in "
-            "app/__init__.py line 156-157, but no controller dispatches them. "
-            "docs/UX.md section 9 lists a 'Staff decision' form on the "
-            "applicant ranking screen. FR-7.5, the spec section 7.5 cascade "
-            "that the whole event-sourcing design exists to support, therefore "
-            "cannot be triggered through the application at all - only from a "
-            "test or a script."
-        ),
-    )
     def test_a_staff_decision_route_exists(self, application: Flask) -> None:
         """Proves the approval workflow is reachable by a staff member."""
         decision_like = [
             path for path in self._paths(application)
-            if any(word in path for word in ("approve", "decision", "reject"))
+            if any(word in path for word in ("approve", "decide", "decision", "reject"))
         ]
 
         assert decision_like != []
