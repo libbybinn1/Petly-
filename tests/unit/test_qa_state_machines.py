@@ -121,21 +121,6 @@ class TestEveryIllegalApplicationMoveIsRefused:
         )
 
 
-def _snapshot(
-    application_id: str,
-    status: ApplicationStatus,
-    closed_because: str | None,
-) -> ApplicationSnapshot:
-    """Build one application snapshot, varying only what a test cares about."""
-    return ApplicationSnapshot(
-        application_id=application_id,
-        adopter_profile_id="p1",
-        animal_id="an1",
-        status=status,
-        closed_because_application_id=closed_because,
-    )
-
-
 class TestReopeningIsGuardedByCause:
     """Spec section 7.5: only a cascade-closed application may reopen."""
 
