@@ -20,18 +20,22 @@ Updated as phases complete, per rule R5.
 | 3 Event store | Done |
 | 4 CQRS skeleton | Done |
 | 5 Auth and authorization | Done |
-| 6 Animals and adopter profiles | Partial - animal CRUD done, adopter profile form outstanding (F-06) |
+| 6 Animals and adopter profiles | Done |
 | 7 Search, details, tables | Done |
 | 8 Applications and invitations | Done, including the spec 7.5 cascade and 72-hour window |
 | 9 Deterministic matching engine | Done |
 | 10 MCP server over stdio | Done |
 | 11 RAG pipeline | Done |
 | 12 Autonomous agent process | Done |
-| 13 AI-facing screens | Partial - rankings and analyses done, natural-language search outstanding (F-14) |
+| 13 AI-facing screens | Done |
 | 14 Dashboard | Done |
-| 15 E2E, hardening, demo | Outstanding - API and E2E suites not yet written |
+| 15 E2E, hardening, demo | Done - API and E2E suites written; `scripts/verify_requirements.py` checks all 25 mandatory items |
 
-Currently on: Phase 15, plus the two partial items above.
+All sixteen phases complete. `scripts/verify_requirements.py` reports 25/25.
+
+Known operational note: the end-to-end suite runs a real browser against the
+real Somee database, whose free tier throttles under load. Run it on its own
+rather than alongside the API suite, which competes for the same connections.
 
 ---
 

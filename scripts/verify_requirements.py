@@ -1,4 +1,4 @@
-"""Check every mandatory requirement from the course blueprint's checklist.
+r"""Check every mandatory requirement from the course blueprint's checklist.
 
 Blueprint section 20 lists what the project must demonstrate. This script
 verifies each item against the code rather than against memory, so the
@@ -24,6 +24,9 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+MINIMUM_MCP_TOOLS = 2
+MINIMUM_NEGATIVE_ASSERTIONS = 20
 
 REQUIRED_DOCUMENTS = (
     "PRD", "REQUIREMENTS", "FEATURES", "ARCHITECTURE", "MODEL_DATA",
@@ -100,7 +103,10 @@ def check_event_sourcing() -> tuple[bool, str]:
         return False, "the store exposes a mutating operation"
 
     events = len(re.findall(r'^\s+[A-Z_]+ = "', _read("app/domain/enums.py"), re.M))
-    return True, f"append-only store, no update or delete; {events} enum values incl. the event catalogue"
+    return True, (
+        f"append-only store, no update or delete; {events} enum values "
+        f"including the event catalogue"
+    )
 
 
 def check_cloud_database() -> tuple[bool, str]:
@@ -112,7 +118,8 @@ def check_cloud_database() -> tuple[bool, str]:
 def check_authentication() -> tuple[bool, str]:
     """Registration, sign-in and hashed passwords exist."""
     auth = _read("app/controllers/auth_controller.py")
-    has_all = all(term in auth for term in ("generate_password_hash", "check_password_hash", "def register", "def login"))
+    required = ("generate_password_hash", "check_password_hash", "def register", "def login")
+    has_all = all(term in auth for term in required)
     return has_all, "registration and sign-in with hashed passwords"
 
 
@@ -205,7 +212,7 @@ def check_mcp_tools() -> tuple[bool, str]:
     """At least two local MCP tools communicate over stdio."""
     server = _read("mcp_server/server.py")
     tools = re.findall(r"@mcp_server\.tool\(\)\s*\ndef (\w+)", server)
-    if len(tools) < 2:
+    if len(tools) < MINIMUM_MCP_TOOLS:
         return False, f"only {len(tools)} tools found"
     if 'transport="stdio"' not in server:
         return False, "the server does not use stdio transport"
@@ -236,7 +243,8 @@ def check_rules() -> tuple[bool, str]:
     """At least one project-specific rule guides the coding agent."""
     rules = _read("CLAUDE.md")
     found = re.findall(r"^## (R\d) — (.+)$", rules, re.M)
-    return len(found) >= 1, f"{len(found)} rules in CLAUDE.md: {', '.join(code for code, _ in found)}"
+    codes = ", ".join(code for code, _ in found)
+    return len(found) >= 1, f"{len(found)} rules in CLAUDE.md: {codes}"
 
 
 def check_documents() -> tuple[bool, str]:
@@ -251,7 +259,7 @@ def check_documents() -> tuple[bool, str]:
 def check_version_control() -> tuple[bool, str]:
     """The project is in version control with real commits."""
     try:
-        result = subprocess.run(  # noqa: S603, S607 - fixed command
+        result = subprocess.run(  # - fixed command
             ["git", "log", "--oneline"],
             cwd=str(PROJECT_ROOT), capture_output=True, text=True, timeout=30, check=False,
         )
@@ -279,7 +287,7 @@ def check_negative_tests() -> tuple[bool, str]:
     for path in (PROJECT_ROOT / "tests").rglob("test_*.py"):
         source = path.read_text(encoding="utf-8")
         total += len(re.findall(r"pytest\.raises|== 40[0-9]|== 3[0-9][0-9]", source))
-    return total >= 20, f"{total} negative assertions across the suite"
+    return total >= MINIMUM_NEGATIVE_ASSERTIONS, f"{total} negative assertions across the suite"
 
 
 def check_deterministic_scoring() -> tuple[bool, str]:
@@ -337,7 +345,7 @@ def main() -> int:
     for check in ALL_CHECKS:
         try:
             passed, detail = check.verify()
-        except Exception as error:  # noqa: BLE001 - a broken check is a failure
+        except Exception as error:  # - a broken check is a failure
             passed, detail = False, f"check raised {type(error).__name__}: {error}"
 
         marker = "PASS" if passed else "FAIL"

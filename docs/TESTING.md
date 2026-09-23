@@ -154,7 +154,24 @@ accounts.
 - Tests that need the network or a model are marked `slow` so the fast loop
   stays fast.
 
-## 7. Coverage
+## 7. Running the suites
+
+```bash
+<venv>\Scripts\python.exe -m pytest tests/ -q                    # everything
+<venv>\Scripts\python.exe -m pytest tests/unit -q                # fast, offline
+<venv>\Scripts\python.exe -m pytest tests/e2e -q                 # browser, slow
+<venv>\Scripts\python.exe scripts/verify_requirements.py         # checklist audit
+```
+
+**Run the E2E suite on its own.** It drives a real browser against the real
+Somee database, whose free tier throttles under load. Running it alongside
+the API suite makes both compete for the same few connections, and the
+symptom - navigation timeouts - looks like a bug in the pages rather than
+contention. Two settings mitigate it: the connection pool is deliberately
+small (2 + 3 overflow), and the suite waits on `load` rather than
+`networkidle`, which a page serving forty lazy-loaded images never reaches.
+
+## 8. Coverage
 
 Coverage is reported over `app`, `agent_service` and `mcp_server`. It is a
 diagnostic, not a target: a high number with no negative tests would still be
