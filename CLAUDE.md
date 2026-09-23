@@ -42,7 +42,7 @@ demonstrations the project is graded on.
 | `cqrs/commands/` | domain, repositories, eventstore | return read DTOs; render |
 | `cqrs/queries/` | repositories (read-only) | mutate state; open a write transaction |
 | `repositories/` | SQLAlchemy, domain | contain business rules |
-| `agent_service/` | its own modules, MCP client | import `app.*` directly |
+| `agent_service/` | its own modules, MCP client, and from `app` only `domain/`, `config`, `infrastructure/models` and `eventstore/` (shared vocabulary and queue access) | import the Flask factory (`app/__init__.py`), `controllers/`, `cqrs/`, `security/` or `services/`; call any command or query |
 
 Specific prohibitions:
 

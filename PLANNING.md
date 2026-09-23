@@ -116,7 +116,7 @@ Blueprint §19 mandates GitHub. Local `git init` only, or also create and push a
 - **E2E:** Playwright for **Python** (`pytest-playwright`) — works without Node.
 - **Animal images:** local `static/uploads/` with the URL in Postgres, seeded with public-domain photos. Spec §24 leaves storage as an implementation decision.
 - **MCP tools:** exactly the two the spec names — `get_adopter_profile`, `get_animal_profile`. A third only if a real need appears (spec §14 warns against padding the count).
-- **Seed scale:** ~40 animals, ~25 adopters, ~30 applications, ~10 invitations — enough for a believable dashboard.
+- **Seed scale:** 157 animals across eleven kinds (dogs, cats, rabbits, guinea pigs, hamsters, birds, reptiles, amphibians, exotic mammals, farm animals, poultry), 40 adopters — three of them deliberately incomplete — 3 staff, ~79 applications including one approval with its §7.5 cascade, 32 invitations covering every status, and a set of deterministic match analyses. Sized so every dashboard tile is non-zero rather than merely so the pages are not empty. The roster lives in `scripts/seed_roster.py` and the people in `scripts/seed_people.py`; `knowledge/` holds 17 curated guides.
 - **Agent↔app channel:** DB-backed job queue (`analysis_jobs` table) polled by the separate agent process. This keeps the agent genuinely independent rather than an in-process import.
 
 ---

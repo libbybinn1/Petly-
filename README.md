@@ -60,6 +60,10 @@ Set up `.env` first by copying `.env.example` and filling in the values.
 <venv>\Scripts\python.exe -m agent_service
 ```
 
+Step 2 loads about 157 animals across eleven kinds, 40 adopters and 3 staff,
+and downloads a real photograph for every animal from free public APIs, so a
+first run takes several minutes. Step 3 embeds seventeen curated guides.
+
 Demo accounts, password `Password123!`:
 
 | Role | Email |

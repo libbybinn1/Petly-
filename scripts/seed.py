@@ -1,21 +1,30 @@
 """Load demo data into the PetMatch database.
 
-Creates staff and adopter accounts, a varied roster of animals with real
-downloaded photographs, and a realistic spread of applications and
-invitations. Application and invitation history is written through the event
-store, so the seeded data exercises the same event-sourced path the running
-application uses rather than bypassing it.
+This module owns the records that simply exist - staff and adopter accounts,
+adopter profiles, and the animal roster with a real downloaded photograph for
+each animal. The records that have a past, meaning applications and
+invitations and their event streams, are written by
+`scripts/seed_history.py`.
+
+The data itself lives apart from the loading logic, so the roster can be
+checked without a database or a network:
+
+    scripts/seed_roster.py    the animals
+    scripts/seed_people.py    the adopters and staff
+    scripts/seed_history.py   applications, invitations, stored analyses
+    tests/unit/test_seed_data.py  proves the data is internally consistent
 
 Usage:
-    .venv/Scripts/python.exe scripts/db.py seed
+    <python> scripts/db.py seed
 """
 
 from __future__ import annotations
 
 import random
 import sys
-from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from collections import defaultdict
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -27,21 +36,7 @@ import truststore  # noqa: E402
 truststore.inject_into_ssl()
 
 from app.config import load_configuration  # noqa: E402
-from app.domain.enums import (  # noqa: E402
-    ActivityLevel,
-    AggregateType,
-    AnimalSize,
-    AnimalStatus,
-    ApplicationStatus,
-    DomainEventType,
-    ExperienceLevel,
-    HomeType,
-    InvitationStatus,
-    NotificationType,
-    Species,
-    Temperament,
-    UserRole,
-)
+from app.domain.enums import UserRole  # noqa: E402
 from app.eventstore.store import EventStore  # noqa: E402
 from app.infrastructure.database import (  # noqa: E402
     create_database_engine,
@@ -50,17 +45,34 @@ from app.infrastructure.database import (  # noqa: E402
 )
 from app.infrastructure.models import (  # noqa: E402
     AdopterProfile,
-    AdoptionApplication,
-    AdoptionInvitation,
     Animal,
     AnimalImage,
-    Notification,
     User,
     new_identifier,
 )
+from sqlalchemy.orm import Session, sessionmaker  # noqa: E402
 from werkzeug.security import generate_password_hash  # noqa: E402
 
 from scripts.animal_photos import PhotoFetcher  # noqa: E402
+from scripts.seed_history import (  # noqa: E402
+    HistoryCounts,
+    SeedContext,
+    write_history,
+)
+from scripts.seed_people import (  # noqa: E402
+    ADOPTER_SPECIFICATIONS,
+    DEMO_ADOPTER_EMAIL,
+    DEMO_STAFF_EMAIL,
+    STAFF_SPECIFICATIONS,
+    AdopterSpecification,
+)
+from scripts.seed_roster import (  # noqa: E402
+    ANIMAL_SPECIFICATIONS,
+    CITIES,
+    AnimalSpecification,
+    kind_group,
+    status_for,
+)
 
 # Deterministic seed so repeated runs give the same demo, which makes
 # screenshots and test expectations stable.
@@ -68,244 +80,52 @@ RANDOM_SEED = 20260922
 
 DEMO_PASSWORD = "Password123!"
 
-CITIES = ("Tel Aviv", "Haifa", "Jerusalem", "Beer Sheva", "Netanya", "Rishon LeZion")
+# A single shared photograph, used only when a live fetch failed for one
+# animal. Spec 24 makes an image mandatory, so an animal with no picture would
+# be a broken listing rather than a tidy blank.
+FALLBACK_PHOTOGRAPH_NAME = "sample.jpg"
+FALLBACK_PHOTOGRAPH_URL = f"/static/uploads/{FALLBACK_PHOTOGRAPH_NAME}"
 
 
 @dataclass
-class SeedContext:
-    """Collaborators every seeding helper needs.
+class AnimalRoster:
+    """The animal records and the outcome of fetching their photographs."""
 
-    Bundled into one object because passing the session, event store,
-    randomizer and clock separately to each helper made their signatures
-    long enough to obscure the arguments that actually vary.
-    """
-
-    session: object  # SQLAlchemy Session
-    event_store: EventStore
-    randomizer: random.Random
-    now: datetime
+    animals: list[Animal] = field(default_factory=list)
+    images: list[AnimalImage] = field(default_factory=list)
+    downloaded_count: int = 0
+    fallback_count: int = 0
 
 
 @dataclass(frozen=True)
-class AnimalSpecification:
-    """A demo animal defined before persistence."""
+class DemoPeople:
+    """Every account the demo contains."""
 
-    name: str
-    species: Species
-    breed: str | None
-    age_years: float
-    size: AnimalSize
-    temperament: Temperament
-    activity_level: ActivityLevel
-    good_with_children: bool
-    good_with_other_animals: bool
-    has_special_needs: bool
-    special_needs_description: str | None
-    required_space: AnimalSize
-    description: str
+    staff_users: list[User]
+    adopter_users: list[User]
+    profiles: list[AdopterProfile]
 
 
-ANIMAL_SPECIFICATIONS: tuple[AnimalSpecification, ...] = (
-    AnimalSpecification("Luna", Species.DOG, "Border Collie", 2.0, AnimalSize.MEDIUM,
-        Temperament.ENERGETIC, ActivityLevel.HIGH, True, True, False, None, AnimalSize.LARGE,
-        "Brilliant and tireless. Luna needs a job to do and a person who enjoys long walks."),
-    AnimalSpecification("Milo", Species.CAT, "Domestic Shorthair", 4.0, AnimalSize.SMALL,
-        Temperament.CALM, ActivityLevel.LOW, True, True, False, None, AnimalSize.SMALL,
-        "A quiet lap cat who will find the sunniest spot in any room and stay there."),
-    AnimalSpecification("Bella", Species.DOG, "Labrador Retriever", 5.0, AnimalSize.LARGE,
-        Temperament.BALANCED, ActivityLevel.MODERATE, True, True, False, None, AnimalSize.LARGE,
-        "Gentle, patient and endlessly food-motivated. Wonderful with children."),
-    AnimalSpecification("Clover", Species.RABBIT, "Holland Lop", 1.5, AnimalSize.SMALL,
-        Temperament.CALM, ActivityLevel.LOW, True, False, False, None, AnimalSize.SMALL,
-        "Litter-trained and curious. Happiest with a secure pen and plenty of hay."),
-    AnimalSpecification("Pepper", Species.HAMSTER, "Syrian", 0.5, AnimalSize.SMALL,
-        Temperament.BALANCED, ActivityLevel.MODERATE, False, False, False, None, AnimalSize.SMALL,
-        "A tidy nocturnal companion. Best suited to an older child or adult."),
-    AnimalSpecification("Ziggy", Species.BIRD, "Cockatiel", 3.0, AnimalSize.SMALL,
-        Temperament.ENERGETIC, ActivityLevel.MODERATE, True, False, False, None, AnimalSize.SMALL,
-        "Whistles a tune he invented himself. Enjoys company and out-of-cage time."),
-    AnimalSpecification("Shadow", Species.CAT, "Bombay", 7.0, AnimalSize.MEDIUM,
-        Temperament.ANXIOUS, ActivityLevel.LOW, False, False, True,
-        "Needs a quiet home; startles easily and hides when overwhelmed.", AnimalSize.SMALL,
-        "Shadow takes time to trust, and rewards patience with total devotion."),
-    AnimalSpecification("Rocky", Species.DOG, "Jack Russell Terrier", 3.0, AnimalSize.SMALL,
-        Temperament.ENERGETIC, ActivityLevel.HIGH, True, False, False, None, AnimalSize.MEDIUM,
-        "Small body, enormous personality. Will out-run anyone who challenges him."),
-    AnimalSpecification("Olive", Species.GUINEA_PIG, "Abyssinian", 2.0, AnimalSize.SMALL,
-        Temperament.CALM, ActivityLevel.LOW, True, True, False, None, AnimalSize.SMALL,
-        "Chatty in the best way. Guinea pigs do best in pairs, and Olive agrees."),
-    AnimalSpecification("Atlas", Species.DOG, "German Shepherd", 6.0, AnimalSize.LARGE,
-        Temperament.BALANCED, ActivityLevel.HIGH, True, False, False, None, AnimalSize.LARGE,
-        "Loyal and highly trainable. Wants a confident owner and a real routine."),
-    AnimalSpecification("Poppy", Species.CAT, "Ragdoll", 1.0, AnimalSize.MEDIUM,
-        Temperament.CALM, ActivityLevel.LOW, True, True, False, None, AnimalSize.SMALL,
-        "Goes limp when picked up, as the breed promises. Adores being carried."),
-    AnimalSpecification("Gus", Species.DOG, "Beagle", 8.0, AnimalSize.MEDIUM,
-        Temperament.CALM, ActivityLevel.LOW, True, True, True,
-        "Senior dog with mild arthritis; needs joint supplements and short walks.",
-        AnimalSize.MEDIUM,
-        "A gentle old soul who has done his running. Now he would like a sofa."),
-    AnimalSpecification("Nova", Species.CAT, "Siamese", 2.0, AnimalSize.SMALL,
-        Temperament.ENERGETIC, ActivityLevel.HIGH, True, True, False, None, AnimalSize.SMALL,
-        "Talks constantly and expects an answer. Needs stimulation or she invents it."),
-    AnimalSpecification("Biscuit", Species.RABBIT, "Rex", 3.0, AnimalSize.SMALL,
-        Temperament.BALANCED, ActivityLevel.MODERATE, True, True, False, None, AnimalSize.SMALL,
-        "Velvet-coated and sociable. Enjoys supervised time exploring the room."),
-    AnimalSpecification("Kira", Species.DOG, "Siberian Husky", 4.0, AnimalSize.LARGE,
-        Temperament.ENERGETIC, ActivityLevel.HIGH, True, True, False, None, AnimalSize.LARGE,
-        "Needs serious exercise and a secure garden. Will discuss this loudly."),
-    AnimalSpecification("Pumpkin", Species.CAT, "Maine Coon", 5.0, AnimalSize.LARGE,
-        Temperament.BALANCED, ActivityLevel.MODERATE, True, True, False, None, AnimalSize.MEDIUM,
-        "Enormous, dignified, and convinced he is a small person."),
-    AnimalSpecification("Daisy", Species.DOG, "Cavalier King Charles Spaniel", 1.0,
-        AnimalSize.SMALL, Temperament.CALM, ActivityLevel.LOW, True, True, False, None,
-        AnimalSize.SMALL,
-        "An apartment-friendly puppy who mostly wants to be near you."),
-    AnimalSpecification("Ash", Species.CAT, "Russian Blue", 9.0, AnimalSize.MEDIUM,
-        Temperament.CALM, ActivityLevel.LOW, False, False, True,
-        "Senior cat with early kidney disease; requires a prescription diet.",
-        AnimalSize.SMALL,
-        "Reserved and elegant. Prefers a calm adult household with a routine."),
-    AnimalSpecification("Mango", Species.BIRD, "Budgerigar", 1.0, AnimalSize.SMALL,
-        Temperament.ENERGETIC, ActivityLevel.MODERATE, True, False, False, None, AnimalSize.SMALL,
-        "Bright, busy and best kept with a companion bird."),
-    AnimalSpecification("Bruno", Species.DOG, "Boxer", 7.0, AnimalSize.LARGE,
-        Temperament.BALANCED, ActivityLevel.MODERATE, True, False, False, None, AnimalSize.LARGE,
-        "Solid, affectionate and slightly clumsy. Great with older children."),
-    AnimalSpecification("Willow", Species.RABBIT, "Netherland Dwarf", 0.8, AnimalSize.SMALL,
-        Temperament.ANXIOUS, ActivityLevel.LOW, False, False, False, None, AnimalSize.SMALL,
-        "Tiny and shy. Needs a gentle, quiet home and time to settle in."),
-    AnimalSpecification("Tofu", Species.GUINEA_PIG, "American", 1.0, AnimalSize.SMALL,
-        Temperament.CALM, ActivityLevel.LOW, True, True, False, None, AnimalSize.SMALL,
-        "Squeaks at the sound of the fridge opening. A cheerful, easy first pet."),
-    AnimalSpecification("Juno", Species.DOG, "Greyhound", 5.0, AnimalSize.LARGE,
-        Temperament.CALM, ActivityLevel.LOW, True, True, False, None, AnimalSize.MEDIUM,
-        "Retired racer. Sprints for ninety seconds, then sleeps for twenty hours."),
-    AnimalSpecification("Sesame", Species.CAT, "Tabby", 0.6, AnimalSize.SMALL,
-        Temperament.ENERGETIC, ActivityLevel.HIGH, True, True, False, None, AnimalSize.SMALL,
-        "A kitten operating at full power at all times. Bring toys."),
-    AnimalSpecification("Hazel", Species.DOG, "Poodle", 3.0, AnimalSize.MEDIUM,
-        Temperament.BALANCED, ActivityLevel.MODERATE, True, True, False, None, AnimalSize.MEDIUM,
-        "Clever and low-shedding. Enjoys training games and puzzle feeders."),
-    AnimalSpecification("Pip", Species.HAMSTER, "Dwarf Campbell", 0.4, AnimalSize.SMALL,
-        Temperament.ENERGETIC, ActivityLevel.HIGH, False, False, False, None, AnimalSize.SMALL,
-        "Fast, tiny and fond of the wheel at three in the morning."),
-    AnimalSpecification("Saffron", Species.CAT, "Persian", 6.0, AnimalSize.MEDIUM,
-        Temperament.CALM, ActivityLevel.LOW, True, False, True,
-        "Long coat requires daily grooming; prone to tear staining.", AnimalSize.SMALL,
-        "Serene and high-maintenance in the nicest possible way."),
-    AnimalSpecification("Ranger", Species.DOG, "Australian Shepherd", 2.0, AnimalSize.MEDIUM,
-        Temperament.ENERGETIC, ActivityLevel.HIGH, True, True, False, None, AnimalSize.LARGE,
-        "Needs a job, a garden and a person who likes being outdoors."),
-    AnimalSpecification("Peanut", Species.RABBIT, "Lionhead", 2.5, AnimalSize.SMALL,
-        Temperament.BALANCED, ActivityLevel.MODERATE, True, True, False, None, AnimalSize.SMALL,
-        "A magnificent mane and an agreeable nature. Enjoys gentle handling."),
-    AnimalSpecification("Echo", Species.BIRD, "African Grey", 11.0, AnimalSize.MEDIUM,
-        Temperament.BALANCED, ActivityLevel.MODERATE, False, False, True,
-        "Highly intelligent; needs daily interaction and mental enrichment or "
-        "develops feather-plucking.", AnimalSize.MEDIUM,
-        "Echo has a vocabulary and opinions. A serious, long-term commitment."),
-    AnimalSpecification("Maple", Species.CAT, "Calico", 3.0, AnimalSize.SMALL,
-        Temperament.BALANCED, ActivityLevel.MODERATE, True, True, False, None, AnimalSize.SMALL,
-        "Independent but affectionate on her own schedule. An easy housemate."),
-    AnimalSpecification("Tank", Species.DOG, "Bulldog", 4.0, AnimalSize.MEDIUM,
-        Temperament.CALM, ActivityLevel.LOW, True, True, True,
-        "Brachycephalic; must avoid heat and strenuous exercise.", AnimalSize.SMALL,
-        "Snores impressively. Perfectly content with a short daily amble."),
-    AnimalSpecification("Wren", Species.GUINEA_PIG, "Peruvian", 1.5, AnimalSize.SMALL,
-        Temperament.ANXIOUS, ActivityLevel.LOW, True, True, False, None, AnimalSize.SMALL,
-        "A little timid at first. Bonds strongly once she knows your voice."),
-    AnimalSpecification("Koda", Species.DOG, "Alaskan Malamute", 3.0, AnimalSize.LARGE,
-        Temperament.ENERGETIC, ActivityLevel.HIGH, True, False, False, None, AnimalSize.LARGE,
-        "Powerful and independent. Experienced owners only, please."),
-    AnimalSpecification("Clementine", Species.CAT, "Scottish Fold", 2.0, AnimalSize.SMALL,
-        Temperament.CALM, ActivityLevel.LOW, True, True, False, None, AnimalSize.SMALL,
-        "Sits like a small owl. Gentle, undemanding and very easy company."),
-    AnimalSpecification("Bramble", Species.RABBIT, "Flemish Giant", 4.0, AnimalSize.LARGE,
-        Temperament.CALM, ActivityLevel.LOW, True, True, False, None, AnimalSize.MEDIUM,
-        "Enormous and astonishingly placid. Needs far more space than you expect."),
-    AnimalSpecification("Scout", Species.DOG, "Mixed Breed", 1.5, AnimalSize.MEDIUM,
-        Temperament.BALANCED, ActivityLevel.MODERATE, True, True, False, None, AnimalSize.MEDIUM,
-        "An adaptable, good-natured dog who fits into most households easily."),
-    AnimalSpecification("Ivy", Species.CAT, "Domestic Longhair", 10.0, AnimalSize.MEDIUM,
-        Temperament.CALM, ActivityLevel.LOW, True, True, True,
-        "Senior cat; arthritic and needs a low-sided litter tray.", AnimalSize.SMALL,
-        "Twelve years of experience being adored, and keen to continue."),
-    AnimalSpecification("Fig", Species.HAMSTER, "Roborovski", 0.3, AnimalSize.SMALL,
-        Temperament.ENERGETIC, ActivityLevel.HIGH, False, False, False, None, AnimalSize.SMALL,
-        "The smallest and fastest of the hamsters. Better watched than handled."),
-    AnimalSpecification("Ranger II", Species.DOG, "Collie Mix", 6.0, AnimalSize.MEDIUM,
-        Temperament.BALANCED, ActivityLevel.MODERATE, True, True, False, None, AnimalSize.MEDIUM,
-        "Steady, sensible and already house-trained. An easy transition."),
-)
+# --------------------------------------------------------------------------
+# Accounts and profiles
+# --------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class AdopterSpecification:
-    """A demo adopter defined before persistence."""
-
-    full_name: str
-    email: str
-    home_type: HomeType
-    has_yard: bool
-    household_has_children: bool
-    youngest_child_age: int | None
-    has_other_animals: bool
-    experience_level: ExperienceLevel
-    activity_level: ActivityLevel
-    daily_hours_available: float
-    preferred_species: str
-    open_to_proactive_suggestions: bool
-
-
-ADOPTER_SPECIFICATIONS: tuple[AdopterSpecification, ...] = (
-    AdopterSpecification("Maya Cohen", "maya@example.com", HomeType.APARTMENT, False, False, None,
-        False, ExperienceLevel.NONE, ActivityLevel.LOW, 2.0, "CAT,RABBIT", True),
-    AdopterSpecification("Daniel Levi", "daniel@example.com", HomeType.HOUSE, True, True, 7,
-        True, ExperienceLevel.EXPERIENCED, ActivityLevel.HIGH, 5.0, "DOG", True),
-    AdopterSpecification("Noa Friedman", "noa@example.com", HomeType.APARTMENT, False, False, None,
-        True, ExperienceLevel.SOME, ActivityLevel.MODERATE, 3.5, "CAT", True),
-    AdopterSpecification("Yossi Mizrahi", "yossi@example.com", HomeType.FARM, True, False, None,
-        True, ExperienceLevel.EXPERIENCED, ActivityLevel.HIGH, 8.0, "DOG", True),
-    AdopterSpecification("Tamar Shapiro", "tamar@example.com", HomeType.APARTMENT, False, True, 12,
-        False, ExperienceLevel.SOME, ActivityLevel.MODERATE, 4.0, "CAT,GUINEA_PIG", True),
-    AdopterSpecification("Amit Golan", "amit@example.com", HomeType.HOUSE, True, False, None,
-        False, ExperienceLevel.NONE, ActivityLevel.MODERATE, 3.0, "DOG,CAT", False),
-    AdopterSpecification("Shira Ben-David", "shira@example.com", HomeType.APARTMENT, False, False,
-        None, False, ExperienceLevel.SOME, ActivityLevel.LOW, 2.5, "RABBIT,HAMSTER", True),
-    AdopterSpecification("Eitan Barak", "eitan@example.com", HomeType.HOUSE, True, True, 4,
-        False, ExperienceLevel.EXPERIENCED, ActivityLevel.HIGH, 6.0, "DOG", True),
-    AdopterSpecification("Liora Katz", "liora@example.com", HomeType.APARTMENT, False, False, None,
-        True, ExperienceLevel.EXPERIENCED, ActivityLevel.LOW, 5.0, "CAT", True),
-    AdopterSpecification("Omer Peretz", "omer@example.com", HomeType.HOUSE, True, False, None,
-        False, ExperienceLevel.SOME, ActivityLevel.HIGH, 4.5, "DOG", False),
-    AdopterSpecification("Rivka Adler", "rivka@example.com", HomeType.APARTMENT, False, True, 9,
-        False, ExperienceLevel.NONE, ActivityLevel.LOW, 2.0, "GUINEA_PIG,RABBIT", True),
-    AdopterSpecification("Gal Rosen", "gal@example.com", HomeType.HOUSE, True, False, None,
-        True, ExperienceLevel.EXPERIENCED, ActivityLevel.MODERATE, 5.5, "DOG,CAT", True),
-)
-
-STAFF_SPECIFICATIONS = (
-    ("Dana Aviv", "dana@petmatch.org"),
-    ("Itai Segal", "itai@petmatch.org"),
-)
-
-
-def _build_users(now: datetime) -> tuple[list[User], list[User]]:
-    """Create the staff and adopter user records."""
+def _build_users(now: datetime) -> DemoPeople:
+    """Create the staff and adopter accounts and the adopter profiles."""
     password_hash = generate_password_hash(DEMO_PASSWORD)
 
     staff_users = [
         User(
             user_id=new_identifier(),
-            email=email,
+            email=specification.email,
             password_hash=password_hash,
-            full_name=name,
+            full_name=specification.full_name,
             role=UserRole.STAFF.value,
             is_active=True,
             created_at=now,
         )
-        for name, email in STAFF_SPECIFICATIONS
+        for specification in STAFF_SPECIFICATIONS
     ]
 
     adopter_users = [
@@ -321,42 +141,46 @@ def _build_users(now: datetime) -> tuple[list[User], list[User]]:
         for specification in ADOPTER_SPECIFICATIONS
     ]
 
-    return staff_users, adopter_users
+    profiles = [
+        _build_adopter_profile(user, specification, now)
+        for user, specification in zip(adopter_users, ADOPTER_SPECIFICATIONS, strict=True)
+    ]
+
+    return DemoPeople(staff_users=staff_users, adopter_users=adopter_users, profiles=profiles)
 
 
-def _build_adopter_profiles(
-    adopter_users: list[User], randomizer: random.Random, now: datetime
-) -> list[AdopterProfile]:
-    """Create a completed profile for each adopter."""
-    profiles = []
-    for user, specification in zip(adopter_users, ADOPTER_SPECIFICATIONS, strict=True):
-        profiles.append(
-            AdopterProfile(
-                adopter_profile_id=new_identifier(),
-                user_id=user.user_id,
-                home_type=specification.home_type.value,
-                has_yard=specification.has_yard,
-                yard_size_sqm=randomizer.choice([40, 80, 150]) if specification.has_yard else None,
-                household_has_children=specification.household_has_children,
-                youngest_child_age=specification.youngest_child_age,
-                has_other_animals=specification.has_other_animals,
-                other_animals_description=(
-                    "One resident cat" if specification.has_other_animals else None
-                ),
-                experience_level=specification.experience_level.value,
-                activity_level=specification.activity_level.value,
-                daily_hours_available=specification.daily_hours_available,
-                city=randomizer.choice(CITIES),
-                preferred_species=specification.preferred_species,
-                preferred_size=None,
-                preferred_age_range=None,
-                open_to_proactive_suggestions=specification.open_to_proactive_suggestions,
-                is_complete=True,
-                created_at=now,
-                updated_at=now,
-            )
-        )
-    return profiles
+def _build_adopter_profile(
+    user: User, specification: AdopterSpecification, now: datetime
+) -> AdopterProfile:
+    """Turn one adopter specification into a profile row (spec section 5.1)."""
+    preferred_size = specification.preferred_size
+    return AdopterProfile(
+        adopter_profile_id=new_identifier(),
+        user_id=user.user_id,
+        home_type=specification.home_type.value,
+        has_yard=specification.has_yard,
+        yard_size_sqm=specification.yard_size_sqm,
+        household_has_children=specification.household_has_children,
+        youngest_child_age=specification.youngest_child_age,
+        has_other_animals=specification.has_other_animals,
+        other_animals_description=specification.other_animals_description,
+        experience_level=specification.experience_level.value,
+        activity_level=specification.activity_level.value,
+        daily_hours_available=specification.daily_hours_available,
+        city=specification.city,
+        preferred_species=specification.preferred_species_column,
+        preferred_size=preferred_size.value if preferred_size is not None else None,
+        preferred_age_range=specification.preferred_age_range.value,
+        open_to_proactive_suggestions=specification.open_to_proactive_suggestions,
+        is_complete=specification.is_complete,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+# --------------------------------------------------------------------------
+# Animals and their photographs
+# --------------------------------------------------------------------------
 
 
 def _build_animals(
@@ -364,69 +188,183 @@ def _build_animals(
     now: datetime,
     upload_directory: Path,
     photo_fetcher: PhotoFetcher,
-) -> tuple[list[Animal], list[AnimalImage], int]:
-    """Create animals and download a photograph for each one."""
-    animals: list[Animal] = []
-    images: list[AnimalImage] = []
-    downloaded_count = 0
+) -> AnimalRoster:
+    """Create every animal and download a photograph for each one.
 
-    # A realistic roster is mostly available, with a few further along the
-    # pipeline so the dashboard has something meaningful to show.
-    statuses = (
-        [AnimalStatus.AVAILABLE] * 32
-        + [AnimalStatus.RESERVED] * 3
-        + [AnimalStatus.ADOPTION_IN_PROGRESS] * 2
-        + [AnimalStatus.ADOPTED] * 2
-        + [AnimalStatus.UNAVAILABLE]
-    )
+    Photographs are fetched first and the image rows built afterwards, because
+    an animal whose own fetch failed borrows the shared fallback picture - and
+    that file may itself be one of this run's downloads.
+    """
+    roster = AnimalRoster()
+    photograph_names: dict[str, str | None] = {}
 
     for index, specification in enumerate(ANIMAL_SPECIFICATIONS):
-        animal_id = new_identifier()
-        status = statuses[index] if index < len(statuses) else AnimalStatus.AVAILABLE
+        animal = _build_animal(specification, index, randomizer, now)
+        roster.animals.append(animal)
+        photograph_names[animal.animal_id] = _fetch_photograph(
+            specification, animal.animal_id, upload_directory, photo_fetcher
+        )
+        _report_progress(index, specification, photograph_names[animal.animal_id])
 
-        animals.append(
-            Animal(
-                animal_id=animal_id,
-                name=specification.name,
-                species=specification.species.value,
-                breed=specification.breed,
-                age_years=specification.age_years,
-                size=specification.size.value,
-                temperament=specification.temperament.value,
-                activity_level=specification.activity_level.value,
-                good_with_children=specification.good_with_children,
-                good_with_other_animals=specification.good_with_other_animals,
-                has_special_needs=specification.has_special_needs,
-                special_needs_description=specification.special_needs_description,
-                required_space=specification.required_space.value,
-                city=randomizer.choice(CITIES),
-                status=status.value,
-                description=specification.description,
-                created_at=now,
-                updated_at=now,
+    has_fallback = _ensure_fallback_photograph(upload_directory, photograph_names)
+    _attach_images(roster, photograph_names, has_fallback, now)
+    return roster
+
+
+def _build_animal(
+    specification: AnimalSpecification,
+    roster_index: int,
+    randomizer: random.Random,
+    now: datetime,
+) -> Animal:
+    """Turn one roster entry into an animal row (spec section 5.2)."""
+    return Animal(
+        animal_id=new_identifier(),
+        name=specification.name,
+        species=specification.species.value,
+        breed=specification.breed,
+        age_years=specification.age_years,
+        size=specification.size.value,
+        temperament=specification.temperament.value,
+        activity_level=specification.activity_level.value,
+        good_with_children=specification.good_with_children,
+        good_with_other_animals=specification.good_with_other_animals,
+        has_special_needs=specification.has_special_needs,
+        special_needs_description=specification.special_needs_description,
+        required_space=specification.required_space.value,
+        city=randomizer.choice(CITIES),
+        status=status_for(specification, roster_index).value,
+        description=specification.description,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def _fetch_photograph(
+    specification: AnimalSpecification,
+    animal_id: str,
+    upload_directory: Path,
+    photo_fetcher: PhotoFetcher,
+) -> str | None:
+    """Download one animal's photograph, returning its file name or None.
+
+    The fetcher decides the extension from what the server sent, so the name
+    it reports back is the one to store rather than the one asked for.
+    """
+    written = photo_fetcher.fetch_into(
+        specification.species, specification.breed, upload_directory / f"{animal_id}.jpg"
+    )
+    return written.name if written is not None else None
+
+
+def _report_progress(
+    index: int, specification: AnimalSpecification, file_name: str | None
+) -> None:
+    """Print one line per animal so a long fetch does not look like a hang."""
+    outcome = "photo ok" if file_name else "photo unavailable - using the fallback"
+    print(
+        f"  [{index + 1:>3}/{len(ANIMAL_SPECIFICATIONS)}] "
+        f"{specification.name:<14}{kind_group(specification):<14}{outcome}"
+    )
+
+
+def _ensure_fallback_photograph(
+    upload_directory: Path, photograph_names: dict[str, str | None]
+) -> bool:
+    """Make sure a shared fallback picture exists on disk.
+
+    The end-to-end suite also expects `sample.jpg` to be present, and the
+    uploads directory is gitignored, so a fresh clone has none until a seed
+    has run. Creating it here makes the file a side effect of seeding rather
+    than something a developer has to remember.
+
+    Args:
+        upload_directory: Where animal photographs are written.
+        photograph_names: File names of this run's successful downloads.
+
+    Returns:
+        Whether a usable fallback file is now present.
+    """
+    fallback_path = upload_directory / FALLBACK_PHOTOGRAPH_NAME
+    if fallback_path.exists():
+        return True
+
+    # A JPEG specifically, because the fallback is served under a .jpg name.
+    first_download = next(
+        (name for name in photograph_names.values() if name and name.endswith(".jpg")), None
+    )
+    if first_download is None:
+        return False
+
+    fallback_path.write_bytes((upload_directory / first_download).read_bytes())
+    return True
+
+
+def _attach_images(
+    roster: AnimalRoster,
+    photograph_names: dict[str, str | None],
+    has_fallback: bool,
+    now: datetime,
+) -> None:
+    """Build one primary image row per animal (spec section 24).
+
+    Exactly one, because `uq_animal_primary_image` is unique on the animal
+    where `is_primary` is set.
+    """
+    for animal in roster.animals:
+        file_name = photograph_names[animal.animal_id]
+        if file_name:
+            roster.downloaded_count += 1
+            image_url = f"/static/uploads/{file_name}"
+        elif has_fallback:
+            roster.fallback_count += 1
+            image_url = FALLBACK_PHOTOGRAPH_URL
+        else:
+            continue
+
+        roster.images.append(
+            AnimalImage(
+                animal_image_id=new_identifier(),
+                animal_id=animal.animal_id,
+                image_url=image_url,
+                is_primary=True,
+                display_order=0,
+                uploaded_at=now,
             )
         )
 
-        file_name = f"{animal_id}.jpg"
-        was_downloaded = photo_fetcher.fetch_into(
-            specification.species, specification.breed, upload_directory / file_name
-        )
-        if was_downloaded:
-            downloaded_count += 1
-            images.append(
-                AnimalImage(
-                    animal_image_id=new_identifier(),
-                    animal_id=animal_id,
-                    image_url=f"/static/uploads/{file_name}",
-                    is_primary=True,
-                    display_order=0,
-                    uploaded_at=now,
-                )
-            )
-        print(f"  [{index + 1:>2}/{len(ANIMAL_SPECIFICATIONS)}] {specification.name:<12}"
-              f"{'photo ok' if was_downloaded else 'photo unavailable'}")
 
-    return animals, images, downloaded_count
+# --------------------------------------------------------------------------
+# Entry point
+# --------------------------------------------------------------------------
+
+
+def _write_demo_data(
+    session_factory: sessionmaker[Session],
+    people: DemoPeople,
+    roster: AnimalRoster,
+    randomizer: random.Random,
+    now: datetime,
+) -> HistoryCounts:
+    """Write every record in one transaction and report what was written."""
+    with session_scope(session_factory) as session:
+        session.add_all(people.staff_users)
+        session.add_all(people.adopter_users)
+        session.flush()
+        session.add_all(people.profiles)
+        session.add_all(roster.animals)
+        session.flush()
+        session.add_all(roster.images)
+        session.flush()
+
+        context = SeedContext(
+            session=session,
+            event_store=EventStore(session),
+            randomizer=randomizer,
+            now=now,
+            staff_users=people.staff_users,
+        )
+        return write_history(context, people.profiles, roster.animals)
 
 
 def run_seed() -> int:
@@ -442,192 +380,51 @@ def run_seed() -> int:
     upload_directory = configuration.upload_directory
     upload_directory.mkdir(parents=True, exist_ok=True)
 
-    engine = create_database_engine(configuration)
-    session_factory = create_session_factory(engine)
+    session_factory = create_session_factory(create_database_engine(configuration))
 
-    print("downloading animal photographs and building records...")
-    staff_users, adopter_users = _build_users(now)
-    profiles = _build_adopter_profiles(adopter_users, randomizer, now)
-    photo_fetcher = PhotoFetcher(randomizer=randomizer)
-    animals, images, downloaded_count = _build_animals(
-        randomizer, now, upload_directory, photo_fetcher
+    print(f"building {len(ANIMAL_SPECIFICATIONS)} animals and downloading photographs...")
+    people = _build_users(now)
+    # The fetcher gets its own randomizer rather than sharing this run's. How
+    # many times it shuffles a candidate list depends on how the photo
+    # services answer, and a shared stream would let a flaky download change
+    # which city an animal lives in and who applied for it. The seeded data
+    # has to be reproducible whether or not the network cooperated.
+    roster = _build_animals(
+        randomizer,
+        now,
+        upload_directory,
+        PhotoFetcher(randomizer=random.Random(RANDOM_SEED)),
     )
+    counts = _write_demo_data(session_factory, people, roster, randomizer, now)
 
-    with session_scope(session_factory) as session:
-        session.add_all(staff_users)
-        session.add_all(adopter_users)
-        session.flush()
-        session.add_all(profiles)
-        session.add_all(animals)
-        session.flush()
-        session.add_all(images)
-        session.flush()
-
-        context = SeedContext(
-            session=session,
-            event_store=EventStore(session),
-            randomizer=randomizer,
-            now=now,
-        )
-        applications = _seed_applications(context, profiles, animals)
-        invitations = _seed_invitations(context, profiles, animals, staff_users[0])
-
-    print(f"\nseeded {len(staff_users)} staff, {len(adopter_users)} adopters, "
-          f"{len(animals)} animals ({downloaded_count} photos), "
-          f"{applications} applications, {invitations} invitations")
-    print(f"\nlog in with any listed email and the password: {DEMO_PASSWORD}")
-    print(f"  staff   : {STAFF_SPECIFICATIONS[0][1]}")
-    print(f"  adopter : {ADOPTER_SPECIFICATIONS[0].email}")
+    _print_summary(people, roster, counts)
     return 0
 
 
-def _seed_applications(
-    context: SeedContext,
-    profiles: list[AdopterProfile],
-    animals: list[Animal],
-) -> int:
-    """Create applications, appending the matching events to the log."""
-    available_animals = [a for a in animals if a.status == AnimalStatus.AVAILABLE.value]
-    created = 0
+def _print_summary(people: DemoPeople, roster: AnimalRoster, counts: HistoryCounts) -> None:
+    """Report what was seeded, grouped by kind of animal."""
+    by_kind: dict[str, int] = defaultdict(int)
+    for specification in ANIMAL_SPECIFICATIONS:
+        by_kind[kind_group(specification)] += 1
 
-    for profile in profiles:
-        application_count = context.randomizer.choice([0, 1, 1, 2, 2, 3])
-        take = min(application_count, len(available_animals))
-        chosen = context.randomizer.sample(available_animals, take)
+    print(
+        f"\nseeded {len(people.staff_users)} staff, {len(people.adopter_users)} adopters, "
+        f"{len(roster.animals)} animals, {counts.applications} applications "
+        f"({counts.closed_by_cascade} closed by the approval cascade), "
+        f"{counts.invitations} invitations, {counts.analyses} stored analyses, "
+        f"{counts.status_changes} recorded status changes"
+    )
+    print(
+        f"photographs: {roster.downloaded_count} downloaded, "
+        f"{roster.fallback_count} using the shared fallback"
+    )
+    print("\nanimals by kind:")
+    for kind, count in sorted(by_kind.items(), key=lambda pair: (-pair[1], pair[0])):
+        print(f"  {kind:<16}{count:>4}")
 
-        for animal in chosen:
-            submitted_at = context.now - timedelta(days=context.randomizer.randint(1, 21))
-            status = context.randomizer.choice(
-                [ApplicationStatus.SUBMITTED] * 3 + [ApplicationStatus.UNDER_REVIEW] * 2
-            )
-            application_id = new_identifier()
-
-            context.session.add(
-                AdoptionApplication(
-                    application_id=application_id,
-                    adopter_profile_id=profile.adopter_profile_id,
-                    animal_id=animal.animal_id,
-                    status=status.value,
-                    applicant_message=(
-                        f"I would love to meet {animal.name}. I think we would suit each other."
-                    ),
-                    submitted_at=submitted_at,
-                )
-            )
-            context.event_store.append(
-                DomainEventType.APPLICATION_SUBMITTED,
-                AggregateType.APPLICATION,
-                application_id,
-                payload={"animal_id": animal.animal_id, "animal_name": animal.name},
-                actor_user_id=profile.user_id,
-                occurred_at=submitted_at.replace(tzinfo=UTC),
-            )
-            if status is ApplicationStatus.UNDER_REVIEW:
-                context.event_store.append(
-                    DomainEventType.APPLICATION_UNDER_REVIEW,
-                    AggregateType.APPLICATION,
-                    application_id,
-                    payload={"animal_id": animal.animal_id},
-                    occurred_at=(submitted_at + timedelta(days=1)).replace(tzinfo=UTC),
-                )
-            created += 1
-
-    return created
-
-
-def _seed_invitations(
-    context: SeedContext,
-    profiles: list[AdopterProfile],
-    animals: list[Animal],
-    sending_staff: User,
-) -> int:
-    """Create invitations in a spread of states, including expired ones."""
-    opted_in = [p for p in profiles if p.open_to_proactive_suggestions]
-    available_animals = [a for a in animals if a.status == AnimalStatus.AVAILABLE.value]
-    created = 0
-
-    for _ in range(8):
-        profile = context.randomizer.choice(opted_in)
-        animal = context.randomizer.choice(available_animals)
-        # Some invitations are deliberately older than the 72-hour window so
-        # the dashboard's "expired" figure is not always zero.
-        sent_at = context.now - timedelta(hours=context.randomizer.choice([2, 10, 30, 50, 80, 120]))
-        expires_at = sent_at + timedelta(hours=72)
-
-        if expires_at < context.now:
-            status = InvitationStatus.EXPIRED
-        else:
-            status = context.randomizer.choice(
-                [InvitationStatus.SENT, InvitationStatus.VIEWED, InvitationStatus.ACCEPTED]
-            )
-
-        invitation_id = new_identifier()
-        context.session.add(
-            AdoptionInvitation(
-                invitation_id=invitation_id,
-                animal_id=animal.animal_id,
-                adopter_profile_id=profile.adopter_profile_id,
-                sent_by_user_id=sending_staff.user_id,
-                status=status.value,
-                staff_message=(
-                    f"We thought {animal.name} might be a good fit for your home. "
-                    "Would you like to meet?"
-                ),
-                sent_at=sent_at,
-                expires_at=expires_at,
-                viewed_at=(
-                    sent_at + timedelta(hours=1)
-                    if status is not InvitationStatus.SENT
-                    else None
-                ),
-                responded_at=(
-                    sent_at + timedelta(hours=2)
-                    if status is InvitationStatus.ACCEPTED
-                    else None
-                ),
-            )
-        )
-        context.event_store.append(
-            DomainEventType.INVITATION_SENT,
-            AggregateType.INVITATION,
-            invitation_id,
-            payload={"animal_id": animal.animal_id, "animal_name": animal.name},
-            actor_user_id=sending_staff.user_id,
-            occurred_at=sent_at.replace(tzinfo=UTC),
-        )
-        if status is InvitationStatus.EXPIRED:
-            context.event_store.append(
-                DomainEventType.INVITATION_EXPIRED,
-                AggregateType.INVITATION,
-                invitation_id,
-                payload={"animal_id": animal.animal_id},
-                occurred_at=expires_at.replace(tzinfo=UTC),
-            )
-        elif status is InvitationStatus.ACCEPTED:
-            context.event_store.append(
-                DomainEventType.INVITATION_ACCEPTED,
-                AggregateType.INVITATION,
-                invitation_id,
-                payload={"animal_id": animal.animal_id},
-                actor_user_id=profile.user_id,
-                occurred_at=(sent_at + timedelta(hours=2)).replace(tzinfo=UTC),
-            )
-
-        context.session.add(
-            Notification(
-                notification_id=new_identifier(),
-                user_id=profile.user_id,
-                notification_type=NotificationType.INVITATION_RECEIVED.value,
-                title=f"Invitation to meet {animal.name}",
-                body=f"{sending_staff.full_name} thinks {animal.name} could suit your home.",
-                link_url="/my/invitations",
-                is_read=status is not InvitationStatus.SENT,
-                created_at=sent_at,
-            )
-        )
-        created += 1
-
-    return created
+    print(f"\nlog in with any listed email and the password: {DEMO_PASSWORD}")
+    print(f"  staff   : {DEMO_STAFF_EMAIL}")
+    print(f"  adopter : {DEMO_ADOPTER_EMAIL}")
 
 
 if __name__ == "__main__":
