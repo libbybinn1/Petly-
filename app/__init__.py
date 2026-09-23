@@ -8,10 +8,13 @@ database session directly (rule R2).
 
 from __future__ import annotations
 
-from flask import Flask, render_template
+from datetime import UTC, datetime, timedelta
+
+from flask import Flask, render_template, request
 from flask_login import LoginManager
 from flask_wtf.csrf import CSRFError, CSRFProtect
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import Configuration, load_configuration
 from app.cqrs.base import MessageBus
@@ -71,7 +74,7 @@ def create_app(configuration: Configuration | None = None) -> Flask:
     application.config["SESSION_FACTORY"] = session_factory
 
     bus = MessageBus(session_factory)
-    _register_handlers(bus)
+    _register_handlers(bus, settings)
     application.config["BUS"] = bus
 
     login_manager.init_app(application)
@@ -103,6 +106,7 @@ def create_app(configuration: Configuration | None = None) -> Flask:
     # this function's signature and stop the body being type-checked.
     login_manager.user_loader(load_user)
 
+    _register_expiry_sweep(application, bus)
     _register_blueprints(application)
     _register_error_handlers(application)
     _register_template_helpers(application)
@@ -110,8 +114,14 @@ def create_app(configuration: Configuration | None = None) -> Flask:
     return application
 
 
-def _register_handlers(bus: MessageBus) -> None:
-    """Register every command and query handler on the bus."""
+def _register_handlers(bus: MessageBus, settings: Configuration) -> None:
+    """Register every command and query handler on the bus.
+
+    Args:
+        bus: The bus to register on.
+        settings: Loaded configuration, for the handlers that need a
+            configured value rather than a hard-coded one.
+    """
     from app.cqrs.commands.animal_commands import (
         ChangeAnimalStatusCommand,
         ChangeAnimalStatusHandler,
@@ -204,7 +214,12 @@ def _register_handlers(bus: MessageBus) -> None:
         MarkApplicationUnderReviewCommand, MarkApplicationUnderReviewHandler()
     )
     bus.register_command(SaveAdopterProfileCommand, SaveAdopterProfileHandler())
-    bus.register_command(SendInvitationCommand, SendInvitationHandler())
+    bus.register_command(
+        SendInvitationCommand,
+        SendInvitationHandler(
+            response_window_hours=settings.invitation_expiry_hours
+        ),
+    )
     bus.register_command(MarkInvitationViewedCommand, MarkInvitationViewedHandler())
     bus.register_command(RespondToInvitationCommand, RespondToInvitationHandler())
     bus.register_command(
@@ -219,6 +234,62 @@ def _register_handlers(bus: MessageBus) -> None:
     bus.register_query(
         CountUnreadNotificationsQuery, CountUnreadNotificationsHandler()
     )
+
+
+# How often the expiry sweep may run, at most. An invitation expiring a few
+# minutes late is harmless; a sweep on every request would add a write
+# transaction to every page load against a throttled shared database.
+EXPIRY_SWEEP_INTERVAL = timedelta(minutes=5)
+
+
+def _register_expiry_sweep(application: Flask, bus: MessageBus) -> None:
+    """Expire overdue invitations periodically, from the request cycle.
+
+    Spec section 7.4 gives an adopter a fixed window, which means something
+    has to notice when it closes. The command existed and was registered on
+    the bus, but nothing ever dispatched it: an invitation stayed SENT for
+    ever, and the "expires in N hours" label eventually counted down past
+    zero while the buttons still worked.
+
+    A `before_request` hook rather than a scheduler, because the project
+    runs as two processes started by hand and adding a third to tick a
+    clock would be more machinery than the rule is worth. The cost is that
+    expiry happens only while somebody is using the site - acceptable,
+    because the only thing that observes an expired invitation is a page
+    someone is looking at.
+
+    The timestamp guard is what makes it affordable: at most one sweep per
+    interval, however many requests arrive.
+
+    Args:
+        application: The application to attach the hook to.
+        bus: The bus the sweep command is dispatched on.
+    """
+    from app.cqrs.commands.invitation_commands import ExpireOverdueInvitationsCommand
+
+    state = {"last_run": datetime.min.replace(tzinfo=UTC)}
+
+    @application.before_request
+    def expire_overdue_invitations() -> None:
+        """Run the sweep if enough time has passed since the last one."""
+        if request.endpoint == "static":
+            return
+
+        now = datetime.now(UTC)
+        if now - state["last_run"] < EXPIRY_SWEEP_INTERVAL:
+            return
+
+        # Recorded before the attempt, not after: a sweep that fails should
+        # not be retried on the very next request.
+        state["last_run"] = now
+
+        try:
+            bus.dispatch_command(ExpireOverdueInvitationsCommand())
+        except SQLAlchemyError:
+            # A sweep is housekeeping. If the database is unreachable the
+            # page the visitor actually asked for will report that itself,
+            # and failing their request over this would be worse.
+            application.logger.warning("invitation expiry sweep failed", exc_info=True)
 
 
 def _register_blueprints(application: Flask) -> None:

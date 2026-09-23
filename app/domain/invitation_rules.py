@@ -15,8 +15,12 @@ from datetime import datetime, timedelta
 
 from app.domain.enums import AnimalStatus, InvitationStatus
 
-# Spec section 7.4 fixes the response window at 72 hours.
-INVITATION_RESPONSE_WINDOW = timedelta(hours=72)
+# Spec section 7.4 fixes the response window at 72 hours. It is the default
+# rather than a constant so a deployment can shorten it without editing the
+# domain - `calculate_expiry` takes the window as an argument, which keeps
+# this layer free of any configuration machinery (rule R2).
+DEFAULT_RESPONSE_WINDOW_HOURS = 72
+INVITATION_RESPONSE_WINDOW = timedelta(hours=DEFAULT_RESPONSE_WINDOW_HOURS)
 
 
 class InvitationNotAllowedError(ValueError):
@@ -39,23 +43,30 @@ class InvitationEligibility:
     has_active_application_for_this_animal: bool
 
 
-def calculate_expiry(sent_at: datetime) -> datetime:
+def calculate_expiry(
+    sent_at: datetime, window_hours: int = DEFAULT_RESPONSE_WINDOW_HOURS
+) -> datetime:
     """Return the moment an invitation sent at `sent_at` stops accepting a reply.
 
     Args:
         sent_at: When the invitation was sent. Must be timezone-aware; the
-            72-hour window is wrong if a naive value slips in, which is why
-            ruff's DTZ rules are enabled on this project.
+            window is wrong if a naive value slips in, which is why ruff's
+            DTZ rules are enabled on this project.
+        window_hours: How long the adopter has. Defaults to the 72 hours
+            spec section 7.4 fixes; the caller passes the configured value
+            so INVITATION_EXPIRY_HOURS actually governs behaviour.
 
     Returns:
-        The expiry instant, 72 hours later.
+        The expiry instant.
 
     Raises:
-        ValueError: If `sent_at` is naive.
+        ValueError: If `sent_at` is naive, or the window is not positive.
     """
     if sent_at.tzinfo is None:
         raise ValueError("sent_at must be timezone-aware to compute a correct expiry.")
-    return sent_at + INVITATION_RESPONSE_WINDOW
+    if window_hours <= 0:
+        raise ValueError("The response window must be a positive number of hours.")
+    return sent_at + timedelta(hours=window_hours)
 
 
 def has_expired(expires_at: datetime, now: datetime) -> bool:

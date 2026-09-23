@@ -30,6 +30,7 @@ from app.domain.enums import (
     NotificationType,
 )
 from app.domain.invitation_rules import (
+    DEFAULT_RESPONSE_WINDOW_HOURS,
     InvitationEligibility,
     calculate_expiry,
     ensure_invitation_may_be_sent,
@@ -84,7 +85,22 @@ class SendInvitationCommand(Command):
 
 
 class SendInvitationHandler(CommandHandler[str]):
-    """Creates an invitation with a 72-hour response window."""
+    """Creates an invitation with the configured response window."""
+
+    def __init__(
+        self, response_window_hours: int = DEFAULT_RESPONSE_WINDOW_HOURS
+    ) -> None:
+        """Capture how long an adopter has to reply.
+
+        Supplied at construction rather than read from configuration here,
+        so the handler stays free of Flask and a test can set the window
+        without an application context.
+
+        Args:
+            response_window_hours: The window, defaulting to the 72 hours
+                spec section 7.4 fixes.
+        """
+        self._response_window_hours = response_window_hours
 
     def handle(self, command: Command, session: Session) -> str:
         """Validate eligibility, record the invitation and notify the adopter.
@@ -121,7 +137,7 @@ class SendInvitationHandler(CommandHandler[str]):
         )
 
         sent_at = _utc_now()
-        expires_at = calculate_expiry(sent_at)
+        expires_at = calculate_expiry(sent_at, self._response_window_hours)
         invitation_id = new_identifier()
 
         session.add(
