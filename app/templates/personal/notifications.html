@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Notifications — PetMatch{% endblock %}
+
+{% block content %}
+<div class="section-heading">
+  <div>
+    <h1>Notifications</h1>
+    <p>
+      {% if unread_notification_count %}
+        {{ unread_notification_count }} unread
+        message{{ '' if unread_notification_count == 1 else 's' }}.
+      {% else %}
+        Everything here has been read.
+      {% endif %}
+    </p>
+  </div>
+  {% if unread_notification_count %}
+    <form method="post" action="{{ url_for('personal.mark_all_notifications_read') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn btn--secondary btn--small" type="submit">Mark all as read</button>
+    </form>
+  {% endif %}
+</div>
+
+{% if notifications %}
+  <ul class="notification-list">
+    {% for notification in notifications %}
+      <li class="notification {% if not notification.is_read %}notification--unread{% endif %}">
+        <div class="notification__body">
+          <div class="notification__meta">
+            <span class="tag tag--brand">{{ notification.label }}</span>
+            <span class="notification__time">{{ notification.relative_label }}</span>
+            {% if not notification.is_read %}<span class="notification__dot" aria-label="Unread"></span>{% endif %}
+          </div>
+          <strong>{{ notification.title }}</strong>
+          <p>{{ notification.body }}</p>
+        </div>
+        <div class="notification__actions">
+          {% if notification.is_read and notification.target_url %}
+            <a class="btn btn--ghost btn--small" href="{{ notification.target_url }}">Open</a>
+          {% elif not notification.is_read %}
+            <form method="post"
+                  action="{{ url_for('personal.mark_notification_read', notification_id=notification.notification_id) }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              {% if notification.target_url %}
+                <input type="hidden" name="target_url" value="{{ notification.target_url }}">
+              {% endif %}
+              <button class="btn btn--secondary btn--small" type="submit">
+                {{ 'Open' if notification.target_url else 'Mark as read' }}
+              </button>
+            </form>
+          {% endif %}
+        </div>
+      </li>
+    {% endfor %}
+  </ul>
+{% else %}
+  <div class="empty">
+    <div class="empty__icon">🔔</div>
+    <h3>Nothing here yet</h3>
+    <p>
+      We will let you know when there is news about an application, or when
+      staff think an animal might suit you.
+    </p>
+    <a class="btn btn--secondary" href="{{ url_for('animals.search') }}">Browse animals</a>
+  </div>
+{% endif %}
+{% endblock %}

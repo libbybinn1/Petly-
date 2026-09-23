@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from flask import Flask, render_template, request
-from flask_login import LoginManager
+from flask_login import LoginManager, current_user
 from flask_wtf.csrf import CSRFError, CSRFProtect
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
@@ -19,6 +19,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.config import Configuration, load_configuration
 from app.cqrs.base import MessageBus
 from app.infrastructure.database import create_database_engine, create_session_factory
+from app.cqrs.queries.personal_queries import CountUnreadNotificationsQuery
 from app.infrastructure.models import AdopterProfile, User
 from app.security.authorization import AuthenticatedUser
 
@@ -122,6 +123,16 @@ def _register_handlers(bus: MessageBus, settings: Configuration) -> None:
         settings: Loaded configuration, for the handlers that need a
             configured value rather than a hard-coded one.
     """
+    from app.cqrs.commands.notification_commands import (
+        MarkAllNotificationsReadCommand,
+        MarkAllNotificationsReadHandler,
+        MarkNotificationReadCommand,
+        MarkNotificationReadHandler,
+    )
+    from app.cqrs.queries.notification_queries import (
+        ListMyNotificationsHandler,
+        ListMyNotificationsQuery,
+    )
     from app.cqrs.commands.animal_commands import (
         ChangeAnimalStatusCommand,
         ChangeAnimalStatusHandler,
@@ -207,6 +218,13 @@ def _register_handlers(bus: MessageBus, settings: Configuration) -> None:
     bus.register_command(ApproveApplicationCommand, ApproveApplicationHandler())
     bus.register_command(ReverseApprovalCommand, ReverseApprovalHandler())
     bus.register_command(RejectApplicationCommand, RejectApplicationHandler())
+    bus.register_command(
+        MarkNotificationReadCommand, MarkNotificationReadHandler()
+    )
+    bus.register_command(
+        MarkAllNotificationsReadCommand, MarkAllNotificationsReadHandler()
+    )
+    bus.register_query(ListMyNotificationsQuery, ListMyNotificationsHandler())
     bus.register_command(CreateAnimalCommand, CreateAnimalHandler())
     bus.register_command(UpdateAnimalCommand, UpdateAnimalHandler())
     bus.register_command(ChangeAnimalStatusCommand, ChangeAnimalStatusHandler())
@@ -360,6 +378,17 @@ def _register_error_handlers(application: Flask) -> None:
         ), 404
 
 
+# Values where mechanical sentence case reads wrongly.
+HUMANIZED_OVERRIDES: dict[str, str] = {
+    "GUINEA_PIG": "Guinea pig",
+    "ANIMAL_TO_ADOPTER": "Ranking adopters",
+    "ADOPTER_TO_ANIMAL": "Ranking animals",
+    "ADOPTION_IN_PROGRESS": "Adoption in progress",
+    "UNDER_REVIEW": "Under review",
+    "OTHER": "Other / exotic",
+}
+
+
 def _register_template_helpers(application: Flask) -> None:
     """Expose small formatting helpers to templates.
 
@@ -369,7 +398,49 @@ def _register_template_helpers(application: Flask) -> None:
 
     @application.template_filter("humanize")
     def humanize(value: str | None) -> str:
-        """Turn an enum value such as GUINEA_PIG into 'Guinea Pig'."""
+        """Turn an enum value such as GUINEA_PIG into readable text.
+
+        Sentence case rather than Title Case: "Adoption in progress" is
+        how the rest of the interface writes, and "Adoption In Progress"
+        reads like a headline. A small override map handles the values
+        where a mechanical rule gets it wrong.
+        """
         if not value:
             return ""
-        return value.replace("_", " ").title()
+
+        override = HUMANIZED_OVERRIDES.get(value.upper())
+        if override is not None:
+            return override
+
+        words = value.replace("_", " ").strip().lower().split()
+        if not words:
+            return ""
+
+        # Sentence case needs no stop-word list: everything after the
+        # first word is already lowercase, which is the whole point.
+        first, *rest = words
+        return " ".join([first.capitalize(), *rest])
+
+    @application.context_processor
+    def inject_unread_notification_count() -> dict[str, int]:
+        """Make the unread count available to every template.
+
+        A context processor rather than a variable each view remembers to
+        pass, because the badge lives in the shared layout and any view
+        that forgot would silently render it as zero.
+
+        Answers 0 for an anonymous visitor, and for a database error: a
+        notification badge is not worth failing a page over.
+        """
+        if not current_user.is_authenticated:
+            return {"unread_notification_count": 0}
+
+        try:
+            count = application.config["BUS"].dispatch_query(
+                CountUnreadNotificationsQuery(user_id=current_user.user_id)
+            )
+        except SQLAlchemyError:
+            application.logger.warning("unread count failed", exc_info=True)
+            return {"unread_notification_count": 0}
+
+        return {"unread_notification_count": int(count)}

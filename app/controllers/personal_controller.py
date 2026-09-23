@@ -30,11 +30,16 @@ from app.cqrs.commands.invitation_commands import (
     MarkInvitationViewedCommand,
     RespondToInvitationCommand,
 )
+from app.cqrs.commands.notification_commands import (
+    MarkAllNotificationsReadCommand,
+    MarkNotificationReadCommand,
+)
 from app.cqrs.commands.profile_commands import SaveAdopterProfileCommand
 from app.cqrs.queries.personal_queries import (
     ListMyApplicationsQuery,
     ListMyInvitationsQuery,
 )
+from app.cqrs.queries.notification_queries import ListMyNotificationsQuery
 from app.cqrs.queries.profile_queries import GetMyProfileQuery
 from app.domain.application_rules import (
     ApplicationNotAllowedError,
@@ -216,6 +221,56 @@ def _submission_from_request() -> ProfileSubmission:
             request.form.get("open_to_proactive_suggestions") is not None
         ),
     )
+
+
+
+@personal_blueprint.route("/notifications")
+@require_sign_in
+def my_notifications() -> str:
+    """Show the signed-in user's inbox (spec section 23).
+
+    Open to staff as well as adopters: both receive messages, and an
+    inbox one of them cannot read is worse than no inbox.
+    """
+    notifications = get_bus().dispatch_query(
+        ListMyNotificationsQuery(user_id=current_user.user_id)
+    )
+    return render_template("personal/notifications.html", notifications=notifications)
+
+
+@personal_blueprint.route("/notifications/<notification_id>/read", methods=["POST"])
+@require_sign_in
+def mark_notification_read(notification_id: str) -> Response:
+    """Mark one message read and follow it to wherever it points."""
+    try:
+        get_bus().dispatch_command(
+            MarkNotificationReadCommand(
+                notification_id=notification_id, user_id=current_user.user_id
+            )
+        )
+    except RecordNotFoundError:
+        abort(404)
+    except NotYourRecordError:
+        abort(403)
+
+    target = request.form.get("target_url")
+    if target and target.startswith("/") and not target.startswith("//"):
+        return redirect(target)
+    return redirect(url_for("personal.my_notifications"))
+
+
+@personal_blueprint.route("/notifications/read-all", methods=["POST"])
+@require_sign_in
+def mark_all_notifications_read() -> Response:
+    """Clear the whole inbox in one action."""
+    marked = get_bus().dispatch_command(
+        MarkAllNotificationsReadCommand(user_id=current_user.user_id)
+    )
+    if marked:
+        flash(
+            f"{marked} message{'s' if marked != 1 else ''} marked as read.", "success"
+        )
+    return redirect(url_for("personal.my_notifications"))
 
 
 @personal_blueprint.route("/profile", methods=["GET", "POST"])
