@@ -57,6 +57,8 @@ EVENT_DESCRIPTIONS: dict[DomainEventType, str] = {
         "had an application closed for"
     ),
     DomainEventType.APPLICATION_REOPENED: "had an application reopened for",
+    DomainEventType.ANIMAL_LISTED: "listed",
+    DomainEventType.ANIMAL_UPDATED: "updated the record for",
     DomainEventType.INVITATION_SENT: "invited an adopter to meet",
     DomainEventType.INVITATION_VIEWED: "viewed an invitation for",
     DomainEventType.INVITATION_ACCEPTED: "accepted an invitation for",

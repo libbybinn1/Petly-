@@ -428,19 +428,6 @@ class TestTheRouteSurfaceMatchesTheDocumentation:
         """Every routing rule the application exposes."""
         return {str(rule) for rule in application.url_map.iter_rules()}
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "MISSING FEATURE: FR-4.1 says staff MUST be able to create and edit "
-            "animals, and docs/UX.md section 9 tabulates the forms at "
-            "/animals/new and /animals/<id>/edit as 'client + server' "
-            "validated. Neither route exists - animal_controller.py defines "
-            "only search, details and manage. FR-4.2 ('every animal MUST have "
-            "at least one image') and FR-4.4 ('staff MUST be able to change an "
-            "animal's status') have no HTTP surface either, so the seed script "
-            "is currently the only way an animal enters the system."
-        ),
-    )
     def test_the_animal_create_and_edit_routes_exist(self, application: Flask) -> None:
         """Proves FR-4.1 has an HTTP surface, not only a documented one."""
         paths = self._paths(application)

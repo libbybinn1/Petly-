@@ -89,6 +89,22 @@
           {{ animal.active_application_count }} active application{{ '' if animal.active_application_count == 1 else 's' }}
           for {{ animal.name }}.
         </p>
+        <form method="post"
+              action="{{ url_for('animals.change_animal_status', animal_id=animal.animal_id) }}"
+              data-confirm="Change {{ animal.name }}'s status?"
+              style="display:flex; gap: var(--space-2); align-items:flex-end; margin-bottom: var(--space-3)">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <div class="field" style="margin:0; flex:1">
+            <label class="field__label" for="animal_status">Availability</label>
+            <select class="select" id="animal_status" name="status">
+              {% for value in ['AVAILABLE','RESERVED','ADOPTION_IN_PROGRESS','ADOPTED','UNAVAILABLE'] %}
+                <option value="{{ value }}" {% if animal.status == value %}selected{% endif %}>{{ value|humanize }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <button class="btn btn--secondary btn--small" type="submit">Update</button>
+        </form>
+
         <div style="display:flex; gap: var(--space-2); flex-wrap: wrap">
           <a class="btn btn--primary btn--small"
              href="{{ url_for('matches.find_my_adopter', animal_id=animal.animal_id) }}">
@@ -97,6 +113,10 @@
           <a class="btn btn--secondary btn--small"
              href="{{ url_for('matches.find_more_adopters', animal_id=animal.animal_id) }}">
             Find more adopters
+          </a>
+          <a class="btn btn--ghost btn--small"
+             href="{{ url_for('animals.edit_animal', animal_id=animal.animal_id) }}">
+            Edit record
           </a>
         </div>
       </div>

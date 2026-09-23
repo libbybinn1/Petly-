@@ -7,6 +7,7 @@
     <h1>Animal management</h1>
     <p>{{ animals|length }} animal{{ '' if animals|length == 1 else 's' }} in the organization's care.</p>
   </div>
+  <a class="btn btn--primary" href="{{ url_for('animals.new_animal') }}">List a new animal</a>
 </div>
 
 <form method="get" action="{{ url_for('animals.manage') }}" class="filter-bar">
@@ -79,6 +80,7 @@
         </td>
         <td style="white-space:nowrap">
           <a class="btn btn--secondary btn--small" href="{{ url_for('animals.details', animal_id=animal.animal_id) }}">Open</a>
+          <a class="btn btn--ghost btn--small" href="{{ url_for('animals.edit_animal', animal_id=animal.animal_id) }}">Edit</a>
           <a class="btn btn--ghost btn--small" href="{{ url_for('matches.find_my_adopter', animal_id=animal.animal_id) }}">Rank</a>
           <a class="btn btn--ghost btn--small" href="{{ url_for('dashboard.aggregate_history', aggregate_type='Animal', aggregate_id=animal.animal_id) }}">History</a>
         </td>

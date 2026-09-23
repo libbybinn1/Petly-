@@ -194,6 +194,8 @@ class DomainEventType(StrEnum):
     INVITATION_EXPIRED = "InvitationExpired"
 
     AI_ANALYSIS_COMPLETED = "AIAnalysisCompleted"
+    ANIMAL_LISTED = "AnimalListed"
+    ANIMAL_UPDATED = "AnimalUpdated"
     ANIMAL_STATUS_CHANGED = "AnimalStatusChanged"
     ADOPTER_PROFILE_UPDATED = "AdopterProfileUpdated"
 

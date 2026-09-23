@@ -112,6 +112,14 @@ def create_app(configuration: Configuration | None = None) -> Flask:
 
 def _register_handlers(bus: MessageBus) -> None:
     """Register every command and query handler on the bus."""
+    from app.cqrs.commands.animal_commands import (
+        ChangeAnimalStatusCommand,
+        ChangeAnimalStatusHandler,
+        CreateAnimalCommand,
+        CreateAnimalHandler,
+        UpdateAnimalCommand,
+        UpdateAnimalHandler,
+    )
     from app.cqrs.commands.application_commands import (
         ApproveApplicationCommand,
         ApproveApplicationHandler,
@@ -189,6 +197,9 @@ def _register_handlers(bus: MessageBus) -> None:
     bus.register_command(ApproveApplicationCommand, ApproveApplicationHandler())
     bus.register_command(ReverseApprovalCommand, ReverseApprovalHandler())
     bus.register_command(RejectApplicationCommand, RejectApplicationHandler())
+    bus.register_command(CreateAnimalCommand, CreateAnimalHandler())
+    bus.register_command(UpdateAnimalCommand, UpdateAnimalHandler())
+    bus.register_command(ChangeAnimalStatusCommand, ChangeAnimalStatusHandler())
     bus.register_command(
         MarkApplicationUnderReviewCommand, MarkApplicationUnderReviewHandler()
     )

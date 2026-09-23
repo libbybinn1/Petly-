@@ -1,0 +1,217 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if animal else 'List a new animal' }} — PetMatch{% endblock %}
+
+{# `current` prefers the rejected submission over the saved record, so a
+   failed save shows what was typed rather than silently reverting it. #}
+{% set current = submission or animal %}
+{% set is_edit = animal is not none and submission is none or (animal is not none and request.endpoint == 'animals.edit_animal') %}
+{% macro value_of(field, default='') %}{{ current[field] if current and current[field] is not none else default }}{% endmacro %}
+{% macro error_for(field) %}
+  {% if errors and errors[field] %}<p class="field__error">{{ errors[field] }}</p>{% endif %}
+{% endmacro %}
+
+{% block content %}
+<div class="section-heading">
+  <div>
+    <h1>{{ 'Edit ' + animal.name if animal else 'List a new animal' }}</h1>
+    <p>
+      {% if animal %}
+        Correct or enrich this record. Everything here feeds the matching score,
+        so an accurate answer is worth more than a flattering one.
+      {% else %}
+        These details are what matching runs on. An animal needs at least one
+        photograph before it can be listed.
+      {% endif %}
+    </p>
+  </div>
+  <a class="btn btn--secondary btn--small" href="{{ url_for('animals.manage') }}">Back to all animals</a>
+</div>
+
+{% if errors %}
+  <div class="alert alert--error" style="margin-bottom: var(--space-5)">
+    Please fix {{ errors|length }} {{ 'problem' if errors|length == 1 else 'problems' }} below.
+  </div>
+{% endif %}
+
+<form method="post"
+      action="{{ url_for('animals.edit_animal', animal_id=animal.animal_id) if animal else url_for('animals.new_animal') }}"
+      class="card card--padded">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+  <h2 style="font-size:1.1rem">Who they are</h2>
+
+  <div class="field">
+    <label class="field__label" for="name">Name</label>
+    <input class="input" id="name" name="name" required maxlength="100"
+           value="{{ value_of('name') }}">
+    {{ error_for('name') }}
+  </div>
+
+  <div class="field">
+    <label class="field__label" for="species">Species</label>
+    <select class="select" id="species" name="species" required>
+      <option value="">Please choose…</option>
+      {% for value, label in options.species %}
+        <option value="{{ value }}" {% if current and current.species == value %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    {{ error_for('species') }}
+  </div>
+
+  <div class="field">
+    <label class="field__label" for="breed">Breed <span class="field__hint">optional</span></label>
+    <input class="input" id="breed" name="breed" maxlength="100" value="{{ value_of('breed') }}">
+    {{ error_for('breed') }}
+  </div>
+
+  <div class="field">
+    <label class="field__label" for="age_years">Approximate age, in years</label>
+    <input class="input" id="age_years" name="age_years" required
+           type="number" step="0.1" min="0" max="40" value="{{ value_of('age_years') }}">
+    <p class="field__hint">Use a decimal for a young animal — 0.5 means about six months.</p>
+    {{ error_for('age_years') }}
+  </div>
+
+  <div class="field">
+    <label class="field__label" for="city">City</label>
+    <input class="input" id="city" name="city" required maxlength="100" value="{{ value_of('city') }}">
+    {{ error_for('city') }}
+  </div>
+
+  <h2 style="font-size:1.1rem">What they need</h2>
+
+  {% for field_name, label, hint in [
+      ('size', 'Size', 'Their build, not the space they need.'),
+      ('required_space', 'Space they need', 'A large animal in a small flat is a hard mismatch, so this is scored strictly.'),
+      ('temperament', 'Temperament', ''),
+      ('activity_level', 'Energy level', 'How much exercise and attention they need each day.'),
+  ] %}
+  <div class="field">
+    <label class="field__label" for="{{ field_name }}">{{ label }}</label>
+    <select class="select" id="{{ field_name }}" name="{{ field_name }}" required>
+      <option value="">Please choose…</option>
+      {% for value, option_label in options[field_name if field_name != 'required_space' else 'size'] %}
+        <option value="{{ value }}" {% if current and current[field_name] == value %}selected{% endif %}>{{ option_label }}</option>
+      {% endfor %}
+    </select>
+    {% if hint %}<p class="field__hint">{{ hint }}</p>{% endif %}
+    {{ error_for(field_name) }}
+  </div>
+  {% endfor %}
+
+  <div class="field">
+    <label class="field__label" for="status">Status</label>
+    <select class="select" id="status" name="status">
+      {% for value, label in options.status %}
+        <option value="{{ value }}"
+          {% if current and current.status == value %}selected{% elif not current and value == 'AVAILABLE' %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    {{ error_for('status') }}
+  </div>
+
+  <h2 style="font-size:1.1rem">Living with others</h2>
+
+  <label class="checkbox">
+    <input type="checkbox" name="good_with_children" value="1"
+           {% if current and current.good_with_children %}checked{% endif %}>
+    <span>Known to be good with children</span>
+  </label>
+  <p class="field__hint">
+    Leave this unticked if it has not been assessed. An unticked box
+    disqualifies this animal from homes with young children, which is the
+    safe way round.
+  </p>
+
+  <label class="checkbox">
+    <input type="checkbox" name="good_with_other_animals" value="1"
+           {% if current and current.good_with_other_animals %}checked{% endif %}>
+    <span>Known to be good with other animals</span>
+  </label>
+
+  <label class="checkbox">
+    <input type="checkbox" name="has_special_needs" value="1"
+           {% if current and current.has_special_needs %}checked{% endif %}>
+    <span>Has special needs</span>
+  </label>
+
+  <div class="field">
+    <label class="field__label" for="special_needs_description">
+      What those needs involve
+    </label>
+    <textarea class="textarea" id="special_needs_description" name="special_needs_description"
+              rows="3" maxlength="1000">{{ value_of('special_needs_description') }}</textarea>
+    <p class="field__hint">Required if you ticked the box above.</p>
+    {{ error_for('special_needs_description') }}
+  </div>
+
+  <h2 style="font-size:1.1rem">Photographs</h2>
+
+  <div class="field">
+    <label class="field__label" for="image_urls">Photo addresses, one per line</label>
+    {% set existing_urls = (submission.image_urls if submission else (animal.image_urls if animal else [])) %}
+    <textarea class="textarea" id="image_urls_text" rows="4"
+              placeholder="/static/uploads/milo.jpg">{{ existing_urls | join('\n') }}</textarea>
+    <p class="field__hint">
+      The first address is the main photo. At least one is required — an
+      animal cannot be listed without a picture.
+    </p>
+    {{ error_for('image_urls') }}
+  </div>
+
+  {# The textarea above is for typing; these hidden inputs are what posts.
+     Kept in step by a tiny inline script so the form still works with one
+     field per URL, which is what the server reads. #}
+  <div id="image_url_inputs">
+    {% for url in existing_urls %}
+      <input type="hidden" name="image_urls" value="{{ url }}">
+    {% endfor %}
+  </div>
+
+  <h2 style="font-size:1.1rem">Description</h2>
+
+  <div class="field">
+    <label class="field__label" for="description">
+      How would you describe them? <span class="field__hint">optional</span>
+    </label>
+    <textarea class="textarea" id="description" name="description" rows="5"
+              maxlength="4000">{{ value_of('description') }}</textarea>
+    {{ error_for('description') }}
+  </div>
+
+  <div class="form-actions">
+    <button class="btn btn--primary" type="submit">
+      {{ 'Save changes' if animal else 'List this animal' }}
+    </button>
+    <a class="btn btn--ghost"
+       href="{{ url_for('animals.details', animal_id=animal.animal_id) if animal else url_for('animals.manage') }}">
+      Cancel
+    </a>
+  </div>
+</form>
+
+<script>
+  // Turn the one-per-line textarea into the hidden fields the server reads.
+  // Runs on submit so the two can never disagree: whatever is on screen at
+  // the moment of submission is exactly what is posted.
+  (function () {
+    var form = document.querySelector('form.card');
+    var textarea = document.getElementById('image_urls_text');
+    var holder = document.getElementById('image_url_inputs');
+    if (!form || !textarea || !holder) { return; }
+
+    form.addEventListener('submit', function () {
+      holder.innerHTML = '';
+      textarea.value.split('\n').forEach(function (line) {
+        var url = line.trim();
+        if (!url) { return; }
+        var input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = 'image_urls';
+        input.value = url;
+        holder.appendChild(input);
+      });
+    });
+  })();
+</script>
+{% endblock %}
