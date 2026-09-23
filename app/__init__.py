@@ -144,6 +144,10 @@ def _register_commands(bus: MessageBus, settings: Configuration) -> None:
         settings: Loaded configuration, for the one handler that takes a
             configured value rather than a hard-coded one.
     """
+    from app.cqrs.commands.account_commands import (
+        RegisterAdopterCommand,
+        RegisterAdopterHandler,
+    )
     from app.cqrs.commands.animal_commands import (
         ChangeAnimalStatusCommand,
         ChangeAnimalStatusHandler,
@@ -198,6 +202,7 @@ def _register_commands(bus: MessageBus, settings: Configuration) -> None:
     bus.register_command(
         MarkAllNotificationsReadCommand, MarkAllNotificationsReadHandler()
     )
+    bus.register_command(RegisterAdopterCommand, RegisterAdopterHandler())
     bus.register_command(CreateAnimalCommand, CreateAnimalHandler())
     bus.register_command(UpdateAnimalCommand, UpdateAnimalHandler())
     bus.register_command(ChangeAnimalStatusCommand, ChangeAnimalStatusHandler())
@@ -236,6 +241,12 @@ def _register_queries(bus: MessageBus) -> None:
         SearchAnimalsHandler,
         SearchAnimalsQuery,
     )
+    from app.cqrs.queries.auth_queries import (
+        EmailIsRegisteredHandler,
+        EmailIsRegisteredQuery,
+        GetAccountForSignInHandler,
+        GetAccountForSignInQuery,
+    )
     from app.cqrs.queries.dashboard_queries import (
         GetDashboardSummaryHandler,
         GetDashboardSummaryQuery,
@@ -268,6 +279,8 @@ def _register_queries(bus: MessageBus) -> None:
     )
     from app.cqrs.queries.profile_queries import GetMyProfileHandler, GetMyProfileQuery
 
+    bus.register_query(GetAccountForSignInQuery, GetAccountForSignInHandler())
+    bus.register_query(EmailIsRegisteredQuery, EmailIsRegisteredHandler())
     bus.register_query(GetAnalysisStatusQuery, GetAnalysisStatusHandler())
     bus.register_query(SearchAnimalsQuery, SearchAnimalsHandler())
     bus.register_query(GetAnimalDetailsQuery, GetAnimalDetailsHandler())

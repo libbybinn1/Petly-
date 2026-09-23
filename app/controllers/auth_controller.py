@@ -1,24 +1,39 @@
 """Authentication controller: registration, sign-in and sign-out.
 
 Controllers parse the request, check authorization, dispatch, and render.
-Password verification lives here because it is an authentication concern
-rather than a domain rule; everything else is delegated.
+
+This one used to hold a database session, on the argument that
+authentication is not a business read. CLAUDE.md R2 says a controller
+must never touch a session, and the exception did not survive being
+looked at: verifying a password is a query with an unusual result, not a
+different kind of thing, and "this one is special" is how a layer
+boundary erodes.
+
+What remains here is `check_password_hash` and `generate_password_hash`,
+which compare and derive strings and touch no storage. Everything that
+reads or writes goes through the bus.
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from urllib.parse import urlparse
 
 from flask import Blueprint, flash, redirect, render_template, request, url_for
 from flask_login import current_user, login_user, logout_user
-from sqlalchemy import select
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.wrappers import Response
 
-from app.controllers.helpers import ViewResult, get_session_factory
+from app.controllers.helpers import ViewResult, get_bus
+from app.cqrs.commands.account_commands import (
+    EmailAlreadyRegisteredError,
+    RegisterAdopterCommand,
+)
+from app.cqrs.queries.auth_queries import (
+    AccountForSignIn,
+    EmailIsRegisteredQuery,
+    GetAccountForSignInQuery,
+)
 from app.domain.enums import UserRole
-from app.infrastructure.models import AdopterProfile, User, new_identifier
 from app.security.authorization import AuthenticatedUser, require_sign_in
 
 auth_blueprint = Blueprint("auth", __name__)
@@ -67,32 +82,19 @@ def login() -> ViewResult:
     email = request.form.get("email", "").strip().lower()
     password = request.form.get("password", "")
 
-    session_factory = get_session_factory()
-    with session_factory() as session:
-        user = session.execute(
-            select(User).where(User.email == email)
-        ).scalar_one_or_none()
+    account = get_bus().dispatch_query(GetAccountForSignInQuery(email=email))
 
-        # One message for both "no such account" and "wrong password", so the
-        # form cannot be used to discover which addresses are registered.
-        if user is None or not check_password_hash(user.password_hash, password):
-            flash("Email or password is incorrect.", "error")
-            return render_template("auth/login.html", email=email), 401
+    # One message for both "no such account" and "wrong password", so the
+    # form cannot be used to discover which addresses are registered.
+    if account is None or not check_password_hash(account.password_hash, password):
+        flash("Email or password is incorrect.", "error")
+        return render_template("auth/login.html", email=email), 401
 
-        if not user.is_active:
-            flash("That account has been deactivated.", "error")
-            return render_template("auth/login.html", email=email), 403
+    if not account.is_active:
+        flash("That account has been deactivated.", "error")
+        return render_template("auth/login.html", email=email), 403
 
-        profile = session.execute(
-            select(AdopterProfile).where(AdopterProfile.user_id == user.user_id)
-        ).scalar_one_or_none()
-
-        authenticated = AuthenticatedUser.from_model(
-            user,
-            adopter_profile_id=profile.adopter_profile_id if profile else None,
-            is_complete=bool(profile and profile.is_complete),
-        )
-
+    authenticated = _signed_in_user(account)
     login_user(authenticated)
     flash(f"Welcome back, {authenticated.full_name.split()[0]}.", "success")
 
@@ -100,6 +102,23 @@ def login() -> ViewResult:
     if next_url is not None and _is_safe_redirect_target(next_url):
         return redirect(next_url)
     return redirect(url_for("home.index"))
+
+
+def _signed_in_user(account: AccountForSignIn) -> AuthenticatedUser:
+    """Build Flask-Login's view of the account that just signed in.
+
+    Built from the read model rather than an ORM row on purpose: the
+    session outlives any database session, and a detached ORM instance
+    raises when its attributes are touched later in the request.
+    """
+    return AuthenticatedUser(
+        user_id=account.user_id,
+        email=account.email,
+        full_name=account.full_name,
+        role=UserRole(account.role),
+        adopter_profile_id=account.adopter_profile_id,
+        has_complete_profile=account.has_complete_profile,
+    )
 
 
 def _is_safe_redirect_target(target: str) -> bool:
@@ -151,33 +170,41 @@ def register() -> ViewResult:
             flash(message, "error")
         return render_template("auth/register.html", full_name=full_name, email=email), 400
 
-    session_factory = get_session_factory()
-    with session_factory() as session:
-        already_registered = session.execute(
-            select(User).where(User.email == email)
-        ).scalar_one_or_none()
-        if already_registered is not None:
-            flash("An account with that email already exists.", "error")
-            return render_template("auth/register.html", full_name=full_name, email=email), 409
+    bus = get_bus()
 
-        now = datetime.now(UTC).replace(tzinfo=None)
-        user = User(
-            user_id=new_identifier(),
+    if bus.dispatch_query(EmailIsRegisteredQuery(email=email)):
+        flash("An account with that email already exists.", "error")
+        return render_template(
+            "auth/register.html", full_name=full_name, email=email
+        ), 409
+
+    try:
+        user_id = bus.dispatch_command(
+            RegisterAdopterCommand(
+                email=email,
+                full_name=full_name,
+                password_hash=generate_password_hash(password),
+            )
+        )
+    except EmailAlreadyRegisteredError:
+        # The check above is polite, not authoritative: two overlapping
+        # registrations both pass it, and the unique index is what
+        # settles the race. Answer the loser the same way.
+        flash("An account with that email already exists.", "error")
+        return render_template(
+            "auth/register.html", full_name=full_name, email=email
+        ), 409
+
+    login_user(
+        AuthenticatedUser(
+            user_id=user_id,
             email=email,
-            password_hash=generate_password_hash(password),
             full_name=full_name,
-            role=UserRole.ADOPTER.value,
-            is_active=True,
-            created_at=now,
+            role=UserRole.ADOPTER,
+            adopter_profile_id=None,
+            has_complete_profile=False,
         )
-        session.add(user)
-        session.commit()
-
-        authenticated = AuthenticatedUser.from_model(
-            user, adopter_profile_id=None, is_complete=False
-        )
-
-    login_user(authenticated)
+    )
     flash("Welcome to PetMatch. Complete your profile to get personal matches.", "success")
     return redirect(url_for("home.index"))
 
