@@ -462,6 +462,7 @@ class TestTheRouteSurfaceMatchesTheDocumentation:
             rule for rule in application.url_map.iter_rules() if str(rule) == "/logout"
         )
 
+        assert logout.methods is not None, "the logout rule declares no methods"
         assert "GET" not in logout.methods
         assert "POST" in logout.methods
 

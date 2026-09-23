@@ -15,9 +15,11 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import replace
+from typing import cast
 
 import pytest
 from app.domain.enums import ActivityLevel, AnimalSize, Species, Temperament
+from app.infrastructure.database import Base
 from app.infrastructure.models import AdopterProfile, Animal, User
 from scripts.seed_people import (
     ADOPTER_SPECIFICATIONS,
@@ -36,6 +38,7 @@ from scripts.seed_roster import (
     status_for,
     validate_animal_specification,
 )
+from sqlalchemy import Table
 
 pytestmark = pytest.mark.unit
 
@@ -390,13 +393,14 @@ def test_the_adopter_list_spans_the_whole_availability_range():
 # --------------------------------------------------------------------------
 
 
-def column_limit(model: type, column_name: str) -> int:
+def column_limit(model: type[Base], column_name: str) -> int:
     """The declared character width of one mapped column.
 
     Read from the model rather than written out here, so the check cannot
     drift away from the schema it is protecting.
     """
-    length = model.__table__.columns[column_name].type.length
+    column = cast("Table", model.__table__).columns[column_name]
+    length = getattr(column.type, "length", None)
     assert isinstance(length, int), f"{column_name} has no declared width"
     return length
 

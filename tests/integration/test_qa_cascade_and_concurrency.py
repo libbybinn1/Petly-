@@ -15,6 +15,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 import pytest
 from app.cqrs.commands.application_commands import (
@@ -52,7 +53,7 @@ from app.infrastructure.models import (
     User,
     new_identifier,
 )
-from sqlalchemy import create_engine, select
+from sqlalchemy import Table, create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 pytestmark = pytest.mark.integration
@@ -515,9 +516,9 @@ class TestDuplicateActiveApplications:
         check-then-insert in `SubmitApplicationHandler` - and a
         check-then-insert is not atomic, as the test below shows.
         """
-        table = AdoptionApplication.__table__
+        table = cast("Table", AdoptionApplication.__table__)
         unique_pairs = [
-            {column.name for column in constraint.columns}
+            {column.name for column in getattr(constraint, "columns", ())}
             for constraint in (*table.constraints, *table.indexes)
             if getattr(constraint, "unique", False)
         ]

@@ -13,12 +13,13 @@ from __future__ import annotations
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import cast
 
 import pytest
 from app.domain.enums import AggregateType, DomainEventType
 from app.eventstore.store import EventStore
 from app.infrastructure.database import Base
-from sqlalchemy import create_engine
+from sqlalchemy import Table, create_engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -352,7 +353,7 @@ class TestUnknownEventTypesInStoredRows:
 
         with_check = [
             constraint
-            for constraint in DomainEvent.__table__.constraints
+            for constraint in cast("Table", DomainEvent.__table__).constraints
             if constraint.__class__.__name__ == "CheckConstraint"
         ]
 
@@ -364,7 +365,7 @@ class TestUnknownEventTypesInStoredRows:
         """Proves every declared event type can be appended and read back."""
         with session_factory() as session:
             store = EventStore(session)
-            for index, event_type in enumerate(DomainEventType):
+            for index, event_type in enumerate(DomainEventType.__members__.values()):
                 store.append(event_type, AggregateType.APPLICATION, f"aggregate-{index}")
             session.commit()
 
