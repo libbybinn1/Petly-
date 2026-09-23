@@ -12,7 +12,14 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TypeVar
 
-from app.domain.enums import ActivityLevel, ExperienceLevel, HomeType, Species
+from app.domain.enums import (
+    ActivityLevel,
+    AnimalSize,
+    ExperienceLevel,
+    HomeType,
+    Species,
+)
+from app.domain.matching import AgePreference
 
 EnumT = TypeVar("EnumT", bound=Enum)
 
@@ -52,6 +59,8 @@ class ProfileSubmission:
     daily_hours_available: str | None = None
     city: str | None = None
     preferred_species: tuple[str, ...] = ()
+    preferred_age_range: str | None = None
+    preferred_size: str | None = None
     open_to_proactive_suggestions: bool = False
 
 
@@ -71,6 +80,8 @@ class ValidatedProfile:
     daily_hours_available: float
     city: str
     preferred_species: tuple[Species, ...]
+    preferred_age_range: AgePreference | None
+    preferred_size: AnimalSize | None
     open_to_proactive_suggestions: bool
 
 
@@ -118,6 +129,12 @@ def validate_profile(submission: ProfileSubmission) -> ValidationResult:
     child_age = _parse_child_age(submission, errors)
     city = _parse_city(submission.city, errors)
     species = _parse_species(submission.preferred_species, errors)
+    age_range = _parse_optional_enum(
+        AgePreference, submission.preferred_age_range, "preferred_age_range", errors
+    )
+    preferred_size = _parse_optional_enum(
+        AnimalSize, submission.preferred_size, "preferred_size", errors
+    )
     description = _parse_other_animals_description(submission, errors)
 
     if errors:
@@ -143,6 +160,8 @@ def validate_profile(submission: ProfileSubmission) -> ValidationResult:
             daily_hours_available=daily_hours,
             city=city,
             preferred_species=species,
+            preferred_age_range=age_range,
+            preferred_size=preferred_size,
             open_to_proactive_suggestions=submission.open_to_proactive_suggestions,
         )
     )
@@ -250,6 +269,39 @@ def _parse_child_age(
         return None
 
     return age
+
+
+
+def _parse_optional_enum(
+    enum_class: type[EnumT],
+    raw_value: str | None,
+    field_name: str,
+    errors: dict[str, str],
+) -> EnumT | None:
+    """Parse an optional preference, distinguishing blank from wrong.
+
+    A blank means the adopter did not answer, which is allowed and records
+    no preference. A value the enum does not define means a forged post or
+    a stale form, and is an error rather than a silent None - dropping it
+    would leave somebody with a preference that never matched anything and
+    no indication why.
+
+    Args:
+        enum_class: The vocabulary the value must belong to.
+        raw_value: What the form submitted.
+        field_name: The key any error is recorded under.
+        errors: Collected errors, added to in place.
+
+    Returns:
+        The member, or None when the field was left blank.
+    """
+    if raw_value is None or not raw_value.strip():
+        return None
+    try:
+        return enum_class(raw_value.strip())
+    except ValueError:
+        errors[field_name] = "That is not one of the available options."
+        return None
 
 
 def _parse_city(raw_value: str | None, errors: dict[str, str]) -> str | None:

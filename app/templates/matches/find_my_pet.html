@@ -30,7 +30,7 @@
             <a href="{{ url_for('animals.details', animal_id=match.animal_id) }}">{{ match.name }}</a>
           </h3>
           <p class="candidate__meta">
-            {{ match.species_label }}{% if match.breed %} · {{ match.breed }}{% endif %} · {{ match.city }}
+            {{ match.species_label }}{% if match.breed_note %} · {{ match.breed_note }}{% endif %} · {{ match.city }}
           </p>
         </div>
 

@@ -126,6 +126,14 @@ class SaveAdopterProfileHandler(CommandHandler[str]):
         row.activity_level = validated.activity_level.value
         row.daily_hours_available = validated.daily_hours_available
         row.city = validated.city
+        row.preferred_age_range = (
+            validated.preferred_age_range.value
+            if validated.preferred_age_range
+            else None
+        )
+        row.preferred_size = (
+            validated.preferred_size.value if validated.preferred_size else None
+        )
         row.preferred_species = ",".join(
             species.value for species in validated.preferred_species
         )

@@ -31,6 +31,8 @@ from app.domain.matching import (
     AdopterFacts,
     AnimalFacts,
     Criterion,
+    CriterionScore,
+    MatchScore,
     calculate_match_score,
     rank_animals_for_adopter,
     score_daily_availability,
@@ -252,6 +254,15 @@ class TestAbsentAndContradictoryProfileData:
         ).is_disqualified
 
 
+
+def _criterion_named(score: MatchScore, criterion_value: str) -> CriterionScore:
+    """Pull one criterion out of a score, failing clearly if it is absent."""
+    for item in score.criterion_scores:
+        if item.criterion.value == criterion_value:
+            return item
+    raise AssertionError(f"no {criterion_value} criterion in {score.criterion_scores}")
+
+
 class TestNumericExtremes:
     """Zero, the daily maximum, and values the CHECK constraints should exclude."""
 
@@ -296,14 +307,27 @@ class TestNumericExtremes:
         assert MINIMUM_SCORE <= score.score <= PERFECT_SCORE
 
     def test_city_comparison_ignores_case_and_surrounding_space(self) -> None:
-        """Proves location scoring is not defeated by ' haifa ' versus 'Haifa'."""
-        same_city = calculate_match_score(
-            make_adopter(city="  haifa "), make_animal(city="Haifa"),
-            MatchDirection.ADOPTER_TO_ANIMAL,
+        """Proves location scoring is not defeated by ' haifa ' versus 'Haifa'.
+
+        Asserts on the location criterion rather than the total. Location
+        carries a weight of 0.02, so the difference it makes is under a
+        point and disappears in the rounding - which would make this test
+        report on the rounding rather than on the comparison it is named
+        for.
+        """
+        same_city = _criterion_named(
+            calculate_match_score(
+                make_adopter(city="  haifa "), make_animal(city="Haifa"),
+                MatchDirection.ADOPTER_TO_ANIMAL,
+            ),
+            "location",
         )
-        other_city = calculate_match_score(
-            make_adopter(city="Eilat"), make_animal(city="Haifa"),
-            MatchDirection.ADOPTER_TO_ANIMAL,
+        other_city = _criterion_named(
+            calculate_match_score(
+                make_adopter(city="Eilat"), make_animal(city="Haifa"),
+                MatchDirection.ADOPTER_TO_ANIMAL,
+            ),
+            "location",
         )
 
         assert same_city.score > other_city.score

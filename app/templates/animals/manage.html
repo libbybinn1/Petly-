@@ -5,7 +5,11 @@
 <div class="section-heading">
   <div>
     <h1>Animal management</h1>
-    <p>{{ animals|length }} animal{{ '' if animals|length == 1 else 's' }} in the organization's care.</p>
+    <p>
+      {{ results.total_count }} animal{{ '' if results.total_count == 1 else 's' }}
+      {%- if selected_status or selected_species or search_text %} match these filters{% else %} in the organization's care{% endif %}.
+      {%- if results.page_count > 1 %} Showing page {{ results.page }} of {{ results.page_count }}.{% endif %}
+    </p>
   </div>
   <a class="btn btn--primary" href="{{ url_for('animals.new_animal') }}">List a new animal</a>
 </div>
@@ -25,9 +29,13 @@
     <select class="select" id="species" name="species">
       <option value="">All species</option>
       {% for value in options.species %}
-        <option value="{{ value }}" {% if selected_species == value %}selected{% endif %}>{{ value|humanize }}</option>
+        <option value="{{ value }}" {% if selected_species == value %}selected{% endif %}>{{ species_label(value) }}</option>
       {% endfor %}
     </select>
+  </div>
+  <div class="field">
+    <label class="field__label" for="q">Name, breed or city</label>
+    <input class="input" id="q" name="q" value="{{ search_text }}" placeholder="Search…">
   </div>
   <div class="filter-bar__actions">
     <button class="btn btn--primary" type="submit">Filter</button>
@@ -89,6 +97,19 @@
     </tbody>
   </table>
 </div>
+  {% if results.page_count > 1 %}
+    <nav class="pagination">
+      {% if results.has_previous %}
+        <a class="btn btn--secondary btn--small"
+           href="{{ url_for('animals.manage', **dict(request.args, page=results.page - 1)) }}">Previous</a>
+      {% endif %}
+      <span class="pagination__status">Page {{ results.page }} of {{ results.page_count }}</span>
+      {% if results.has_next %}
+        <a class="btn btn--secondary btn--small"
+           href="{{ url_for('animals.manage', **dict(request.args, page=results.page + 1)) }}">Next</a>
+      {% endif %}
+    </nav>
+  {% endif %}
 {% else %}
 <div class="empty">
   <div class="empty__icon">📋</div>

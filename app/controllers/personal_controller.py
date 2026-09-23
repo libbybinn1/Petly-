@@ -40,8 +40,15 @@ from app.domain.application_rules import (
     ApplicationNotAllowedError,
     IllegalTransitionError,
 )
-from app.domain.enums import ActivityLevel, ExperienceLevel, HomeType, Species
+from app.domain.enums import (
+    ActivityLevel,
+    AnimalSize,
+    ExperienceLevel,
+    HomeType,
+    Species,
+)
 from app.domain.invitation_rules import InvitationExpiredError, InvitationNotAllowedError
+from app.domain.matching import AgePreference
 from app.domain.profile_rules import ProfileSubmission, validate_profile
 from app.security.authorization import require_adopter, require_sign_in
 
@@ -179,6 +186,8 @@ def _profile_form_options() -> dict[str, list[str]]:
         "experience_level": [member.value for member in ExperienceLevel],
         "activity_level": [member.value for member in ActivityLevel],
         "species": [member.value for member in Species],
+        "preferred_age_range": [member.value for member in AgePreference],
+        "preferred_size": [member.value for member in AnimalSize],
     }
 
 
@@ -201,6 +210,8 @@ def _submission_from_request() -> ProfileSubmission:
         daily_hours_available=request.form.get("daily_hours_available"),
         city=request.form.get("city"),
         preferred_species=tuple(request.form.getlist("preferred_species")),
+        preferred_age_range=request.form.get("preferred_age_range"),
+        preferred_size=request.form.get("preferred_size"),
         open_to_proactive_suggestions=(
             request.form.get("open_to_proactive_suggestions") is not None
         ),

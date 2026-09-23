@@ -18,7 +18,14 @@ from app.infrastructure.models import AdoptionApplication, Animal
 from app.infrastructure.sql_helpers import is_true
 
 # A results page stays small enough to scan without scrolling forever.
-DEFAULT_PAGE_SIZE = 12
+# Sized for the real roster rather than the demo one: at twelve, the
+# current 157 animals took fourteen pages to look through.
+DEFAULT_PAGE_SIZE = 24
+
+# The staff table is denser than the public grid - one row per animal
+# rather than a card - so it can carry more before it stops being
+# scannable.
+STAFF_PAGE_SIZE = 40
 
 
 @dataclass(frozen=True)
@@ -51,8 +58,28 @@ class AnimalCard:
 
     @property
     def species_label(self) -> str:
-        """Species formatted for display."""
-        return self.species.replace("_", " ").title()
+        """Species formatted for display.
+
+        OTHER is a bucket rather than a kind of animal, and a card reading
+        "Other" tells a browsing adopter nothing. The breed carries the
+        real description for those records - "Ferret", "Corn snake" - so
+        it is shown instead when there is one.
+        """
+        if self.species == Species.OTHER.value and self.breed:
+            return self.breed
+        return self.species.replace("_", " ").capitalize()
+
+    @property
+    def breed_note(self) -> str | None:
+        """The breed, unless it is already doing duty as the species label.
+
+        Templates show "species · breed". For an OTHER-species animal the
+        label *is* the breed, so without this the card would read
+        "Ferret · Ferret".
+        """
+        if self.breed and self.breed != self.species_label:
+            return self.breed
+        return None
 
     @property
     def is_available(self) -> bool:
@@ -149,6 +176,9 @@ class ListAllAnimalsQuery(Query):
 
     status: str | None = None
     species: str | None = None
+    text: str | None = None
+    page: int = 1
+    page_size: int = STAFF_PAGE_SIZE
 
 
 def _to_card(animal: Animal) -> AnimalCard:
@@ -303,21 +333,70 @@ class GetAnimalDetailsHandler(QueryHandler[AnimalDetails | None]):
         )
 
 
-class ListAllAnimalsHandler(QueryHandler[list[AnimalCard]]):
-    """Answers ListAllAnimalsQuery for the staff management table."""
+class ListAllAnimalsHandler(QueryHandler[AnimalSearchResults]):
+    """Answers ListAllAnimalsQuery for the staff management table.
 
-    def handle(self, query: Query, session: Session) -> list[AnimalCard]:
-        """Return every animal, optionally narrowed by status or species."""
+    Paginated, and returning the same result shape as the public search so
+    the template can use the same paginator. Before this the table rendered
+    every row: fine for a demo roster of twelve, unusable at the real one
+    of a hundred and fifty-seven, and a table nobody can scan is not a
+    management tool.
+    """
+
+    def handle(self, query: Query, session: Session) -> AnimalSearchResults:
+        """Return one page of animals, narrowed by the staff filters."""
         assert isinstance(query, ListAllAnimalsQuery)
 
         statement = select(Animal).options(selectinload(Animal.images))
-        if query.status:
-            statement = statement.where(Animal.status == query.status)
-        if query.species:
-            statement = statement.where(Animal.species == query.species)
+        statement = _apply_staff_filters(statement, query)
 
-        animals = session.execute(statement.order_by(Animal.name)).scalars().all()
-        return [_to_card(animal) for animal in animals]
+        total = int(
+            session.execute(
+                _apply_staff_filters(select(func.count()).select_from(Animal), query)
+            ).scalar_one()
+        )
+
+        page_size = max(1, query.page_size)
+        page = max(1, query.page)
+        animals = (
+            session.execute(
+                statement.order_by(Animal.name)
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            )
+            .scalars()
+            .all()
+        )
+
+        return AnimalSearchResults(
+            animals=[_to_card(animal) for animal in animals],
+            total_count=total,
+            page=page,
+            page_size=page_size,
+        )
+
+
+def _apply_staff_filters(statement: SelectT, query: ListAllAnimalsQuery) -> SelectT:
+    """Narrow a staff listing by status, species and free text.
+
+    Separate from `_apply_filters` because the staff table filters on
+    different things: every status is visible here, which is the whole
+    point of the screen.
+    """
+    if query.status:
+        statement = statement.where(Animal.status == query.status)
+    if query.species:
+        statement = statement.where(Animal.species == query.species)
+    if query.text:
+        pattern = f"%{_escape_like(query.text.strip())}%"
+        statement = statement.where(
+            or_(
+                Animal.name.like(pattern, escape=LIKE_ESCAPE),
+                Animal.breed.like(pattern, escape=LIKE_ESCAPE),
+                Animal.city.like(pattern, escape=LIKE_ESCAPE),
+            )
+        )
+    return statement
 
 
 def available_filter_options() -> dict[str, list[str]]:
@@ -327,3 +406,15 @@ def available_filter_options() -> dict[str, list[str]]:
         "size": [member.value for member in AnimalSize],
         "activity_level": [member.value for member in ActivityLevel],
     }
+
+
+def species_filter_label(species_value: str) -> str:
+    """Label one species option in the search form.
+
+    OTHER covers everything with no enum of its own - ferrets, reptiles,
+    the occasional parrot - so "Other" alone reads like a dead end rather
+    than a category worth opening.
+    """
+    if species_value == Species.OTHER.value:
+        return "Other / exotic"
+    return species_value.replace("_", " ").capitalize()

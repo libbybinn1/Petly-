@@ -38,6 +38,7 @@ from app.domain.enums import (
 )
 from app.domain.matching import (
     AdopterFacts,
+    AgePreference,
     AnimalFacts,
     MatchScore,
     calculate_match_score,
@@ -180,8 +181,26 @@ class RankedAnimal:
 
     @property
     def species_label(self) -> str:
-        """Species formatted for display."""
-        return self.species.replace("_", " ").title()
+        """Species formatted for display.
+
+        Matches `AnimalCard.species_label`: OTHER is a bucket rather than
+        a kind of animal, so the breed carries the real description.
+        """
+        if self.species == Species.OTHER.value and self.breed:
+            return self.breed
+        return self.species.replace("_", " ").capitalize()
+
+    @property
+    def breed_note(self) -> str | None:
+        """The breed, unless it is already doing duty as the species label.
+
+        Templates show "species · breed". For an OTHER-species animal the
+        label *is* the breed, so without this the card would read
+        "Ferret · Ferret".
+        """
+        if self.breed and self.breed != self.species_label:
+            return self.breed
+        return None
 
     @property
     def analysis_is_pending(self) -> bool:
@@ -645,9 +664,26 @@ def _adopter_facts(profile: AdopterProfile) -> AdopterFacts:
         daily_hours_available=float(profile.daily_hours_available or 0),
         city=profile.city or "",
         preferred_species=_stored_species(profile.preferred_species),
+        preferred_age_range=_stored_enum(AgePreference, profile.preferred_age_range),
+        preferred_size=_stored_enum(AnimalSize, profile.preferred_size),
         open_to_proactive_suggestions=bool(profile.open_to_proactive_suggestions),
         is_complete=bool(profile.is_complete),
     )
+
+
+def _stored_enum(enum_class: type[EnumT], raw_value: str | None) -> EnumT | None:
+    """Read one optional stored preference, dropping anything unrecognised.
+
+    Same reasoning as `_stored_species`: a value the enum no longer
+    defines is unknown, not a preference, and inventing one from it would
+    quietly narrow somebody's matches.
+    """
+    if not raw_value:
+        return None
+    try:
+        return enum_class(raw_value.strip())
+    except ValueError:
+        return None
 
 
 def _stored_species(raw_column: str | None) -> frozenset[Species]:

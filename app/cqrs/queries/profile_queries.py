@@ -28,6 +28,8 @@ class AdopterProfileView:
     daily_hours_available: float
     city: str
     preferred_species: list[str] = field(default_factory=list)
+    preferred_age_range: str | None = None
+    preferred_size: str | None = None
     open_to_proactive_suggestions: bool = False
     is_complete: bool = False
 
@@ -69,6 +71,8 @@ class GetMyProfileHandler(QueryHandler[AdopterProfileView | None]):
             activity_level=row.activity_level,
             daily_hours_available=float(row.daily_hours_available or 0),
             city=row.city,
+            preferred_age_range=row.preferred_age_range,
+            preferred_size=row.preferred_size,
             preferred_species=[
                 value.strip()
                 for value in (row.preferred_species or "").split(",")

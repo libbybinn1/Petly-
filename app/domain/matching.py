@@ -66,20 +66,52 @@ class Criterion(StrEnum):
     SPECIES_PREFERENCE = "species_preference"
     TEMPERAMENT_COMPATIBILITY = "temperament_compatibility"
     SPECIAL_CARE_CAPACITY = "special_care_capacity"
+    AGE_PREFERENCE = "age_preference"
     LOCATION = "location"
 
 
 # Spec section 9.1: the adopter's lifestyle and stated preferences lead.
+
+class AgePreference(StrEnum):
+    """The age bands an adopter can ask for (spec section 8).
+
+    Bands rather than a number, because that is how people think about it:
+    somebody wants "a puppy" or "an older, calmer one", not an animal
+    between 2.0 and 8.0 years. `ANY` is a stated openness, not a missing
+    answer - an adopter who picked it has told us something.
+    """
+
+    YOUNG = "0-2 years"
+    ADULT = "2-8 years"
+    SENIOR = "8+ years"
+    ANY = "any"
+
+    @property
+    def includes_any_age(self) -> bool:
+        """Whether this preference rules nothing out."""
+        return self is AgePreference.ANY
+
+
+# The boundaries each band covers, in years. Half-open at the top so the
+# bands tile the whole range without overlapping.
+AGE_BAND_BOUNDS: dict[AgePreference, tuple[float, float]] = {
+    AgePreference.YOUNG: (0.0, 2.0),
+    AgePreference.ADULT: (2.0, 8.0),
+    AgePreference.SENIOR: (8.0, float("inf")),
+}
+
+
 ADOPTER_TO_ANIMAL_WEIGHTS: dict[Criterion, float] = {
-    Criterion.SPECIES_PREFERENCE: 0.18,
-    Criterion.LIVING_ENVIRONMENT: 0.16,
-    Criterion.DAILY_AVAILABILITY: 0.14,
-    Criterion.SIZE_AND_SPACE: 0.12,
-    Criterion.TEMPERAMENT_COMPATIBILITY: 0.11,
-    Criterion.EXPERIENCE_LEVEL: 0.09,
-    Criterion.CHILDREN_COMPATIBILITY: 0.08,
-    Criterion.OTHER_ANIMALS_COMPATIBILITY: 0.06,
-    Criterion.SPECIAL_CARE_CAPACITY: 0.04,
+    Criterion.SPECIES_PREFERENCE: 0.17,
+    Criterion.LIVING_ENVIRONMENT: 0.15,
+    Criterion.DAILY_AVAILABILITY: 0.13,
+    Criterion.SIZE_AND_SPACE: 0.11,
+    Criterion.TEMPERAMENT_COMPATIBILITY: 0.10,
+    Criterion.AGE_PREFERENCE: 0.09,
+    Criterion.EXPERIENCE_LEVEL: 0.08,
+    Criterion.CHILDREN_COMPATIBILITY: 0.07,
+    Criterion.OTHER_ANIMALS_COMPATIBILITY: 0.05,
+    Criterion.SPECIAL_CARE_CAPACITY: 0.03,
     Criterion.LOCATION: 0.02,
 }
 
@@ -89,7 +121,7 @@ ADOPTER_TO_ANIMAL_WEIGHTS: dict[Criterion, float] = {
 # it matters far less that someone *wanted* a cat than that they can meet the
 # animal's actual needs.
 ANIMAL_TO_ADOPTER_WEIGHTS: dict[Criterion, float] = {
-    Criterion.DAILY_AVAILABILITY: 0.20,
+    Criterion.DAILY_AVAILABILITY: 0.19,
     Criterion.EXPERIENCE_LEVEL: 0.17,
     Criterion.LIVING_ENVIRONMENT: 0.15,
     Criterion.SPECIAL_CARE_CAPACITY: 0.13,
@@ -97,7 +129,8 @@ ANIMAL_TO_ADOPTER_WEIGHTS: dict[Criterion, float] = {
     Criterion.TEMPERAMENT_COMPATIBILITY: 0.09,
     Criterion.CHILDREN_COMPATIBILITY: 0.07,
     Criterion.OTHER_ANIMALS_COMPATIBILITY: 0.05,
-    Criterion.SPECIES_PREFERENCE: 0.02,
+    Criterion.AGE_PREFERENCE: 0.02,
+    Criterion.SPECIES_PREFERENCE: 0.01,
     Criterion.LOCATION: 0.01,
 }
 
@@ -120,8 +153,10 @@ class AdopterFacts:
     daily_hours_available: float
     city: str
     preferred_species: frozenset[Species]
-    open_to_proactive_suggestions: bool
-    is_complete: bool
+    preferred_age_range: AgePreference | None = None
+    preferred_size: AnimalSize | None = None
+    open_to_proactive_suggestions: bool = False
+    is_complete: bool = False
 
 
 @dataclass(frozen=True)
@@ -536,6 +571,79 @@ def score_location(adopter: AdopterFacts, animal: AnimalFacts) -> CriterionScore
     )
 
 
+
+def score_age_preference(adopter: AdopterFacts, animal: AnimalFacts) -> CriterionScore:
+    """Score the animal's age against the band the adopter asked for.
+
+    A soft preference, never a disqualification. Somebody who asked for a
+    puppy and is shown a calm four-year-old may well change their mind, and
+    an older animal being ranked lower is a fairer outcome than it being
+    hidden.
+
+    Scores partly rather than in a step: an adopter wanting 2-8 years is
+    better served by a 1.5-year-old than by a 12-year-old, and a flat
+    "outside the band" score would call those two the same.
+    """
+    preference = adopter.preferred_age_range
+    if preference is None:
+        return CriterionScore(
+            Criterion.AGE_PREFERENCE, NEUTRAL_SCORE, 0.0,
+            "The adopter expressed no age preference.",
+        )
+
+    if preference.includes_any_age:
+        return CriterionScore(
+            Criterion.AGE_PREFERENCE, PERFECT_SCORE, 0.0,
+            "The adopter is open to an animal of any age.",
+        )
+
+    lower, upper = AGE_BAND_BOUNDS[preference]
+    if lower <= animal.age_years < upper:
+        return CriterionScore(
+            Criterion.AGE_PREFERENCE, PERFECT_SCORE, 0.0,
+            f"At {_age_in_words(animal.age_years)}, this animal is in the "
+            f"{preference.value} range the adopter asked for.",
+        )
+
+    distance = lower - animal.age_years if animal.age_years < lower else animal.age_years - upper
+    return CriterionScore(
+        Criterion.AGE_PREFERENCE,
+        _score_from_age_distance(distance),
+        0.0,
+        f"The adopter asked for {preference.value}, and this animal is "
+        f"{_age_in_words(animal.age_years)}.",
+    )
+
+
+# How far outside the requested band an animal is, and what that is worth.
+# Ordered nearest first; the first band the distance fits decides the score.
+# Graded rather than a cliff-edge, so "a year older than they asked for" and
+# "a decade older" are not treated as the same miss.
+AGE_DISTANCE_SCORES: tuple[tuple[float, int], ...] = (
+    (1.0, 75),
+    (3.0, 55),
+    (6.0, 35),
+)
+FAR_OUTSIDE_AGE_BAND_SCORE = 20
+
+
+def _score_from_age_distance(years_outside_band: float) -> int:
+    """Turn a distance outside the requested band into a score."""
+    for limit, score in AGE_DISTANCE_SCORES:
+        if years_outside_band <= limit:
+            return score
+    return FAR_OUTSIDE_AGE_BAND_SCORE
+
+
+def _age_in_words(age_years: float) -> str:
+    """Describe an age the way an explanation should read."""
+    if age_years < 1:
+        months = max(1, round(age_years * 12))
+        return f"{months} month{'s' if months != 1 else ''} old"
+    whole = int(age_years)
+    return f"{whole} year{'s' if whole != 1 else ''} old"
+
+
 ALL_CRITERION_FUNCTIONS = {
     Criterion.LIVING_ENVIRONMENT: score_living_environment,
     Criterion.DAILY_AVAILABILITY: score_daily_availability,
@@ -546,6 +654,7 @@ ALL_CRITERION_FUNCTIONS = {
     Criterion.SPECIES_PREFERENCE: score_species_preference,
     Criterion.TEMPERAMENT_COMPATIBILITY: score_temperament_compatibility,
     Criterion.SPECIAL_CARE_CAPACITY: score_special_care_capacity,
+    Criterion.AGE_PREFERENCE: score_age_preference,
     Criterion.LOCATION: score_location,
 }
 

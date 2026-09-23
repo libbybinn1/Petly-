@@ -29,7 +29,7 @@
 
     <h1>{{ animal.name }}</h1>
     <p style="color: var(--text-muted); font-size: 1.05rem; margin-top: calc(-1 * var(--space-2))">
-      {{ animal.species_label }}{% if animal.breed %} &middot; {{ animal.breed }}{% endif %}
+      {{ animal.species_label }}{% if animal.breed_note %} &middot; {{ animal.breed_note }}{% endif %}
     </p>
 
     {% if animal.description %}

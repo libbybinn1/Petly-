@@ -32,11 +32,13 @@ from app.cqrs.commands.animal_commands import (
 from app.cqrs.commands.application_commands import RecordNotFoundError
 from app.cqrs.queries.animal_queries import (
     DEFAULT_PAGE_SIZE,
+    STAFF_PAGE_SIZE,
     AnimalSearchFilters,
     GetAnimalDetailsQuery,
     ListAllAnimalsQuery,
     SearchAnimalsQuery,
     available_filter_options,
+    species_filter_label,
 )
 from app.domain.animal_rules import (
     AnimalSubmission,
@@ -273,17 +275,23 @@ def manage() -> str:
     Authorization is enforced here on the server. An adopter who guesses this
     URL receives 403 whether or not the navigation offered them a link.
     """
-    animals = get_bus().dispatch_query(
+    results = get_bus().dispatch_query(
         ListAllAnimalsQuery(
             status=request.args.get("status") or None,
             species=request.args.get("species") or None,
+            text=request.args.get("q", "").strip() or None,
+            page=parse_positive_integer(request.args.get("page"), 1),
+            page_size=STAFF_PAGE_SIZE,
         )
     )
 
     return render_template(
         "animals/manage.html",
-        animals=animals,
+        results=results,
+        animals=results.animals,
         options=available_filter_options(),
+        species_label=species_filter_label,
         selected_status=request.args.get("status", ""),
         selected_species=request.args.get("species", ""),
+        search_text=request.args.get("q", ""),
     )
