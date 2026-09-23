@@ -21,6 +21,7 @@ embedding space - so every call in this module passes vectors.
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -30,6 +31,9 @@ from typing import Protocol
 import chromadb
 import ollama
 from chromadb.api.models.Collection import Collection
+from chromadb.api.types import QueryResult
+
+logger = logging.getLogger("petmatch.agent.rag")
 
 # Sections longer than this are split further, so a single retrieved chunk
 # stays small enough to be useful as evidence rather than a wall of text.
@@ -264,8 +268,9 @@ class KnowledgeBase:
             result_count: Maximum results to return.
 
         Returns:
-            Results ordered nearest first. Callers should check
-            `is_relevant` before citing one.
+            Results ordered nearest first, or an empty list when retrieval
+            is impossible. Callers should check `is_relevant` before citing
+            one.
         """
         # A blank query embeds to an empty vector, which Chroma rejects. An
         # adopter submitting an empty natural-language search must not crash
@@ -273,16 +278,19 @@ class KnowledgeBase:
         if not query.strip():
             return []
 
-        if self.count() == 0:
+        try:
+            response = self._nearest_neighbours(query, result_count)
+        except Exception as error:  # - an outage degrades to "no evidence"
+            # Embedding runs through Ollama, so a stopped model host, a
+            # pulled embedding model or a corrupt store all surface here.
+            # Raising would fail the analysis job outright and falsify the
+            # documented behaviour: a model outage must cost the prose, not
+            # the score (docs/AGENT.md section 10).
+            logger.warning("knowledge base retrieval failed: %s", error)
             return []
 
-        query_vector: list[Sequence[float] | Sequence[int]] = [
-            self._embedding_client.embed(query)
-        ]
-        response = self._collection.query(
-            query_embeddings=query_vector,
-            n_results=min(result_count, self.count()),
-        )
+        if response is None:
+            return []
 
         # Every field of a Chroma result is optional, because a caller can
         # ask for a subset. We ask for the default set, which includes all
@@ -313,6 +321,28 @@ class KnowledgeBase:
                 strict=True,
             )
         ]
+
+    def _nearest_neighbours(self, query: str, result_count: int) -> QueryResult | None:
+        """Embed one question and ask Chroma for its nearest stored chunks.
+
+        Args:
+            query: The question to embed.
+            result_count: How many neighbours to ask for.
+
+        Returns:
+            Chroma's raw result, or None when nothing is stored yet.
+        """
+        stored_count = self.count()
+        if stored_count == 0:
+            return None
+
+        query_vector: list[Sequence[float] | Sequence[int]] = [
+            self._embedding_client.embed(query)
+        ]
+        return self._collection.query(
+            query_embeddings=query_vector,
+            n_results=min(result_count, stored_count),
+        )
 
     def search_relevant(
         self, query: str, result_count: int = DEFAULT_RESULT_COUNT

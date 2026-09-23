@@ -23,7 +23,7 @@ from typing import Any, Protocol
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
-from mcp.types import ContentBlock, TextContent
+from mcp.types import ContentBlock, TextContent, Tool
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -36,6 +36,23 @@ class ToolCallRecord:
     arguments: dict[str, Any]
     succeeded: bool
     summary: str
+
+
+@dataclass(frozen=True)
+class ToolDefinition:
+    """One tool exactly as it is advertised to the language model.
+
+    Blueprint section 8 requires each local tool to carry a description that
+    tells a model what it can do, and docs/MCP.md section 5 states that the
+    docstring is the only thing the model sees when deciding whether to call
+    it. That is only true if the description travels from the server to the
+    model, so this type is what carries it: the name, the server's own
+    docstring, and the JSON schema of its parameters.
+    """
+
+    name: str
+    description: str
+    input_schema: dict[str, Any]
 
 
 class ProfileLookup(Protocol):
@@ -63,6 +80,11 @@ class McpToolClient:
         """Configure how the tool server subprocess is launched."""
         self._python_executable = python_executable or sys.executable
         self.call_history: list[ToolCallRecord] = []
+        # Cached after the first successful listing. The advertised tools do
+        # not change while the server binary does not, and each listing costs
+        # a subprocess start - which would otherwise be paid on every
+        # analysis just to rebuild an identical manifest.
+        self._tool_definitions: list[ToolDefinition] | None = None
 
     def get_adopter_profile(self, adopter_profile_id: str) -> dict[str, Any]:
         """Fetch one adopter profile through the MCP server.
@@ -90,7 +112,26 @@ class McpToolClient:
 
     def list_available_tools(self) -> list[str]:
         """Return the names the server advertises."""
-        return asyncio.run(self._list_tools_async())
+        return [definition.name for definition in self.list_tool_definitions()]
+
+    def list_tool_definitions(self) -> list[ToolDefinition]:
+        """Return every advertised tool with the description a model reads.
+
+        This is what turns the server's docstrings into the agent's tool
+        manifest (blueprint section 8): the loop converts each definition
+        into a manifest entry and the model decides which to call.
+
+        A failure to start or query the server propagates rather than being
+        swallowed here, so the caller can say *why* the manifest is short.
+        The loop records that reason as an observation and carries on with
+        its local tools.
+
+        Returns:
+            One definition per advertised tool, in the server's order.
+        """
+        if self._tool_definitions is None:
+            self._tool_definitions = asyncio.run(self._list_definitions_async())
+        return list(self._tool_definitions)
 
     def _call_tool(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         """Invoke one tool and record the outcome."""
@@ -125,8 +166,8 @@ class McpToolClient:
 
         return _payload_from(tool_name, result.content)
 
-    async def _list_tools_async(self) -> list[str]:
-        """Open a session and list the advertised tools."""
+    async def _list_definitions_async(self) -> list[ToolDefinition]:
+        """Open a session and read every advertised tool with its description."""
         async with (
             stdio_client(self._server_parameters()) as (read_stream, write_stream),
             ClientSession(read_stream, write_stream) as session,
@@ -134,7 +175,7 @@ class McpToolClient:
             await session.initialize()
             listing = await session.list_tools()
 
-        return [tool.name for tool in listing.tools]
+        return [_definition_from(tool) for tool in listing.tools]
 
     def _server_parameters(self) -> StdioServerParameters:
         """Describe how to spawn the tool server."""
@@ -143,6 +184,30 @@ class McpToolClient:
             args=["-m", "mcp_server"],
             cwd=str(PROJECT_ROOT),
         )
+
+
+def _definition_from(tool: Tool) -> ToolDefinition:
+    """Convert one advertised MCP tool into a manifest definition.
+
+    The schema field was renamed between MCP releases (`inputSchema` to
+    `input_schema`), so both spellings are read: a manifest entry with no
+    parameter schema would leave the model guessing argument names.
+
+    Args:
+        tool: One tool from the server's listing.
+
+    Returns:
+        The definition to offer the model.
+    """
+    raw_schema = getattr(tool, "input_schema", None)
+    if raw_schema is None:
+        raw_schema = getattr(tool, "inputSchema", None)
+
+    return ToolDefinition(
+        name=tool.name,
+        description=(tool.description or "").strip(),
+        input_schema=dict(raw_schema) if isinstance(raw_schema, dict) else {},
+    )
 
 
 class ToolProtocolError(RuntimeError):

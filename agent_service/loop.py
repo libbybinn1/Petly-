@@ -4,11 +4,29 @@ Course blueprint section 6 requires a real agent rather than a single model
 call: it plans, selects tools, observes results and revises its plan. This
 module implements that cycle for one analysis task.
 
+How one task runs:
+
+1. **Deterministic prerequisites.** Both records are fetched through the MCP
+   tools, the score is calculated, and one curated-knowledge retrieval runs
+   with the web gate applied to it. These become the loop's first
+   observations. They are not negotiable: an explanation must never be
+   written over records the agent could not read, and the score has to exist
+   whatever the model does.
+2. **The bounded reason-act loop.** The model receives the facts, the score,
+   every observation so far and a tool manifest, and answers with *either* a
+   tool call or its final explanation. A tool call is dispatched, its result
+   is appended as an observation, and the model is asked again - at most
+   `max_reasoning_steps` times. The model chooses; nothing here chooses for
+   it (blueprint section 6.2).
+3. **Grounding.** The answer is checked against the evidence actually
+   retrieved before any of it is stored (see `agent_service.explanation`).
+
 The division of labour is the important part, and it is not negotiable
 (spec section 8, docs/AGENT.md section 1):
 
     deterministic Python  ->  eligibility, every criterion score, the total
-    the language model    ->  the words explaining that total
+    the language model    ->  which evidence to gather, and the words
+                              explaining that total
 
 So a model outage degrades PetMatch to *scores without prose*, not to no
 service at all.
@@ -16,6 +34,7 @@ service at all.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -32,40 +51,96 @@ from app.domain.enums import (
 )
 from app.domain.matching import AdopterFacts, AnimalFacts, MatchScore, calculate_match_score
 
+from agent_service.explanation import (
+    DETERMINISTIC_FALLBACK_MODEL,
+    build_evidence,
+    build_explanation_prompt,
+    deterministic_explanation,
+    ground_explanation,
+    merge_missing_information,
+    shorten,
+)
 from agent_service.llm_client import (
+    ChatMessage,
     LanguageModel,
     LanguageModelUnavailableError,
     MalformedModelOutputError,
+    ToolCallRequest,
+    ToolSchema,
+    next_model_turn,
 )
-from agent_service.rag.knowledge_base import KnowledgeRetriever, RetrievedChunk
-from agent_service.tools.mcp_tools import ProfileLookup
-from agent_service.tools.web_search import (
-    SearchDecision,
-    SearchResult,
-    WebSearchProvider,
-    decide_whether_to_search,
-)
+from agent_service.rag.knowledge_base import KnowledgeRetriever
+from agent_service.reasoning_session import ReasoningSession, ReasoningStep
+from agent_service.tools.mcp_tools import ProfileLookup, ToolDefinition
+from agent_service.tools.web_search import WebSearchProvider, decide_whether_to_search
 
 PROMPT_DIRECTORY = Path(__file__).resolve().parent / "prompts"
 
-MAX_REASONS = 4
-MAX_CONCERNS = 3
-MAX_MISSING_INFORMATION = 3
+# Observations are fed back to a 3-billion-parameter model with a finite
+# context window, so each one is trimmed rather than pasted whole.
+MAX_OBSERVATION_CHARACTERS = 1200
+MAX_RECORD_PREVIEW_CHARACTERS = 800
+MAX_TRACE_DETAIL_CHARACTERS = 200
+MAX_QUERY_IN_TRACE_CHARACTERS = 120
 
-# A criterion at or above this reads as a genuine strength worth citing;
-# below the lower bound it is a reservation worth raising. Used only by the
-# fallback explanation, when no model is available to phrase them.
-STRENGTH_SCORE = 80
-CONCERN_SCORE = 60
+WEB_RESULT_COUNT = 3
 
+TOOL_RAG_SEARCH = "rag_search"
+TOOL_WEB_SEARCH = "web_search"
+MCP_ADOPTER_TOOL = "get_adopter_profile"
+MCP_ANIMAL_TOOL = "get_animal_profile"
 
-@dataclass
-class ReasoningStep:
-    """One observable step of the loop, kept for auditability."""
-
-    step_number: int
-    action: str
-    detail: str
+# The two tools the agent owns itself. The MCP tools are deliberately absent:
+# their descriptions are read from the server at runtime, because docs/MCP.md
+# promises that the server's own docstring is what the model sees.
+LOCAL_TOOL_DEFINITIONS: tuple[ToolDefinition, ...] = (
+    ToolDefinition(
+        name=TOOL_RAG_SEARCH,
+        description=(
+            "Search PetMatch's own curated adoption knowledge base: the "
+            "organisation's care guides on space and housing, activity and "
+            "exercise, children in the household, multi-pet homes, senior "
+            "and special-needs animals, and the adoption policy. Use this "
+            "FIRST for any question about animal care or suitability. "
+            "Retrieval is semantic, so ask a plain question in your own "
+            "words rather than keywords. Returns passages, each with a "
+            "citation reference you must quote exactly if you rely on it."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The question to look up, in plain language.",
+                }
+            },
+            "required": ["query"],
+        },
+    ),
+    ToolDefinition(
+        name=TOOL_WEB_SEARCH,
+        description=(
+            "Search the public web. Policy-gated and a last resort: it runs "
+            "only when the curated knowledge base cannot answer, or when the "
+            "question is about current or external facts such as "
+            "regulations, disease outbreaks, recalls or prices. Never use it "
+            "for PetMatch's own adopter or animal records - those come from "
+            "the profile tools. At most one web search per task. If the "
+            "policy refuses your query you are told which rule refused it; "
+            "re-plan rather than repeating the query."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "What to look up on the web, in plain language.",
+                }
+            },
+            "required": ["query"],
+        },
+    ),
+)
 
 
 @dataclass
@@ -76,16 +151,17 @@ class AnalysisOutcome:
     reasons: list[str]
     concerns: list[str]
     missing_information: list[str]
-    evidence_sources: list[dict[str, str]]
+    evidence_sources: list[dict[str, object]]
     used_web_search: bool
     model_name: str
     reasoning_trace: list[ReasoningStep] = field(default_factory=list)
+    citations: list[str] = field(default_factory=list)
     generated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     @property
     def explanation_is_generated(self) -> bool:
         """Whether a model produced the prose, or it fell back to criteria text."""
-        return self.model_name != "deterministic-fallback"
+        return self.model_name != DETERMINISTIC_FALLBACK_MODEL
 
 
 class MissingRecordError(LookupError):
@@ -98,6 +174,12 @@ def load_prompt(file_name: str) -> str:
     Prompts live in version-controlled files rather than string literals, per
     spec section 16, so a change to the agent's instructions shows up in a
     diff like any other change.
+
+    Args:
+        file_name: The file to read from `agent_service/prompts/`.
+
+    Returns:
+        The prompt text.
     """
     return (PROMPT_DIRECTORY / file_name).read_text(encoding="utf-8")
 
@@ -134,119 +216,500 @@ class MatchAnalysisAgent:
             direction: Which weighting to apply.
 
         Returns:
-            The score plus its grounded explanation.
+            The score plus its grounded explanation, and the reasoning trace
+            that produced it.
 
         Raises:
             MissingRecordError: If either record cannot be retrieved.
         """
-        trace: list[ReasoningStep] = []
-
-        # Act: fetch both records through MCP tools. The agent never reads the
-        # application's database directly (rule R2).
-        adopter_payload = self._mcp_client.get_adopter_profile(adopter_profile_id)
-        trace.append(ReasoningStep(1, "get_adopter_profile", _describe(adopter_payload)))
-
-        animal_payload = self._mcp_client.get_animal_profile(animal_id)
-        trace.append(ReasoningStep(2, "get_animal_profile", _describe(animal_payload)))
-
-        if not adopter_payload.get("found") or not animal_payload.get("found"):
-            raise MissingRecordError(
-                f"adopter found={adopter_payload.get('found')}, "
-                f"animal found={animal_payload.get('found')}"
-            )
+        session = ReasoningSession()
+        adopter_payload, animal_payload = self._fetch_records(
+            adopter_profile_id, animal_id, session
+        )
 
         adopter = build_adopter_facts(adopter_payload)
         animal = build_animal_facts(animal_payload)
 
         # Deterministic scoring. No model involved; this always succeeds.
         score = calculate_match_score(adopter, animal, direction)
-        trace.append(
-            ReasoningStep(
-                3,
-                "calculate_score",
-                f"score={score.score} disqualified={score.is_disqualified}",
+        session.record(
+            "calculate_score", f"score={score.score} disqualified={score.is_disqualified}"
+        )
+
+        _note_payload_gaps(adopter_payload, animal_payload, session)
+        self._gather_first_evidence(adopter, animal, session)
+
+        explanation = self._explain(adopter_payload, animal_payload, score, session)
+        return _build_outcome(score, explanation, session)
+
+    # ------------------------------------------------------------------
+    # The deterministic prerequisites
+    # ------------------------------------------------------------------
+
+    def _fetch_records(
+        self, adopter_profile_id: str, animal_id: str, session: ReasoningSession
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Fetch both records through the MCP tools before anything else.
+
+        The agent never reads the application's database directly (rule R2),
+        and it never scores a record it could not read: a confident number
+        derived from nothing is exactly what spec section 6.4 forbids.
+
+        Args:
+            adopter_profile_id: Whose profile to fetch.
+            animal_id: Which animal to fetch.
+            session: The task state, which receives both observations.
+
+        Returns:
+            The adopter payload and the animal payload.
+
+        Raises:
+            MissingRecordError: If either record was not found.
+        """
+        adopter_payload = self._mcp_client.get_adopter_profile(adopter_profile_id)
+        session.record(MCP_ADOPTER_TOOL, _describe(adopter_payload))
+
+        animal_payload = self._mcp_client.get_animal_profile(animal_id)
+        session.record(MCP_ANIMAL_TOOL, _describe(animal_payload))
+
+        if not adopter_payload.get("found") or not animal_payload.get("found"):
+            raise MissingRecordError(
+                f"adopter found={adopter_payload.get('found')}, "
+                f"animal found={animal_payload.get('found')}"
             )
+        return adopter_payload, animal_payload
+
+    def _gather_first_evidence(
+        self, adopter: AdopterFacts, animal: AnimalFacts, session: ReasoningSession
+    ) -> None:
+        """Retrieve curated guidance for this pairing, then apply the web gate.
+
+        Run before the model is asked anything, for two reasons: RAG-first is
+        the policy (spec section 13), and a model that answers immediately
+        should still be answering over evidence rather than over a bare
+        record.
+
+        Args:
+            adopter: The adopter's facts, used to phrase the question.
+            animal: The animal's facts, used to phrase the question.
+            session: The task state, which receives the evidence.
+        """
+        question = _knowledge_question_for(adopter, animal)
+        self._search_knowledge(question, session)
+        self._search_web(question, session)
+
+    # ------------------------------------------------------------------
+    # The tools, each returning the observation the model will read
+    # ------------------------------------------------------------------
+
+    def _search_knowledge(self, query: str, session: ReasoningSession) -> str:
+        """Search the curated knowledge base and observe the result.
+
+        Args:
+            query: The question to retrieve against.
+            session: The task state, which receives the passages.
+
+        Returns:
+            The observation to feed back to the model.
+        """
+        if not query.strip():
+            session.record(TOOL_RAG_SEARCH, "refused: empty query")
+            return "rag_search needs a non-empty query."
+
+        try:
+            passages = self._knowledge_base.search_relevant(query)
+        except Exception as error:  # - a tool failure must not end the loop
+            return _observe_tool_failure(TOOL_RAG_SEARCH, error, session)
+
+        fresh = session.add_passages(passages)
+        session.record(
+            TOOL_RAG_SEARCH,
+            f'query="{shorten(query, MAX_QUERY_IN_TRACE_CHARACTERS)}" -> '
+            f"{len(passages)} relevant passage(s), {len(fresh)} new",
+        )
+        if not passages:
+            session.note_gap(
+                "The curated knowledge base held nothing relevant to this pairing."
+            )
+            return (
+                "rag_search returned nothing relevant: the curated knowledge base "
+                "does not cover this question."
+            )
+        return "rag_search returned:\n" + "\n".join(
+            f"[{passage.chunk.citation}] {shorten(passage.chunk.text)}" for passage in passages
         )
 
-        # Act: consult the curated knowledge base.
-        knowledge_question = _knowledge_question_for(adopter, animal)
-        retrieved = self._knowledge_base.search_relevant(knowledge_question)
-        trace.append(
-            ReasoningStep(4, "rag_search", f"{len(retrieved)} relevant chunk(s)")
-        )
+    def _search_web(self, query: str, session: ReasoningSession) -> str:
+        """Apply the spec section 13 gate, and search only if it opens.
 
-        # Re-plan: only now, knowing whether RAG answered, decide about the web.
-        search_results, decision = self._maybe_search_web(knowledge_question, retrieved)
-        trace.append(ReasoningStep(5, "web_search_gate", decision.value))
+        The gate's inputs are live rather than assumed: whether the knowledge
+        base has already answered, and whether this task has already spent
+        its one web search. A refusal goes back to the model with its reason,
+        so it can re-plan instead of repeating itself.
 
-        evidence = _build_evidence(retrieved, search_results)
+        Args:
+            query: What is to be looked up.
+            session: The task state, which receives any results.
 
-        explanation = self._generate_explanation(
-            adopter_payload, animal_payload, score, retrieved, search_results
-        )
-        trace.append(
-            ReasoningStep(6, "generate_explanation", f"model={explanation['model_name']}")
-        )
-
-        return AnalysisOutcome(
-            score=score,
-            reasons=explanation["reasons"],
-            concerns=explanation["concerns"],
-            missing_information=explanation["missing_information"],
-            evidence_sources=evidence,
-            used_web_search=bool(search_results),
-            model_name=explanation["model_name"],
-            reasoning_trace=trace[: self._max_reasoning_steps],
-        )
-
-    def _maybe_search_web(
-        self, question: str, retrieved: list[RetrievedChunk]
-    ) -> tuple[list[SearchResult], SearchDecision]:
-        """Apply the spec section 13 gate, and search only if it opens."""
+        Returns:
+            The observation to feed back to the model.
+        """
         decision = decide_whether_to_search(
-            question,
-            relevant_knowledge_found=bool(retrieved),
-            already_searched_this_task=False,
+            query,
+            relevant_knowledge_found=bool(session.retrieved),
+            already_searched_this_task=session.has_searched_web,
         )
+        session.record(
+            "web_search_gate",
+            f'query="{shorten(query, MAX_QUERY_IN_TRACE_CHARACTERS)}" -> {decision.value}',
+        )
+
         if not decision.is_allowed:
-            return [], decision
+            if not session.retrieved:
+                session.note_gap(
+                    "No curated guidance covered this pairing and the web-search "
+                    f"policy declined to look further ({decision.value})."
+                )
+            return (
+                f"web_search was refused by policy: {decision.value}. Do not repeat "
+                f"this query; use the evidence you already have."
+            )
 
-        return self._search_provider.search(question, max_results=3), decision
+        session.has_searched_web = True
+        try:
+            results = self._search_provider.search(query, max_results=WEB_RESULT_COUNT)
+        except Exception as error:  # - a provider failure must not end the loop
+            return _observe_tool_failure(TOOL_WEB_SEARCH, error, session)
 
-    def _generate_explanation(
+        session.search_results.extend(results)
+        session.record(TOOL_WEB_SEARCH, f"{len(results)} result(s) after {decision.value}")
+        if not results:
+            session.note_gap("A web search was permitted but returned no usable result.")
+            return "web_search returned no results."
+        return "web_search returned:\n" + "\n".join(
+            f"[{result.url}] {result.title}: {shorten(result.snippet)}" for result in results
+        )
+
+    def _fetch_record_again(
+        self, tool_name: str, arguments: dict[str, Any], session: ReasoningSession
+    ) -> str:
+        """Re-fetch a record because the model asked for it.
+
+        Both MCP tools are read-only, so honouring the request costs one
+        subprocess round trip and nothing else. Offering a tool in the
+        manifest and then refusing to run it would make the manifest a lie.
+
+        Args:
+            tool_name: Which MCP tool the model named.
+            arguments: The arguments it chose.
+            session: The task state, which receives the observation.
+
+        Returns:
+            The observation to feed back to the model.
+        """
+        identifier = str(next(iter(arguments.values()), "") or "")
+        try:
+            payload = self._call_profile_tool(tool_name, identifier)
+        except Exception as error:  # - a tool failure must not end the loop
+            return _observe_tool_failure(tool_name, error, session)
+
+        session.record(tool_name, f"{identifier or '(no identifier)'} -> {_describe(payload)}")
+        return f"{tool_name} returned: " + shorten(
+            json.dumps(payload, default=str), MAX_RECORD_PREVIEW_CHARACTERS
+        )
+
+    def _call_profile_tool(self, tool_name: str, identifier: str) -> dict[str, Any]:
+        """Call one of the two MCP record tools by name."""
+        if tool_name == MCP_ADOPTER_TOOL:
+            return self._mcp_client.get_adopter_profile(identifier)
+        return self._mcp_client.get_animal_profile(identifier)
+
+    # ------------------------------------------------------------------
+    # The loop itself
+    # ------------------------------------------------------------------
+
+    def _explain(
         self,
         adopter_payload: dict[str, Any],
         animal_payload: dict[str, Any],
         score: MatchScore,
-        retrieved: list[RetrievedChunk],
-        search_results: list[SearchResult],
+        session: ReasoningSession,
     ) -> dict[str, Any]:
-        """Ask the model to explain the score, falling back if it cannot.
+        """Run the reason-act loop and return the grounded explanation.
 
-        The fallback matters: the criterion explanations are already written
-        by the deterministic scorer, so an unavailable model costs polish
-        rather than function.
+        Args:
+            adopter_payload: The adopter record, as the tool returned it.
+            animal_payload: The animal record, as the tool returned it.
+            score: The calculated score, which the model may not change.
+            session: The task state.
+
+        Returns:
+            The explanation fields, with `model_name` naming whoever wrote
+            them - the model, or the deterministic fallback.
         """
-        user_prompt = _build_explanation_prompt(
-            adopter_payload, animal_payload, score, retrieved, search_results
+        manifest = self._announce_manifest(session)
+        messages: list[ChatMessage] = [
+            {"role": "system", "content": load_prompt("explanation_system.md")},
+            {
+                "role": "user",
+                "content": build_explanation_prompt(
+                    adopter_payload, animal_payload, score, session
+                ),
+            },
+        ]
+
+        answer = self._take_turns(messages, manifest, session)
+        if answer is None:
+            return deterministic_explanation(score)
+        return ground_explanation(answer, score, session, self._language_model.model_name)
+
+    def _announce_manifest(self, session: ReasoningSession) -> list[ToolSchema]:
+        """Build this task's tool manifest and record what it holds.
+
+        Args:
+            session: The task state, which receives the observation.
+
+        Returns:
+            The manifest in the form the model's API expects.
+        """
+        definitions, problem = build_tool_manifest(self._mcp_client)
+        detail = ", ".join(definition.name for definition in definitions) or "(none)"
+        if problem is not None:
+            detail = f"{detail} (MCP manifest unavailable: {problem})"
+            session.note_gap(
+                "The MCP tool server could not be queried, so the agent could not "
+                "offer its record tools to the model."
+            )
+        session.record("tool_manifest", detail)
+        return [_as_model_tool(definition) for definition in definitions]
+
+    def _take_turns(
+        self,
+        messages: list[ChatMessage],
+        manifest: list[ToolSchema],
+        session: ReasoningSession,
+    ) -> dict[str, Any] | None:
+        """Ask the model for its next move until it answers or the cap is hit.
+
+        This is what the step cap actually bounds (blueprint section 6.2):
+        each iteration is one model decision plus at most one tool call, so
+        the loop terminates by construction.
+
+        Args:
+            messages: The conversation, extended in place as it runs.
+            manifest: The tools the model may choose from.
+            session: The task state.
+
+        Returns:
+            The model's final answer, or None when it never produced one -
+            because the host was unreachable, the answer never parsed, or the
+            step budget ran out.
+        """
+        step_count = 0
+        while step_count < self._max_reasoning_steps:
+            step_count += 1
+            try:
+                turn = next_model_turn(self._language_model, messages, manifest)
+            except LanguageModelUnavailableError as error:
+                session.record("model_unavailable", _trace_detail(error))
+                return None
+            except MalformedModelOutputError as error:
+                session.record("malformed_answer", _trace_detail(error))
+                return None
+
+            if turn.is_final:
+                answer = turn.final_content or {}
+                session.record("final_answer", f"step {step_count}: keys={sorted(answer)}")
+                return answer
+
+            self._act_on(turn.tool_call, messages, session)
+
+        session.record("step_cap_reached", f"stopped after {step_count} step(s)")
+        session.note_gap(
+            f"The agent reached its {self._max_reasoning_steps}-step reasoning "
+            f"budget before writing an explanation."
+        )
+        return None
+
+    def _act_on(
+        self,
+        tool_call: ToolCallRequest | None,
+        messages: list[ChatMessage],
+        session: ReasoningSession,
+    ) -> None:
+        """Dispatch the tool the model chose and append the observation.
+
+        Args:
+            tool_call: The call the model asked for.
+            messages: The conversation, extended with the call and its result.
+            session: The task state.
+        """
+        if tool_call is None:
+            return
+
+        observation = self._dispatch(tool_call, session)
+        messages.append(
+            {
+                "role": "assistant",
+                "content": f"Calling {tool_call.tool_name}({tool_call.argument_summary}).",
+            }
+        )
+        messages.append(
+            {"role": "tool", "content": shorten(observation, MAX_OBSERVATION_CHARACTERS)}
         )
 
-        try:
-            raw = self._language_model.complete_json(
-                load_prompt("explanation_system.md"), user_prompt
-            )
-        except (LanguageModelUnavailableError, MalformedModelOutputError):
-            return _deterministic_explanation(score)
+    def _dispatch(self, tool_call: ToolCallRequest, session: ReasoningSession) -> str:
+        """Route one model-chosen tool call to its implementation.
 
-        return {
-            "reasons": _clean_sentences(raw.get("reasons"), MAX_REASONS)
-            or _deterministic_explanation(score)["reasons"],
-            "concerns": _clean_sentences(raw.get("concerns"), MAX_CONCERNS),
-            "missing_information": _clean_sentences(
-                raw.get("missing_information"), MAX_MISSING_INFORMATION
-            ),
-            "model_name": self._language_model.model_name,
-        }
+        An unknown name is reported back rather than raised: a small model
+        occasionally invents a tool, and saying so is what lets it re-plan.
+
+        Args:
+            tool_call: The call the model asked for.
+            session: The task state.
+
+        Returns:
+            The observation to feed back to the model.
+        """
+        if tool_call.tool_name == TOOL_RAG_SEARCH:
+            return self._search_knowledge(_query_argument(tool_call), session)
+
+        if tool_call.tool_name == TOOL_WEB_SEARCH:
+            return self._search_web(_query_argument(tool_call), session)
+
+        if tool_call.tool_name in (MCP_ADOPTER_TOOL, MCP_ANIMAL_TOOL):
+            return self._fetch_record_again(tool_call.tool_name, tool_call.arguments, session)
+
+        session.record("unknown_tool", tool_call.tool_name)
+        return (
+            f"There is no tool named {tool_call.tool_name}. Choose one of the tools "
+            f"you were given, or answer with your final JSON object."
+        )
+
+
+# --------------------------------------------------------------------------
+# The tool manifest
+# --------------------------------------------------------------------------
+
+
+def build_tool_manifest(mcp_client: ProfileLookup) -> tuple[list[ToolDefinition], str | None]:
+    """Build the tools the model may choose from, asking the MCP server itself.
+
+    Blueprint section 8 requires each local tool to carry a description that
+    tells a model what it can do, and docs/MCP.md section 5 says that
+    docstring is the only thing the model sees when deciding whether to call
+    it. Both are only true if the manifest is read from the server at
+    runtime, which is what this does.
+
+    Args:
+        mcp_client: The record-fetching client, queried for its advertised
+            tools when it is able to advertise them.
+
+    Returns:
+        The manifest, and the reason its MCP half is missing when it is. A
+        client that cannot be queried costs the model its record tools; it
+        does not stop the analysis.
+    """
+    advertised, problem = _advertised_mcp_tools(mcp_client)
+    return [*advertised, *LOCAL_TOOL_DEFINITIONS], problem
+
+
+def _advertised_mcp_tools(mcp_client: ProfileLookup) -> tuple[list[ToolDefinition], str | None]:
+    """Read the MCP server's advertised tools, degrading to none on failure."""
+    lister = getattr(mcp_client, "list_tool_definitions", None)
+    if not callable(lister):
+        return [], "this client does not advertise tool definitions"
+
+    try:
+        advertised = lister()
+    except Exception as error:  # - a dead tool server must not end the loop
+        return [], f"{type(error).__name__}: {error}"
+
+    return [item for item in advertised if isinstance(item, ToolDefinition)], None
+
+
+def _as_model_tool(definition: ToolDefinition) -> ToolSchema:
+    """Convert one definition into the shape a chat API expects."""
+    return {
+        "type": "function",
+        "function": {
+            "name": definition.name,
+            "description": definition.description,
+            "parameters": definition.input_schema,
+        },
+    }
+
+
+def _query_argument(tool_call: ToolCallRequest) -> str:
+    """Read the query a search tool was called with.
+
+    Small models sometimes name the argument something else - `q`, `question`
+    or `text`. Taking the first string argument when `query` is absent is
+    more useful than refusing a call that plainly meant to search.
+
+    Args:
+        tool_call: The call the model asked for.
+
+    Returns:
+        The query, or an empty string when the call carried no text.
+    """
+    named = tool_call.arguments.get("query")
+    if isinstance(named, str) and named.strip():
+        return named.strip()
+
+    for value in tool_call.arguments.values():
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _trace_detail(error: Exception) -> str:
+    """Render one exception short enough to sit in the reasoning trace."""
+    return shorten(str(error), MAX_TRACE_DETAIL_CHARACTERS)
+
+
+def _observe_tool_failure(tool_name: str, error: Exception, session: ReasoningSession) -> str:
+    """Turn a tool exception into an observation and a recorded gap.
+
+    Rule R4 and FR-10.10: a failing tool degrades the explanation, it does
+    not end the loop. The model is told what failed so it can try something
+    else, and the gap is surfaced to staff rather than hidden.
+
+    Args:
+        tool_name: The tool that raised.
+        error: What it raised.
+        session: The task state.
+
+    Returns:
+        The observation to feed back to the model.
+    """
+    reason = f"{type(error).__name__}: {error}"
+    session.record(tool_name, f"failed: {shorten(reason, MAX_TRACE_DETAIL_CHARACTERS)}")
+    session.note_gap(
+        f"The {tool_name} tool failed ({shorten(reason, MAX_QUERY_IN_TRACE_CHARACTERS)}), "
+        f"so any evidence it would have contributed is absent."
+    )
+    return f"tool {tool_name} failed: {reason}"
+
+
+def _build_outcome(
+    score: MatchScore, explanation: dict[str, Any], session: ReasoningSession
+) -> AnalysisOutcome:
+    """Assemble the stored outcome from the score, the prose and the evidence."""
+    citations = [str(item) for item in explanation.get("citations", [])]
+    return AnalysisOutcome(
+        score=score,
+        reasons=explanation["reasons"],
+        concerns=explanation["concerns"],
+        missing_information=merge_missing_information(
+            session.gaps, explanation["missing_information"]
+        ),
+        evidence_sources=build_evidence(session, citations),
+        used_web_search=bool(session.search_results),
+        model_name=explanation["model_name"],
+        reasoning_trace=session.trace,
+        citations=citations,
+    )
 
 
 # --------------------------------------------------------------------------
@@ -359,9 +822,47 @@ def _to_enum(enum_class: type, raw_value: object, default: Any) -> Any:  # noqa:
         return default
 
 
-# --------------------------------------------------------------------------
-# Prompt and evidence assembly
-# --------------------------------------------------------------------------
+def _note_payload_gaps(
+    adopter_payload: dict[str, Any], animal_payload: dict[str, Any], session: ReasoningSession
+) -> None:
+    """Record fields the criteria need that the records do not state.
+
+    Deterministic, and therefore reliable in a way a model's own account of
+    what it lacked is not. docs/AGENT.md section 10 promises this behaviour
+    and nothing used to write it.
+
+    Args:
+        adopter_payload: The adopter record as the tool returned it.
+        animal_payload: The animal record as the tool returned it.
+        session: The task state, which receives the gaps.
+    """
+    children_present = bool(adopter_payload.get("household_has_children"))
+    youngest_age = _to_optional_int(adopter_payload.get("youngest_child_age"))
+    if children_present and youngest_age is None:
+        session.note_gap(
+            "Children live in the household but the youngest child's age is not "
+            "recorded, and the child-safety rule needs it."
+        )
+
+    if adopter_payload.get("daily_hours_available") is None:
+        session.note_gap(
+            "The profile does not state how many hours a day the adopter has "
+            "available for an animal."
+        )
+
+    if not adopter_payload.get("is_complete"):
+        session.note_gap(
+            "The adopter's profile is incomplete, so some criteria were scored "
+            "from defaults rather than from stated facts."
+        )
+
+    if animal_payload.get("has_special_needs") and not animal_payload.get(
+        "special_needs_description"
+    ):
+        session.note_gap(
+            "The animal is recorded as having special needs, but what they are "
+            "is not described."
+        )
 
 
 def _knowledge_question_for(adopter: AdopterFacts, animal: AnimalFacts) -> str:
@@ -369,6 +870,13 @@ def _knowledge_question_for(adopter: AdopterFacts, animal: AnimalFacts) -> str:
 
     Built from the pairing's actual characteristics, so retrieval is about
     this specific match rather than a generic query.
+
+    Args:
+        adopter: The adopter's facts.
+        animal: The animal's facts.
+
+    Returns:
+        One plain-language question.
     """
     parts = [
         f"A {animal.temperament.value.lower()} {animal.species.value.replace('_', ' ').lower()}",
@@ -383,144 +891,6 @@ def _knowledge_question_for(adopter: AdopterFacts, animal: AnimalFacts) -> str:
     if animal.has_special_needs:
         parts.append("and the animal has special care needs")
     return ", ".join(parts) + "."
-
-
-def _build_explanation_prompt(
-    adopter_payload: dict[str, Any],
-    animal_payload: dict[str, Any],
-    score: MatchScore,
-    retrieved: list[RetrievedChunk],
-    search_results: list[SearchResult],
-) -> str:
-    """Assemble everything the model is allowed to reason from.
-
-    Deliberately explicit: the model may only use what appears here, so the
-    prompt is the boundary of what it can truthfully say.
-    """
-    # Attributes are written one per line and prefixed with whose they are.
-    # A prose paragraph mixing both sides caused a small model to attribute
-    # the animal's energy level to the adopter and then contradict itself, so
-    # every fact now carries an unambiguous owner.
-    animal_name = animal_payload.get("name")
-    sections = [
-        f"=== THE ANIMAL ({animal_name}) ===",
-        f"{animal_name}'s species: {animal_payload.get('species')}",
-        f"{animal_name}'s breed: {animal_payload.get('breed') or 'unknown'}",
-        f"{animal_name}'s age: {animal_payload.get('age_years')} years",
-        f"{animal_name}'s size: {animal_payload.get('size')}",
-        f"{animal_name}'s temperament: {animal_payload.get('temperament')}",
-        f"{animal_name}'s ENERGY LEVEL: {animal_payload.get('activity_level')}",
-        f"{animal_name} is good with children: {animal_payload.get('good_with_children')}",
-        f"{animal_name} is good with other animals: "
-        f"{animal_payload.get('good_with_other_animals')}",
-        f"{animal_name}'s special needs: "
-        f"{animal_payload.get('special_needs_description') or 'none'}",
-        "",
-        "=== THE ADOPTER (a person, not an animal) ===",
-        f"The adopter's home: {adopter_payload.get('home_type')}",
-        f"The adopter has a yard: {adopter_payload.get('has_yard')}",
-        f"The adopter has children at home: "
-        f"{adopter_payload.get('household_has_children')} "
-        f"(youngest age: {adopter_payload.get('youngest_child_age') or 'not applicable'})",
-        f"The adopter has other pets already: {adopter_payload.get('has_other_animals')}",
-        f"The adopter's experience with animals: {adopter_payload.get('experience_level')}",
-        f"The adopter's OWN ENERGY LEVEL: {adopter_payload.get('activity_level')}",
-        f"The adopter's free time per day: "
-        f"{adopter_payload.get('daily_hours_available')} hours",
-        f"The adopter's city: {adopter_payload.get('city')}",
-        "",
-        "Note: ENERGY LEVEL appears for both. Never attribute one side's value "
-        "to the other, and never contradict the values listed above.",
-        "",
-        f"=== CALCULATED SCORE: {score.score} out of 100 ===",
-        f"Direction: {score.direction.value}. This number is final - explain "
-        f"it, do not change it or restate it as a different number.",
-    ]
-
-    if score.is_disqualified:
-        sections += ["", f"DISQUALIFIED: {score.disqualification_reason}"]
-    else:
-        sections += ["", "CRITERION BREAKDOWN:"]
-        sections += [
-            f"  - {item.criterion.value}: {item.score}/100 "
-            f"(weight {item.weight:.0%}) - {item.explanation}"
-            for item in score.criterion_scores
-        ]
-
-    if retrieved:
-        sections += ["", "RETRIEVED GUIDANCE (cite these by reference):"]
-        sections += [
-            f"  [{chunk.chunk.citation}] {chunk.chunk.text[:500]}" for chunk in retrieved
-        ]
-
-    if search_results:
-        sections += ["", "EXTERNAL SEARCH RESULTS (cite by URL):"]
-        sections += [
-            f"  [{item.url}] {item.title}: {item.snippet[:300]}"
-            for item in search_results
-        ]
-
-    sections += [
-        "",
-        "Explain this assessment as JSON with keys reasons, concerns and "
-        "missing_information. Use only the information above.",
-    ]
-    return "\n".join(sections)
-
-
-def _build_evidence(
-    retrieved: list[RetrievedChunk], search_results: list[SearchResult]
-) -> list[dict[str, str]]:
-    """List every source that was available to the explanation."""
-    evidence = [
-        {"kind": "rag", "reference": chunk.chunk.citation} for chunk in retrieved
-    ]
-    evidence += [{"kind": "web", "reference": item.url} for item in search_results]
-    return evidence
-
-
-def _deterministic_explanation(score: MatchScore) -> dict[str, Any]:
-    """Build an explanation from the criterion text alone.
-
-    Used when the model is unavailable or unparseable. The scorer already
-    writes a sentence per criterion, so this is a genuine explanation rather
-    than a placeholder - it simply reads less fluently.
-    """
-    if score.is_disqualified:
-        return {
-            "reasons": [],
-            "concerns": [score.disqualification_reason or "This pairing was disqualified."],
-            "missing_information": [],
-            "model_name": "deterministic-fallback",
-        }
-
-    ranked = sorted(score.criterion_scores, key=lambda item: item.score, reverse=True)
-    strong = [item for item in ranked if item.score >= STRENGTH_SCORE]
-    weak = [item for item in reversed(ranked) if item.score < CONCERN_SCORE]
-
-    return {
-        "reasons": [item.explanation for item in strong[:MAX_REASONS]],
-        "concerns": [item.explanation for item in weak[:MAX_CONCERNS]],
-        "missing_information": [],
-        "model_name": "deterministic-fallback",
-    }
-
-
-def _clean_sentences(raw_value: object, limit: int) -> list[str]:
-    """Coerce a model's list field into clean sentences.
-
-    Models occasionally return a bare string, nested lists, or empty entries.
-    Normalising here keeps that noise out of the database.
-    """
-    if isinstance(raw_value, str):
-        candidates = [raw_value]
-    elif isinstance(raw_value, list):
-        candidates = [str(item) for item in raw_value]
-    else:
-        return []
-
-    cleaned = [text.strip() for text in candidates if str(text).strip()]
-    return cleaned[:limit]
 
 
 def _describe(payload: dict[str, Any]) -> str:

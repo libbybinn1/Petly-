@@ -4,14 +4,18 @@ These tests spawn the **real server as a subprocess** and talk to it over
 stdio. The transport is deliberately not mocked: stdio communication is the
 thing the requirement is about, so mocking it would leave the requirement
 untested.
+
+They are therefore marked `slow`: each one starts a process that opens the
+cloud database, so they need the network and cannot run in a unit sweep.
 """
 
 from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 import pytest
 from app.config import load_configuration
@@ -19,15 +23,24 @@ from app.infrastructure.database import create_database_engine, create_session_f
 from app.infrastructure.models import AdopterProfile, Animal
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
-from mcp.types import CallToolResult, TextContent
+from mcp.types import CallToolResult, ListToolsResult, TextContent
 from sqlalchemy import select
 
-pytestmark = [pytest.mark.agent, pytest.mark.anyio]
+pytestmark = [pytest.mark.agent, pytest.mark.slow, pytest.mark.anyio]
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PYTHON_EXECUTABLE = sys.executable
 
 EXPECTED_TOOL_NAMES = {"get_adopter_profile", "get_animal_profile"}
+
+# The server is a real subprocess that opens the cloud database as it starts,
+# and under load that spawn has been seen to fail before the session is
+# ready. One bounded retry tells a loaded machine apart from a broken
+# transport - which is the thing these tests exist to catch, so a second
+# failure is still raised.
+MAX_SPAWN_ATTEMPTS = 2
+
+SessionResultT = TypeVar("SessionResultT")
 
 
 @pytest.fixture
@@ -81,18 +94,55 @@ def _payload_of(result: CallToolResult) -> dict[str, Any]:
     return payload
 
 
+async def _over_stdio(
+    action: Callable[[ClientSession], Awaitable[SessionResultT]],
+) -> SessionResultT:
+    """Spawn the tool server, run one action against the session, and close.
+
+    Args:
+        action: What to ask the initialised session for.
+
+    Returns:
+        Whatever the action returned.
+
+    Raises:
+        AssertionError: The server could not be reached at all.
+    """
+    last_error: Exception | None = None
+
+    for _attempt in range(MAX_SPAWN_ATTEMPTS):
+        try:
+            async with (
+                stdio_client(_server_parameters()) as (read_stream, write_stream),
+                ClientSession(read_stream, write_stream) as session,
+            ):
+                await session.initialize()
+                return await action(session)
+        except Exception as error:  # retried once, then reported as a failure
+            last_error = error
+
+    raise AssertionError(
+        f"the MCP server could not be reached in {MAX_SPAWN_ATTEMPTS} attempts: {last_error}"
+    )
+
+
+async def _list_tools() -> ListToolsResult:
+    """List the advertised tools over a fresh stdio session."""
+    return await _over_stdio(lambda session: session.list_tools())
+
+
+async def _call_tool(tool_name: str, arguments: dict[str, Any]) -> CallToolResult:
+    """Call one tool over a fresh stdio session."""
+    return await _over_stdio(lambda session: session.call_tool(tool_name, arguments))
+
+
 async def test_server_advertises_both_tools() -> None:
     """Proves both required stdio tools exist and carry LLM-facing descriptions.
 
     Blueprint section 8 requires at least two local tools, each with a
     description explaining to a model what it can do.
     """
-    async with (
-        stdio_client(_server_parameters()) as (read_stream, write_stream),
-        ClientSession(read_stream, write_stream) as session,
-    ):
-        await session.initialize()
-        listing = await session.list_tools()
+    listing = await _list_tools()
 
     advertised = {tool.name for tool in listing.tools}
     assert advertised >= EXPECTED_TOOL_NAMES
@@ -107,15 +157,10 @@ async def test_server_advertises_both_tools() -> None:
 
 async def test_get_adopter_profile_round_trips(known_identifiers: dict[str, str]) -> None:
     """Proves a real adopter record travels back over stdio intact."""
-    async with (
-        stdio_client(_server_parameters()) as (read_stream, write_stream),
-        ClientSession(read_stream, write_stream) as session,
-    ):
-        await session.initialize()
-        result = await session.call_tool(
-            "get_adopter_profile",
-            {"adopter_profile_id": known_identifiers["adopter_profile_id"]},
-        )
+    result = await _call_tool(
+        "get_adopter_profile",
+        {"adopter_profile_id": known_identifiers["adopter_profile_id"]},
+    )
 
     payload = _payload_of(result)
     assert payload["found"] is True
@@ -139,14 +184,9 @@ async def test_get_adopter_profile_round_trips(known_identifiers: dict[str, str]
 
 async def test_get_animal_profile_round_trips(known_identifiers: dict[str, str]) -> None:
     """Proves a real animal record travels back over stdio intact."""
-    async with (
-        stdio_client(_server_parameters()) as (read_stream, write_stream),
-        ClientSession(read_stream, write_stream) as session,
-    ):
-        await session.initialize()
-        result = await session.call_tool(
-            "get_animal_profile", {"animal_id": known_identifiers["animal_id"]}
-        )
+    result = await _call_tool(
+        "get_animal_profile", {"animal_id": known_identifiers["animal_id"]}
+    )
 
     payload = _payload_of(result)
     assert payload["found"] is True
@@ -175,14 +215,9 @@ async def test_unknown_identifier_returns_structured_not_found() -> None:
     failure. A structured `found: false` is something the agent can act on
     and report under `missing_information`.
     """
-    async with (
-        stdio_client(_server_parameters()) as (read_stream, write_stream),
-        ClientSession(read_stream, write_stream) as session,
-    ):
-        await session.initialize()
-        result = await session.call_tool(
-            "get_animal_profile", {"animal_id": "00000000-0000-0000-0000-000000000000"}
-        )
+    result = await _call_tool(
+        "get_animal_profile", {"animal_id": "00000000-0000-0000-0000-000000000000"}
+    )
 
     payload = _payload_of(result)
     assert payload["found"] is False
@@ -197,12 +232,7 @@ async def test_tools_expose_no_mutating_operation() -> None:
     """
     forbidden_verbs = ("create", "update", "delete", "set_", "approve", "send", "write")
 
-    async with (
-        stdio_client(_server_parameters()) as (read_stream, write_stream),
-        ClientSession(read_stream, write_stream) as session,
-    ):
-        await session.initialize()
-        listing = await session.list_tools()
+    listing = await _list_tools()
 
     for tool in listing.tools:
         lowered = tool.name.lower()

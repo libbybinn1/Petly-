@@ -26,7 +26,7 @@ from typing import TypeVar
 from app.domain.enums import ActivityLevel, AnimalSize, Species, Temperament
 
 from agent_service.llm_client import (
-    LanguageModel,
+    JsonCompletion,
     LanguageModelUnavailableError,
     MalformedModelOutputError,
 )
@@ -75,8 +75,14 @@ class SearchIntent:
 class IntentInterpreter:
     """Converts free text into search criteria using a language model."""
 
-    def __init__(self, language_model: LanguageModel) -> None:
-        """Bind the interpreter to a model."""
+    def __init__(self, language_model: JsonCompletion) -> None:
+        """Bind the interpreter to a model.
+
+        Args:
+            language_model: Anything that answers a prompt with JSON. The
+                interpreter never uses tools, so it asks for no more than
+                that.
+        """
         self._language_model = language_model
 
     def interpret(self, free_text: str) -> SearchIntent:
@@ -107,6 +113,71 @@ class IntentInterpreter:
             )
 
         return _build_intent(raw)
+
+
+def intent_to_payload(intent: SearchIntent) -> dict[str, object]:
+    """Render an intent as the JSON an `INTERPRET_INTENT` job stores.
+
+    The agent runs in its own process, so an interpreted intent reaches the
+    web tier as JSON on the job row rather than as an object (spec section
+    6.3). These two functions are that contract, kept together so it cannot
+    drift apart: enum members become their string values, and a criterion
+    the adopter did not express stays null, meaning "no constraint".
+
+    Args:
+        intent: What the interpreter extracted.
+
+    Returns:
+        A JSON-serialisable mapping with one key per `SearchIntent` field.
+    """
+    return {
+        "understood": intent.understood,
+        "species": [species.value for species in intent.species],
+        "size": intent.size.value if intent.size is not None else None,
+        "activity_level": (
+            intent.activity_level.value if intent.activity_level is not None else None
+        ),
+        "temperament": intent.temperament.value if intent.temperament is not None else None,
+        "good_with_children": intent.good_with_children,
+        "good_with_other_animals": intent.good_with_other_animals,
+        "interpretation": intent.interpretation,
+    }
+
+
+def payload_to_intent(payload: dict[str, object]) -> SearchIntent:
+    """Read back an intent stored by an `INTERPRET_INTENT` job.
+
+    Every value is validated against its enum on the way back in, exactly as
+    it is when it first arrives from the model. The stored payload is data
+    the web tier did not write, so it is checked rather than trusted - which
+    also means a stored value from an older enum cannot become a filter that
+    silently matches nothing.
+
+    Args:
+        payload: The decoded `result_payload` of a completed job.
+
+    Returns:
+        The intent. Anything unrecognised is dropped, so the worst case is a
+        broader search rather than a wrong one.
+    """
+    if not payload.get("understood"):
+        return SearchIntent.not_understood(
+            str(payload.get("interpretation") or "We could not interpret that request.")
+        )
+
+    return SearchIntent(
+        understood=True,
+        species=_parse_species_list(payload.get("species")),
+        size=_parse_enum(AnimalSize, payload.get("size")),
+        activity_level=_parse_enum(ActivityLevel, payload.get("activity_level")),
+        temperament=_parse_enum(Temperament, payload.get("temperament")),
+        # Only True is meaningful, the same rule as when the model answered.
+        good_with_children=True if payload.get("good_with_children") is True else None,
+        good_with_other_animals=(
+            True if payload.get("good_with_other_animals") is True else None
+        ),
+        interpretation=str(payload.get("interpretation") or "")[:MAX_INTERPRETATION_LENGTH],
+    )
 
 
 def _build_intent(raw: dict[str, object]) -> SearchIntent:

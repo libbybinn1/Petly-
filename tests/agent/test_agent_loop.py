@@ -351,7 +351,7 @@ class TestGrounding:
             assert source["kind"] in ("rag", "web")
             assert source["reference"]
         assert any(
-            "multi-pet-households.md" in source["reference"]
+            "multi-pet-households.md" in str(source["reference"])
             for source in outcome.evidence_sources
         )
 
