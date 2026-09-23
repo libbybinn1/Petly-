@@ -16,12 +16,14 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+from mcp.types import ContentBlock, TextContent
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -34,6 +36,24 @@ class ToolCallRecord:
     arguments: dict[str, Any]
     succeeded: bool
     summary: str
+
+
+class ProfileLookup(Protocol):
+    """The record-fetching surface the agent depends on.
+
+    Declared as a protocol so the agent depends on *what it needs* - two
+    lookups - rather than on a class that spawns a subprocess. Rule R2
+    still holds either way: the only implementation that reaches real data
+    is the MCP client below.
+    """
+
+    def get_adopter_profile(self, adopter_profile_id: str) -> dict[str, Any]:
+        """Fetch one adopter profile."""
+        ...
+
+    def get_animal_profile(self, animal_id: str) -> dict[str, Any]:
+        """Fetch one animal profile."""
+        ...
 
 
 class McpToolClient:
@@ -103,7 +123,7 @@ class McpToolClient:
             await session.initialize()
             result = await session.call_tool(tool_name, arguments)
 
-        return json.loads(result.content[0].text)
+        return _payload_from(tool_name, result.content)
 
     async def _list_tools_async(self) -> list[str]:
         """Open a session and list the advertised tools."""
@@ -123,3 +143,45 @@ class McpToolClient:
             args=["-m", "mcp_server"],
             cwd=str(PROJECT_ROOT),
         )
+
+
+class ToolProtocolError(RuntimeError):
+    """An MCP tool answered with something other than a JSON text block."""
+
+
+def _payload_from(tool_name: str, content: Sequence[ContentBlock]) -> dict[str, Any]:
+    """Read a tool's JSON payload out of its reply.
+
+    A tool reply is a list of content blocks, any of which may be an image,
+    an audio clip or an embedded resource. Both PetMatch tools answer with a
+    single JSON text block, so anything else means the server and this
+    client disagree about the contract - which is worth failing loudly for
+    rather than reading an attribute that may not exist.
+
+    Args:
+        tool_name: The tool that replied, named in the error.
+        content: The reply's content blocks.
+
+    Returns:
+        The decoded payload.
+
+    Raises:
+        ToolProtocolError: The reply was empty, was not text, or did not
+            decode to a JSON object.
+    """
+    if not content:
+        raise ToolProtocolError(f"{tool_name} returned no content")
+
+    first_block = content[0]
+    if not isinstance(first_block, TextContent):
+        raise ToolProtocolError(
+            f"{tool_name} returned {type(first_block).__name__}, expected text"
+        )
+
+    payload = json.loads(first_block.text)
+    if not isinstance(payload, dict):
+        raise ToolProtocolError(
+            f"{tool_name} returned {type(payload).__name__}, expected an object"
+        )
+
+    return payload

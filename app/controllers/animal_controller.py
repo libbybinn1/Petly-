@@ -7,7 +7,6 @@ Covers mandatory requirements 4.1 (search), 4.2 (details view) and 4.3
 from __future__ import annotations
 
 from flask import Blueprint, abort, render_template, request
-from flask_login import login_required
 
 from app.controllers.helpers import (
     get_bus,
@@ -22,7 +21,7 @@ from app.cqrs.queries.animal_queries import (
     SearchAnimalsQuery,
     available_filter_options,
 )
-from app.security.authorization import require_staff
+from app.security.authorization import require_sign_in, require_staff
 
 animal_blueprint = Blueprint("animals", __name__, url_prefix="/animals")
 
@@ -74,7 +73,7 @@ def details(animal_id: str) -> str:
 
 
 @animal_blueprint.route("/manage")
-@login_required
+@require_sign_in
 @require_staff()
 def manage() -> str:
     """Staff table of every animal (blueprint requirement 4.3).

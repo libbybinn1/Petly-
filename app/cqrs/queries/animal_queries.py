@@ -7,6 +7,7 @@ the bus rolls their session back, which enforces the rule at runtime.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any, TypeVar
 
 from sqlalchemy import Select, func, or_, select
 from sqlalchemy.orm import Session, selectinload
@@ -170,8 +171,15 @@ def _to_card(animal: Animal) -> AnimalCard:
     )
 
 
-def _apply_filters(statement: Select, filters: AnimalSearchFilters) -> Select:
+SelectT = TypeVar("SelectT", bound=Select[Any])
+
+
+def _apply_filters(statement: SelectT, filters: AnimalSearchFilters) -> SelectT:
     """Narrow a select statement by the supplied filters.
+
+    Generic over the statement type because the same filters are applied
+    both to the page query and to its `COUNT(*)` companion; the two select
+    different things, and each must keep its own row type on the way out.
 
     Extracted from the handler so each condition stays readable and the
     handler itself reads as a sequence of steps rather than a wall of
@@ -192,15 +200,41 @@ def _apply_filters(statement: Select, filters: AnimalSearchFilters) -> Select:
     if filters.good_with_other_animals:
         statement = statement.where(is_true(Animal.good_with_other_animals))
     if filters.text:
-        pattern = f"%{filters.text.strip()}%"
+        pattern = f"%{_escape_like(filters.text.strip())}%"
         statement = statement.where(
             or_(
-                Animal.name.like(pattern),
-                Animal.breed.like(pattern),
-                Animal.description.like(pattern),
+                Animal.name.like(pattern, escape=LIKE_ESCAPE),
+                Animal.breed.like(pattern, escape=LIKE_ESCAPE),
+                Animal.description.like(pattern, escape=LIKE_ESCAPE),
             )
         )
     return statement
+
+
+# Backslash rather than one of the characters being escaped, so the escape
+# itself never needs escaping twice over.
+LIKE_ESCAPE = "\\"
+
+
+def _escape_like(text: str) -> str:
+    """Make a search term match itself literally inside a LIKE pattern.
+
+    LIKE has its own metacharacters. Without this, searching for "%" matches
+    every animal rather than the ones containing a percent sign, and a real
+    term such as "100%" or "guinea_pig" quietly matches the wrong rows. This
+    is not an injection fix - the value is still bound as a parameter - it is
+    a correctness one.
+
+    Args:
+        text: The raw search term.
+
+    Returns:
+        The term with LIKE's wildcards neutralised.
+    """
+    escaped = text.replace(LIKE_ESCAPE, LIKE_ESCAPE * 2)
+    for metacharacter in ("%", "_", "["):
+        escaped = escaped.replace(metacharacter, LIKE_ESCAPE + metacharacter)
+    return escaped
 
 
 class SearchAnimalsHandler(QueryHandler[AnimalSearchResults]):

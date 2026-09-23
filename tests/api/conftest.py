@@ -9,9 +9,11 @@ a shared free-tier server.
 
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 import pytest
 from app import create_app
@@ -99,18 +101,53 @@ def application(configuration: Configuration, monkeypatch: pytest.MonkeyPatch) -
     # Exceptions must surface as 500s rather than being re-raised, so a test
     # asserting on a status code sees what a browser would.
     flask_application.config["PROPAGATE_EXCEPTIONS"] = False
+    # CSRF is off for the ordinary API suite, so each test exercises the
+    # authorization or validation rule it was written for rather than token
+    # plumbing. That protection is tested two other ways: `csrf_client`
+    # below posts against a CSRF-enabled app, and the E2E suite drives real
+    # forms in a real browser with it on - which is also what would catch a
+    # template that forgot its token.
+    flask_application.config["WTF_CSRF_ENABLED"] = False
+    return flask_application
+
+
+@pytest.fixture
+def csrf_application(
+    configuration: Configuration, monkeypatch: pytest.MonkeyPatch
+) -> Flask:
+    """The same application with CSRF protection left switched on."""
+    database_url = f"sqlite:///{configuration.chroma_persist_directory.parent}/csrf.db"
+    monkeypatch.setenv("LOCAL_DATABASE_URL", database_url)
+
+    engine = create_engine(database_url, future=True)
+    Base.metadata.create_all(engine)
+    engine.dispose()
+
+    flask_application = create_app(replace(configuration))
+    flask_application.config["TESTING"] = True
+    flask_application.config["PROPAGATE_EXCEPTIONS"] = False
     return flask_application
 
 
 @pytest.fixture
 def session_factory(application: Flask) -> sessionmaker[Session]:
     """The session factory the application itself is using."""
-    return application.config["SESSION_FACTORY"]
+    return cast("sessionmaker[Session]", application.config["SESSION_FACTORY"])
 
 
 @pytest.fixture
 def world(session_factory: sessionmaker[Session]) -> dict[str, str]:
     """A staff member, two adopters with profiles, one without, and two animals."""
+    return _populate_world(session_factory)
+
+
+def _populate_world(session_factory: sessionmaker[Session]) -> dict[str, str]:
+    """Insert the shared cast of records and return their identifiers.
+
+    A plain function rather than only a fixture, so the CSRF-enabled
+    application can be given the same world without a second copy of it
+    drifting out of step with this one.
+    """
     identifiers: dict[str, str] = {}
     password_hash = generate_password_hash(TEST_PASSWORD)
 
@@ -229,6 +266,45 @@ def adopter_client(application: Flask, world: dict[str, str]) -> FlaskClient:
     test_client = application.test_client()
     sign_in(test_client, ADOPTER_EMAIL)
     return test_client
+
+
+@pytest.fixture
+def csrf_world(csrf_application: Flask) -> dict[str, str]:
+    """The same cast of records, inside the CSRF-protected application."""
+    session_factory = cast(
+        "sessionmaker[Session]", csrf_application.config["SESSION_FACTORY"]
+    )
+    return _populate_world(session_factory)
+
+
+@pytest.fixture
+def csrf_client(csrf_application: Flask, csrf_world: dict[str, str]) -> FlaskClient:
+    """A signed-in adopter on the CSRF-protected application.
+
+    Signs in through the real form, reading the token out of the rendered
+    page - which also proves the login template emits one.
+    """
+    test_client = csrf_application.test_client()
+
+    login_page = test_client.get("/login")
+    token = _csrf_token_in(login_page.get_data(as_text=True))
+    test_client.post(
+        "/login",
+        data={"email": ADOPTER_EMAIL, "password": TEST_PASSWORD, "csrf_token": token},
+    )
+    return test_client
+
+
+def _csrf_token_in(html: str) -> str:
+    """Pull the CSRF token out of a rendered page.
+
+    Raises:
+        AssertionError: The page rendered no token, which is itself the
+            failure a CSRF test needs to report.
+    """
+    match = re.search(r'name="csrf_token" value="([^"]+)"', html)
+    assert match is not None, "the page rendered no CSRF token"
+    return match.group(1)
 
 
 @pytest.fixture

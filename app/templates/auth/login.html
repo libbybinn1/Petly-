@@ -7,6 +7,7 @@
     <p class="auth-card__lead">Sign in to see your matches, applications and invitations.</p>
 
     <form method="post" action="{{ url_for('auth.login') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="field">
         <label class="field__label" for="email">Email</label>
         <input class="input" type="email" id="email" name="email" value="{{ email or '' }}"

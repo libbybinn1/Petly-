@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from enum import Enum
 
 from sqlalchemy import (
     CheckConstraint,
@@ -27,6 +28,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -60,7 +62,7 @@ def new_identifier() -> str:
     return str(uuid.uuid4())
 
 
-def _enum_check(column_name: str, enum_class: type) -> CheckConstraint:
+def _enum_check(column_name: str, enum_class: type[Enum]) -> CheckConstraint:
     """Build a CHECK constraint restricting a column to an enum's values.
 
     The database enforces the same vocabulary the Python enum does, so a bad
@@ -226,7 +228,19 @@ class AnimalImage(Base):
 
     animal: Mapped[Animal] = relationship(back_populates="images")
 
-    __table_args__ = (Index("ix_animal_images_animal", "animal_id"),)
+    __table_args__ = (
+        Index("ix_animal_images_animal", "animal_id"),
+        # Filtered unique index: one primary image per animal. A plain unique
+        # index would allow only one image per animal altogether, which is
+        # the opposite of what a gallery needs.
+        Index(
+            "uq_animal_primary_image",
+            "animal_id",
+            unique=True,
+            mssql_where=text("is_primary = 1"),
+            sqlite_where=text("is_primary = 1"),
+        ),
+    )
 
 
 class AdoptionApplication(Base):
@@ -270,6 +284,22 @@ class AdoptionApplication(Base):
         _enum_check("status", ApplicationStatus),
         Index("ix_applications_animal_status", "animal_id", "status"),
         Index("ix_applications_adopter", "adopter_profile_id"),
+        # FR-7.2, from docs/MODEL_DATA.md section 2.5. Filtered so that a
+        # rejected or withdrawn application does not block a later one: the
+        # rule is one *active* application per adopter per animal.
+        #
+        # This is the database half of the rule. The handler still checks
+        # first, to answer with a readable message instead of an integrity
+        # error - but a check-then-insert is not atomic, and two overlapping
+        # requests both pass it. Only the index settles that race.
+        Index(
+            "uq_active_application",
+            "adopter_profile_id",
+            "animal_id",
+            unique=True,
+            mssql_where=text("status IN ('SUBMITTED','UNDER_REVIEW')"),
+            sqlite_where=text("status IN ('SUBMITTED','UNDER_REVIEW')"),
+        ),
     )
 
 
@@ -337,6 +367,11 @@ class MatchAnalysis(Base):
     concerns: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     missing_information: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     evidence_sources: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+
+    # The ordered steps the agent took to reach this assessment, as JSON.
+    # Nullable because analyses written before the agent recorded a trace
+    # have none, and an empty list would claim it reasoned in no steps.
+    reasoning_trace: Mapped[str | None] = mapped_column(Text, nullable=True, default="[]")
 
     used_web_search: Mapped[bool] = mapped_column(nullable=False, default=False)
     model_name: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -425,6 +460,11 @@ class AnalysisJob(Base):
     animal_id: Mapped[str | None] = mapped_column(String(UUID_LENGTH), nullable=True)
     application_id: Mapped[str | None] = mapped_column(String(UUID_LENGTH), nullable=True)
     natural_language_query: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+
+    # Whatever the job produced, as JSON. An INTERPRET_INTENT job stores the
+    # parsed search intent here for the web tier to read back; an analysis
+    # job writes its result to match_analyses instead and leaves this null.
+    result_payload: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     error_message: Mapped[str | None] = mapped_column(String(1000), nullable=True)

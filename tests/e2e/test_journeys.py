@@ -56,6 +56,7 @@ class TestPublicBrowsing:
         assert all("Cat" in text for text in card_text)
 
         first_card_url = page.locator(".animal-card").first.get_attribute("href")
+        assert first_card_url is not None, "an animal card must link somewhere"
         page.locator(".animal-card").first.click()
         page.wait_for_url(lambda url: first_card_url in url)
 

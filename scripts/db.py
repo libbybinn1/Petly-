@@ -35,6 +35,7 @@ from app.infrastructure.database import (  # noqa: E402
 )
 from app.infrastructure.models import DomainEvent  # noqa: E402
 from sqlalchemy import func, inspect, select, text  # noqa: E402
+from sqlalchemy.engine import Engine  # noqa: E402
 
 EXPECTED_ARGUMENT_COUNT = 2  # script name plus one command
 
@@ -52,7 +53,7 @@ PROJECT_TABLES = (
 )
 
 
-def _engine():  # noqa: ANN202 - local helper, type is an SQLAlchemy Engine
+def _engine() -> Engine:
     """Build an engine from the current configuration."""
     return create_database_engine(load_configuration())
 

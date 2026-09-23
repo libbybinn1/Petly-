@@ -60,6 +60,7 @@
         <td style="white-space:nowrap">
           {% if application.is_active %}
             <form method="post"
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                   action="{{ url_for('personal.withdraw_application', application_id=application.application_id) }}">
               <button class="btn btn--ghost btn--small" type="submit">Withdraw</button>
             </form>

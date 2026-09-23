@@ -39,6 +39,7 @@
 
         <span class="avatar" title="{{ current_user.full_name }}">{{ current_user.initials }}</span>
         <form method="post" action="{{ url_for('auth.logout') }}" style="display:inline">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit" class="btn btn--ghost btn--small">Sign out</button>
         </form>
       {% else %}

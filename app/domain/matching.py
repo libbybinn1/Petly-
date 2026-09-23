@@ -38,8 +38,19 @@ PERFECT_SCORE = 100
 NEUTRAL_SCORE = 60
 MINIMUM_SCORE = 0
 
-# An adopter must clear this to be offered as a candidate at all. Below it,
-# the pairing is poor enough that presenting it would waste staff time.
+# The line between "worth highlighting" and "weak but still possible".
+#
+# This marks a pairing; it does not hide one. Ranking returns every candidate
+# that clears the hard constraints, weakest last, because an adopter whose
+# situation suits nothing well is better served by seeing modest matches with
+# their scores than by an empty page that explains nothing. Staff see the same
+# candidates, with the dashboard counting animals whose best applicant falls
+# below this line as needing attention.
+#
+# 50 sits inside the reachable range rather than above it: a pairing that
+# violates no hard constraint but fits badly in every soft criterion bottoms
+# out near 30, so this genuinely separates candidates instead of flagging
+# everyone or no one.
 RECOMMENDATION_THRESHOLD = 50
 
 

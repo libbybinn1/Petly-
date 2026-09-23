@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, TypeVar
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -517,7 +519,7 @@ def _to_stored_analysis(row: MatchAnalysis) -> StoredAnalysis:
     )
 
 
-def _decode_list(raw_json: str | None) -> list:
+def _decode_list(raw_json: str | None) -> list[Any]:
     """Decode a JSON column, tolerating malformed content.
 
     These are NVARCHAR(MAX) rather than a JSON type, because SQL Server 2014
@@ -548,14 +550,38 @@ def _adopter_facts(profile: AdopterProfile) -> AdopterFacts:
         ),
         daily_hours_available=float(profile.daily_hours_available or 0),
         city=profile.city or "",
-        preferred_species=frozenset(
-            _enum_or(Species, value.strip(), Species.OTHER)
-            for value in (profile.preferred_species or "").split(",")
-            if value.strip()
-        ),
+        preferred_species=_stored_species(profile.preferred_species),
         open_to_proactive_suggestions=bool(profile.open_to_proactive_suggestions),
         is_complete=bool(profile.is_complete),
     )
+
+
+def _stored_species(raw_column: str | None) -> frozenset[Species]:
+    """Read a stored species preference list, dropping anything unrecognised.
+
+    An unrecognised value must not become `Species.OTHER`. OTHER is a real
+    preference, not a marker for "unknown", and species preference carries
+    the heaviest weight when ranking animals for an adopter - so a typo or
+    a retired value in this column would have recorded the adopter as
+    actively wanting animals of no listed species, and scored every such
+    animal 100 on that criterion. Dropping the value records what is
+    actually known about it, which is nothing.
+
+    Args:
+        raw_column: The comma-separated column, which may be null.
+
+    Returns:
+        The species that parsed. An unparseable one is left out.
+    """
+    parsed: list[Species] = []
+    for value in (raw_column or "").split(","):
+        if not value.strip():
+            continue
+        try:
+            parsed.append(Species(value.strip()))
+        except ValueError:
+            continue
+    return frozenset(parsed)
 
 
 def _animal_facts(animal: Animal) -> AnimalFacts:
@@ -576,8 +602,24 @@ def _animal_facts(animal: Animal) -> AnimalFacts:
     )
 
 
-def _enum_or(enum_class: type, raw_value: object, default: object) -> object:
-    """Convert a stored string to an enum member, falling back on a bad value."""
+EnumT = TypeVar("EnumT", bound=Enum)
+
+
+def _enum_or(enum_class: type[EnumT], raw_value: object, default: EnumT) -> EnumT:
+    """Convert a stored string to an enum member, falling back on a bad value.
+
+    Generic over the enum so a decoded `home_type` is typed as a `HomeType`
+    and not as a bare object - which is what lets the type checker verify
+    that the fact objects below are assembled from the right enums.
+
+    Args:
+        enum_class: The enum the stored string should name.
+        raw_value: The stored value.
+        default: Used when the stored value names no member.
+
+    Returns:
+        The matching member, or the default.
+    """
     try:
         return enum_class(str(raw_value))
     except ValueError:

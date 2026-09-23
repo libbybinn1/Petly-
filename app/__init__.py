@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from flask import Flask, render_template
 from flask_login import LoginManager
+from flask_wtf.csrf import CSRFError, CSRFProtect
 from sqlalchemy import select
 
 from app.config import Configuration, load_configuration
@@ -19,6 +20,32 @@ from app.infrastructure.models import AdopterProfile, User
 from app.security.authorization import AuthenticatedUser
 
 login_manager = LoginManager()
+
+
+csrf_protection = CSRFProtect()
+
+
+def _harden_the_session_cookie(application: Flask) -> None:
+    """Restrict how the session cookie may be sent (NFR-4.3).
+
+    SameSite=Lax is the second half of CSRF defence and the half that keeps
+    working when a form is missed: the browser simply does not attach the
+    session cookie to a cross-site POST, so a forged request arrives
+    unauthenticated rather than acting as the signed-in user. Lax rather
+    than Strict so that an ordinary link into the site from an email still
+    arrives signed in.
+
+    HttpOnly keeps the cookie out of JavaScript's reach, limiting what an
+    injected script could do with it.
+
+    Secure is deliberately left off. It would stop the cookie being sent
+    over plain HTTP, which is exactly how this application is run and
+    demonstrated locally; turning it on here would break sign-in on
+    127.0.0.1 rather than protect anything. A deployment behind TLS should
+    set SESSION_COOKIE_SECURE=True.
+    """
+    application.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+    application.config["SESSION_COOKIE_HTTPONLY"] = True
 
 
 def create_app(configuration: Configuration | None = None) -> Flask:
@@ -36,6 +63,8 @@ def create_app(configuration: Configuration | None = None) -> Flask:
     application = Flask(__name__)
     application.config["SECRET_KEY"] = settings.secret_key
     application.config["PETMATCH"] = settings
+    _harden_the_session_cookie(application)
+    csrf_protection.init_app(application)
 
     engine = create_database_engine(settings)
     session_factory = create_session_factory(engine)
@@ -50,7 +79,6 @@ def create_app(configuration: Configuration | None = None) -> Flask:
     login_manager.login_message = "Please sign in to continue."
     login_manager.login_message_category = "info"
 
-    @login_manager.user_loader
     def load_user(user_id: str) -> AuthenticatedUser | None:
         """Rehydrate the signed-in account for each request."""
         with session_factory() as session:
@@ -69,6 +97,11 @@ def create_app(configuration: Configuration | None = None) -> Flask:
                 adopter_profile_id=profile.adopter_profile_id if profile else None,
                 is_complete=bool(profile and profile.is_complete),
             )
+
+    # Registered by call rather than with `@login_manager.user_loader`.
+    # Flask-Login carries no type information, so its decorator would erase
+    # this function's signature and stop the body being type-checked.
+    login_manager.user_loader(load_user)
 
     _register_blueprints(application)
     _register_error_handlers(application)
@@ -197,6 +230,26 @@ def _register_error_handlers(application: Flask) -> None:
             title="Please sign in",
             message="You need to be signed in to view this page.",
         ), 401
+
+    @application.errorhandler(CSRFError)
+    def csrf_token_missing(_error: object) -> tuple[str, int]:
+        """Explain a rejected form post in terms a person can act on.
+
+        Flask-WTF answers 400 by default with a bare message. The usual
+        innocent cause is a form left open long enough for the session to
+        roll over, and "submit it again" is genuinely the fix - so say
+        that, rather than showing a security notice to somebody who did
+        nothing wrong.
+        """
+        return render_template(
+            "error.html",
+            code=400,
+            title="That form has expired",
+            message=(
+                "For your security this form could not be submitted. "
+                "Please go back, reload the page and try again."
+            ),
+        ), 400
 
     @application.errorhandler(403)
     def forbidden(_error: object) -> tuple[str, int]:

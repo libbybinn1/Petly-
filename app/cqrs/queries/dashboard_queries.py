@@ -31,7 +31,7 @@ from app.domain.enums import (
     InvitationStatus,
 )
 from app.domain.matching import RECOMMENDATION_THRESHOLD
-from app.eventstore.store import EventStore
+from app.eventstore.store import EventStore, RecordedEvent
 from app.infrastructure.models import (
     AdoptionApplication,
     AdoptionInvitation,
@@ -187,7 +187,7 @@ def _count_animals_by_status(session: Session) -> dict[str, int]:
     """Count animals grouped by status, in one query."""
     rows = session.execute(
         select(Animal.status, func.count()).group_by(Animal.status)
-    ).all()
+    ).tuples().all()
     return dict(rows)
 
 
@@ -197,7 +197,7 @@ def _count_applications_by_status(session: Session) -> dict[str, int]:
         select(AdoptionApplication.status, func.count()).group_by(
             AdoptionApplication.status
         )
-    ).all()
+    ).tuples().all()
     return dict(rows)
 
 
@@ -207,7 +207,7 @@ def _count_invitations_by_status(session: Session) -> dict[str, int]:
         select(AdoptionInvitation.status, func.count()).group_by(
             AdoptionInvitation.status
         )
-    ).all()
+    ).tuples().all()
     return dict(rows)
 
 
@@ -408,7 +408,9 @@ def _recent_activity(session: Session) -> list[ActivityEntry]:
     return entries
 
 
-def _resolve_actor_names(session: Session, events: list) -> dict[str, str]:
+def _resolve_actor_names(
+    session: Session, events: list[RecordedEvent]
+) -> dict[str, str]:
     """Look up every actor named in the feed, in one query."""
     actor_ids = {event.actor_user_id for event in events if event.actor_user_id}
     if not actor_ids:
@@ -416,11 +418,13 @@ def _resolve_actor_names(session: Session, events: list) -> dict[str, str]:
 
     rows = session.execute(
         select(User.user_id, User.full_name).where(User.user_id.in_(actor_ids))
-    ).all()
+    ).tuples().all()
     return dict(rows)
 
 
-def _resolve_animal_names(session: Session, events: list) -> dict[str, str]:
+def _resolve_animal_names(
+    session: Session, events: list[RecordedEvent]
+) -> dict[str, str]:
     """Look up every animal named in the feed, in one query."""
     animal_ids = {
         event.payload.get("animal_id")
@@ -432,5 +436,5 @@ def _resolve_animal_names(session: Session, events: list) -> dict[str, str]:
 
     rows = session.execute(
         select(Animal.animal_id, Animal.name).where(Animal.animal_id.in_(animal_ids))
-    ).all()
+    ).tuples().all()
     return dict(rows)

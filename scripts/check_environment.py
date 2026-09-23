@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import os
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import truststore
 
@@ -38,6 +40,28 @@ class CheckResult:
     detail: str
 
 
+def _first_column(cursor: Any) -> object:  # noqa: ANN401 - DB-API cursor
+    """Read the first column of the next row.
+
+    A DB-API cursor returns None when a query produced no rows. These
+    queries always produce one, but an environment check that crashes with
+    a TypeError instead of reporting a failure defeats its own purpose.
+
+    Args:
+        cursor: An executed DB-API cursor.
+
+    Returns:
+        The first column of the next row.
+
+    Raises:
+        RuntimeError: The query returned no rows at all.
+    """
+    row = cursor.fetchone()
+    if row is None:
+        raise RuntimeError("query returned no rows")
+    return row[0]
+
+
 def check_database() -> CheckResult:
     """Confirm the Somee SQL Server accepts a login and reports its version."""
     import pymssql
@@ -54,12 +78,15 @@ def check_database() -> CheckResult:
     except Exception as error:  # - report any failure to the user
         return CheckResult("Cloud database", False, f"{type(error).__name__}: {error}")
 
-    with connection:
-        cursor = connection.cursor()
-        cursor.execute("SELECT @@VERSION")
-        version_line = str(cursor.fetchone()[0]).splitlines()[0].strip()
-        cursor.execute("SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES")
-        table_count = cursor.fetchone()[0]
+    try:
+        with connection:
+            cursor = connection.cursor()
+            cursor.execute("SELECT @@VERSION")
+            version_line = str(_first_column(cursor)).splitlines()[0].strip()
+            cursor.execute("SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES")
+            table_count = int(str(_first_column(cursor)))
+    except Exception as error:  # - report any failure to the user
+        return CheckResult("Cloud database", False, f"{type(error).__name__}: {error}")
 
     return CheckResult("Cloud database", True, f"{version_line} | {table_count} tables")
 
@@ -123,8 +150,12 @@ def check_vector_database() -> CheckResult:
     try:
         collection = chromadb.EphemeralClient().create_collection("environment_check")
         document = "rabbits are quiet indoor companions suited to small homes"
-        collection.add(ids=["a"], documents=[document], embeddings=[embed(document)])
-        results = collection.query(query_embeddings=[embed("calm small pet")], n_results=1)
+        # Chroma's own wider element type; `list` is invariant, so a
+        # list[list[float]] is not a list of sequences.
+        vectors: list[Sequence[float] | Sequence[int]] = [embed(document)]
+        query_vector: list[Sequence[float] | Sequence[int]] = [embed("calm small pet")]
+        collection.add(ids=["a"], documents=[document], embeddings=vectors)
+        results = collection.query(query_embeddings=query_vector, n_results=1)
     except Exception as error:
         return CheckResult("Vector database", False, f"{type(error).__name__}: {error}")
 

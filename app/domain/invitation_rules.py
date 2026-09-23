@@ -63,7 +63,28 @@ def has_expired(expires_at: datetime, now: datetime) -> bool:
 
     The boundary is inclusive of the final instant: an invitation is still
     answerable exactly at `expires_at` and expired one moment later.
+
+    Both arguments must be timezone-aware, and this checks rather than
+    assumes. The column behind `expires_at` is a SQL Server DATETIME2, which
+    carries no offset, so every caller converts on the way out of the
+    database. A caller that forgets would otherwise get a TypeError raised
+    from inside the comparison - the same mistake `calculate_expiry` reports
+    clearly, so it is reported clearly here too.
+
+    Args:
+        expires_at: When the invitation's window closes.
+        now: The instant to judge it against.
+
+    Returns:
+        True once the window has passed.
+
+    Raises:
+        ValueError: If either argument is naive.
     """
+    if expires_at.tzinfo is None:
+        raise ValueError("expires_at must be timezone-aware to judge expiry.")
+    if now.tzinfo is None:
+        raise ValueError("now must be timezone-aware to judge expiry.")
     return now > expires_at
 
 

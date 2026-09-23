@@ -54,10 +54,12 @@
       {% if invitation.is_awaiting_response %}
         <div style="display:flex; gap: var(--space-2); margin-top: var(--space-4); flex-wrap: wrap">
           <form method="post" action="{{ url_for('personal.respond_to_invitation', invitation_id=invitation.invitation_id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="response" value="ACCEPT">
             <button class="btn btn--primary" type="submit">Yes, I am interested</button>
           </form>
           <form method="post" action="{{ url_for('personal.respond_to_invitation', invitation_id=invitation.invitation_id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="response" value="DECLINE">
             <button class="btn btn--secondary" type="submit">No thank you</button>
           </form>

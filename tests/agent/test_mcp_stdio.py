@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 from app.config import load_configuration
@@ -18,6 +19,7 @@ from app.infrastructure.database import create_database_engine, create_session_f
 from app.infrastructure.models import AdopterProfile, Animal
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+from mcp.types import CallToolResult, TextContent
 from sqlalchemy import select
 
 pytestmark = [pytest.mark.agent, pytest.mark.anyio]
@@ -65,10 +67,18 @@ def _server_parameters() -> StdioServerParameters:
     )
 
 
-def _payload_of(result: object) -> dict:
-    """Extract the JSON payload from an MCP tool result."""
-    content = result.content[0]  # type: ignore[attr-defined]
-    return json.loads(content.text)
+def _payload_of(result: CallToolResult) -> dict[str, Any]:
+    """Extract the JSON payload from an MCP tool result.
+
+    Asserts the reply is a single text block rather than assuming it: that
+    the tools answer with JSON text is part of the contract these tests
+    exist to check.
+    """
+    content = result.content[0]
+    assert isinstance(content, TextContent), "tools must answer with text"
+    payload = json.loads(content.text)
+    assert isinstance(payload, dict), "tools must answer with a JSON object"
+    return payload
 
 
 async def test_server_advertises_both_tools() -> None:

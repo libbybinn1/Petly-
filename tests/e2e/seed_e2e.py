@@ -35,7 +35,7 @@ from app.infrastructure.models import (
     new_identifier,
 )
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 from werkzeug.security import generate_password_hash
 
 STAFF_EMAIL = "dana@petmatch.org"
@@ -114,7 +114,7 @@ def seed_e2e_database(database_url: str) -> None:
     engine.dispose()
 
 
-def _create_animals(session) -> dict[str, Animal]:  # noqa: ANN001 - Session
+def _create_animals(session: Session) -> dict[str, Animal]:
     """Create a small roster covering the cases the tests rely on."""
     specifications = (
         ("cat", "Milo", Species.CAT, AnimalSize.SMALL, ActivityLevel.LOW,
@@ -155,7 +155,7 @@ def _create_animals(session) -> dict[str, Animal]:  # noqa: ANN001 - Session
 
 
 def _create_application(
-    session,  # noqa: ANN001 - Session
+    session: Session,
     event_store: EventStore,
     profile: AdopterProfile,
     animal: Animal,
@@ -185,7 +185,7 @@ def _create_application(
 
 
 def _create_invitation(
-    session,  # noqa: ANN001 - Session
+    session: Session,
     event_store: EventStore,
     staff: User,
     profile: AdopterProfile,

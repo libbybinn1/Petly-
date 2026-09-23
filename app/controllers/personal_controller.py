@@ -16,10 +16,10 @@ shape (FR-2.4):
 from __future__ import annotations
 
 from flask import Blueprint, abort, flash, redirect, render_template, request, url_for
-from flask_login import current_user, login_required
+from flask_login import current_user
 from werkzeug.wrappers import Response
 
-from app.controllers.helpers import get_bus
+from app.controllers.helpers import ViewResult, get_bus
 from app.cqrs.commands.application_commands import (
     NotYourRecordError,
     RecordNotFoundError,
@@ -43,9 +43,14 @@ from app.domain.application_rules import (
 from app.domain.enums import ActivityLevel, ExperienceLevel, HomeType, Species
 from app.domain.invitation_rules import InvitationExpiredError, InvitationNotAllowedError
 from app.domain.profile_rules import ProfileSubmission, validate_profile
-from app.security.authorization import require_adopter
+from app.security.authorization import require_adopter, require_sign_in
 
 personal_blueprint = Blueprint("personal", __name__, url_prefix="/my")
+
+# Matches adoption_applications.applicant_message, NVARCHAR(2000). This is
+# the one free-text field an adopter controls entirely, so it is also the
+# natural place to push an oversized payload.
+MAXIMUM_APPLICANT_MESSAGE_LENGTH = 2000
 
 
 def _require_profile() -> Response | None:
@@ -57,7 +62,7 @@ def _require_profile() -> Response | None:
 
 
 @personal_blueprint.route("/applications")
-@login_required
+@require_sign_in
 @require_adopter()
 def my_applications() -> str | Response:
     """List the signed-in adopter's applications."""
@@ -71,7 +76,7 @@ def my_applications() -> str | Response:
 
 
 @personal_blueprint.route("/invitations")
-@login_required
+@require_sign_in
 @require_adopter()
 def my_invitations() -> str | Response:
     """List the signed-in adopter's invitations.
@@ -109,7 +114,7 @@ def my_invitations() -> str | Response:
 
 
 @personal_blueprint.route("/invitations/<invitation_id>/respond", methods=["POST"])
-@login_required
+@require_sign_in
 @require_adopter()
 def respond_to_invitation(invitation_id: str) -> Response:
     """Accept or decline an invitation."""
@@ -145,7 +150,7 @@ def respond_to_invitation(invitation_id: str) -> Response:
 
 
 @personal_blueprint.route("/applications/<application_id>/withdraw", methods=["POST"])
-@login_required
+@require_sign_in
 @require_adopter()
 def withdraw_application(application_id: str) -> Response:
     """Withdraw one of the signed-in adopter's applications."""
@@ -203,9 +208,9 @@ def _submission_from_request() -> ProfileSubmission:
 
 
 @personal_blueprint.route("/profile", methods=["GET", "POST"])
-@login_required
+@require_sign_in
 @require_adopter()
-def my_profile() -> str | Response:
+def my_profile() -> ViewResult:
     """Create or update the signed-in adopter's profile (spec section 5.1).
 
     A complete profile is what unlocks personal matching, and the opt-in it
@@ -246,7 +251,7 @@ def my_profile() -> str | Response:
 
 
 @personal_blueprint.route("/apply/<animal_id>", methods=["POST"])
-@login_required
+@require_sign_in
 @require_adopter()
 def apply_to_animal(animal_id: str) -> Response:
     """Submit an adoption application for one animal (feature F-07).
@@ -259,13 +264,22 @@ def apply_to_animal(animal_id: str) -> Response:
         flash("Complete your adoption profile before applying.", "info")
         return redirect(url_for("personal.my_profile"))
 
+    applicant_message = (request.form.get("applicant_message") or "").strip()
+    if len(applicant_message) > MAXIMUM_APPLICANT_MESSAGE_LENGTH:
+        flash(
+            "Please keep your message under "
+            f"{MAXIMUM_APPLICANT_MESSAGE_LENGTH} characters.",
+            "error",
+        )
+        return redirect(url_for("animals.details", animal_id=animal_id))
+
     try:
         get_bus().dispatch_command(
             SubmitApplicationCommand(
                 adopter_profile_id=current_user.adopter_profile_id,
                 animal_id=animal_id,
                 actor_user_id=current_user.user_id,
-                applicant_message=request.form.get("applicant_message") or None,
+                applicant_message=applicant_message or None,
             )
         )
     except ApplicationNotAllowedError as error:

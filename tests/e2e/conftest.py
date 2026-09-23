@@ -68,7 +68,9 @@ def _find_free_port() -> int:
         return int(probe.getsockname()[1])
 
 
-def _wait_until_serving(port: int, process: subprocess.Popen, log_path: Path) -> None:
+def _wait_until_serving(
+    port: int, process: subprocess.Popen[str], log_path: Path
+) -> None:
     """Block until the server answers a real request.
 
     Checks HTTP rather than only TCP: a listening socket proves a process is

@@ -22,6 +22,12 @@ MINIMUM_DAILY_HOURS = 0.0
 MAXIMUM_DAILY_HOURS = 24.0
 MAXIMUM_YARD_SIZE_SQM = 100_000
 MINIMUM_CITY_LENGTH = 2
+
+# Matches adopter_profiles.city, NVARCHAR(100). A value longer than its
+# column is accepted by SQLite and rejected by SQL Server 2014 with "String
+# or binary data would be truncated" - so without this check the form works
+# in the test suite and returns 500 against the real database.
+MAXIMUM_CITY_LENGTH = 100
 MAXIMUM_DESCRIPTION_LENGTH = 500
 
 
@@ -251,6 +257,9 @@ def _parse_city(raw_value: str | None, errors: dict[str, str]) -> str | None:
     city = (raw_value or "").strip()
     if len(city) < MINIMUM_CITY_LENGTH:
         errors["city"] = "Please tell us which city you live in."
+        return None
+    if len(city) > MAXIMUM_CITY_LENGTH:
+        errors["city"] = f"Please keep the city under {MAXIMUM_CITY_LENGTH} characters."
         return None
     return city
 

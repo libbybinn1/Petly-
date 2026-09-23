@@ -103,6 +103,7 @@
     {% elif animal.is_available %}
       {% if current_user.is_authenticated %}
         <form method="post" action="{{ url_for('personal.apply_to_animal', animal_id=animal.animal_id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <div class="field">
             <label class="field__label" for="applicant_message">
               Anything you would like us to know? (optional)

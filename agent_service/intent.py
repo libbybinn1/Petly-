@@ -19,7 +19,9 @@ result set.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
+from typing import TypeVar
 
 from app.domain.enums import ActivityLevel, AnimalSize, Species, Temperament
 
@@ -152,8 +154,23 @@ def _parse_species_list(raw_value: object) -> tuple[Species, ...]:
     return tuple(dict.fromkeys(parsed))
 
 
-def _parse_enum(enum_class: type, raw_value: object):  # noqa: ANN202 - member or None
-    """Parse one optional enum value, returning None when absent or unknown."""
+EnumT = TypeVar("EnumT", bound=Enum)
+
+
+def _parse_enum(enum_class: type[EnumT], raw_value: object) -> EnumT | None:
+    """Parse one optional enum value, returning None when absent or unknown.
+
+    Generic over the enum so each caller keeps its own precise type: the
+    size field reads back as an `AnimalSize`, not as a bare `Enum`.
+
+    Args:
+        enum_class: The enum the value must belong to.
+        raw_value: Whatever the model returned for the field.
+
+    Returns:
+        The matching member, or None when the field was absent or the
+        model invented a value the enum does not define.
+    """
     if raw_value is None:
         return None
     try:

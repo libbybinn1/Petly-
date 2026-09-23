@@ -11,6 +11,7 @@
 </div>
 
 <form method="post" action="{{ url_for('matches.natural_language_search') }}" class="card card--padded">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <div class="field">
     <label class="field__label" for="description">What kind of animal are you hoping for?</label>
     <textarea class="textarea" id="description" name="description" required

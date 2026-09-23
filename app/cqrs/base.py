@@ -17,9 +17,9 @@ the controller dispatches a query next.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Generic, TypeVar
+from typing import Any, Generic, TypeVar
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 ResultT = TypeVar("ResultT")
 
@@ -87,28 +87,43 @@ class MessageBus:
     write path.
     """
 
-    def __init__(self, session_factory) -> None:  # noqa: ANN001 - sessionmaker[Session]
+    def __init__(self, session_factory: sessionmaker[Session]) -> None:
         """Create an empty bus bound to a session factory."""
         self._session_factory = session_factory
-        self._command_handlers: dict[type[Command], CommandHandler] = {}
-        self._query_handlers: dict[type[Query], QueryHandler] = {}
+        self._command_handlers: dict[type[Command], CommandHandler[Any]] = {}
+        self._query_handlers: dict[type[Query], QueryHandler[Any]] = {}
 
     def register_command(
-        self, command_type: type[Command], handler: CommandHandler
+        self, command_type: type[Command], handler: CommandHandler[Any]
     ) -> None:
         """Register the handler for a command type."""
         self._command_handlers[command_type] = handler
 
-    def register_query(self, query_type: type[Query], handler: QueryHandler) -> None:
+    def register_query(
+        self, query_type: type[Query], handler: QueryHandler[Any]
+    ) -> None:
         """Register the handler for a query type."""
         self._query_handlers[query_type] = handler
 
-    def dispatch_command(self, command: Command):  # noqa: ANN201 - handler-defined result
+    def dispatch_command(self, command: Command) -> Any:  # noqa: ANN401 - see below
         """Execute a command inside a committed transaction.
 
         The transaction wraps the whole handler, so a command that appends
         several events and updates several projections either applies
         completely or not at all.
+
+        The return type is `Any` because the registry is heterogeneous:
+        the handler is found by the command's runtime type, so the result
+        type cannot be known statically at this point. Narrowing it would
+        mean making `Command` generic in its own result, which would pin
+        every command class to a type parameter for no gain at the one
+        call site that matters - the controller, which knows what it sent.
+
+        Args:
+            command: The command to execute.
+
+        Returns:
+            Whatever the registered handler returns: an identifier, or None.
 
         Raises:
             HandlerNotRegisteredError: If no handler is registered.
@@ -128,11 +143,20 @@ class MessageBus:
         finally:
             session.close()
 
-    def dispatch_query(self, query: Query):  # noqa: ANN201 - handler-defined result
+    def dispatch_query(self, query: Query) -> Any:  # noqa: ANN401 - see below
         """Answer a query using a read-only session.
 
         The session is rolled back rather than committed, which makes an
         accidental write in a query handler impossible to persist.
+
+        `Any` for the same reason as `dispatch_command`: the handler is
+        resolved from the query's runtime type.
+
+        Args:
+            query: The query to answer.
+
+        Returns:
+            The read DTO produced by the registered handler.
 
         Raises:
             HandlerNotRegisteredError: If no handler is registered.

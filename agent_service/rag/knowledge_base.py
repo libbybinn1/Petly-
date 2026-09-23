@@ -22,8 +22,10 @@ embedding space - so every call in this module passes vectors.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 import chromadb
 import ollama
@@ -169,6 +171,22 @@ def _split_long_text(text: str) -> list[str]:
     return [part for part in parts if part]
 
 
+class KnowledgeRetriever(Protocol):
+    """The retrieval surface the agent actually depends on.
+
+    The agent needs one method, so it asks for one method. Depending on the
+    concrete `KnowledgeBase` would mean depending on Chroma, an embedding
+    client and a directory of markdown - none of which an agent test should
+    have to stand up to check how a retrieved chunk is used.
+    """
+
+    def search_relevant(
+        self, query: str, result_count: int = DEFAULT_RESULT_COUNT
+    ) -> list[RetrievedChunk]:
+        """Return the passages relevant enough to cite."""
+        ...
+
+
 class KnowledgeBase:
     """Semantic search over the curated adoption knowledge."""
 
@@ -214,10 +232,17 @@ class KnowledgeBase:
         if not all_chunks:
             return 0
 
+        # Declared with Chroma's own wider element type: `list` is
+        # invariant, so a plain list[list[float]] is not accepted where a
+        # list of sequences is expected.
+        vectors: list[Sequence[float] | Sequence[int]] = list(
+            self._embedding_client.embed_all([chunk.text for chunk in all_chunks])
+        )
+
         self._collection.add(
             ids=[chunk.chunk_id for chunk in all_chunks],
             documents=[chunk.text for chunk in all_chunks],
-            embeddings=self._embedding_client.embed_all([c.text for c in all_chunks]),
+            embeddings=vectors,
             metadatas=[
                 {"document_name": chunk.document_name, "heading": chunk.heading}
                 for chunk in all_chunks
@@ -251,10 +276,24 @@ class KnowledgeBase:
         if self.count() == 0:
             return []
 
+        query_vector: list[Sequence[float] | Sequence[int]] = [
+            self._embedding_client.embed(query)
+        ]
         response = self._collection.query(
-            query_embeddings=[self._embedding_client.embed(query)],
+            query_embeddings=query_vector,
             n_results=min(result_count, self.count()),
         )
+
+        # Every field of a Chroma result is optional, because a caller can
+        # ask for a subset. We ask for the default set, which includes all
+        # four - but a missing one would mean a silent contract change, so
+        # answer "no evidence" rather than indexing into None.
+        identifiers = response["ids"]
+        documents = response["documents"]
+        metadatas = response["metadatas"]
+        distances = response["distances"]
+        if documents is None or metadatas is None or distances is None:
+            return []
 
         return [
             RetrievedChunk(
@@ -267,10 +306,10 @@ class KnowledgeBase:
                 distance=float(distance),
             )
             for chunk_id, document, metadata, distance in zip(
-                response["ids"][0],
-                response["documents"][0],
-                response["metadatas"][0],
-                response["distances"][0],
+                identifiers[0],
+                documents[0],
+                metadatas[0],
+                distances[0],
                 strict=True,
             )
         ]

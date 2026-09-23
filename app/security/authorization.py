@@ -11,10 +11,11 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from functools import wraps
-from typing import Any, ParamSpec, TypeVar
+from typing import Any, ParamSpec, TypeVar, cast
 
 from flask import abort
-from flask_login import UserMixin, current_user
+from flask_login import current_user
+from flask_login import login_required as _flask_login_required
 
 from app.domain.enums import UserRole
 from app.infrastructure.models import User
@@ -23,12 +24,18 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 
-class AuthenticatedUser(UserMixin):
+class AuthenticatedUser:
     """Flask-Login view of a signed-in account.
 
     Deliberately a small copy rather than the ORM model: the session outlives
     any database session, and detached ORM instances raise when their
     attributes are touched later in the request.
+
+    Implements Flask-Login's user contract directly instead of inheriting
+    `UserMixin`. The mixin is untyped, and a class inheriting from an
+    untyped base is typed `Any` all the way down - meaning the type checker
+    would silently accept any misspelled attribute on a signed-in user. The
+    four members below are the whole of what Flask-Login asks for.
     """
 
     def __init__(
@@ -48,6 +55,29 @@ class AuthenticatedUser(UserMixin):
         self.role = role
         self.adopter_profile_id = adopter_profile_id
         self.has_complete_profile = has_complete_profile
+
+    @property
+    def is_authenticated(self) -> bool:
+        """Always true: this object only exists for a signed-in account."""
+        return True
+
+    @property
+    def is_active(self) -> bool:
+        """Always true: deactivated accounts never reach this object.
+
+        Both the login view and the session loader refuse an inactive row,
+        so an instance of this class is by construction an active account.
+        """
+        return True
+
+    @property
+    def is_anonymous(self) -> bool:
+        """Always false; Flask-Login uses its own class for anonymous users."""
+        return False
+
+    def get_id(self) -> str:
+        """Return the identifier Flask-Login stores in the session cookie."""
+        return self.user_id
 
     @property
     def is_staff(self) -> bool:
@@ -120,3 +150,23 @@ def require_staff() -> Callable[[Callable[P, R]], Callable[P, R]]:
 def require_adopter() -> Callable[[Callable[P, R]], Callable[P, R]]:
     """Restrict a view to adopters."""
     return require_role(UserRole.ADOPTER)
+
+
+def require_sign_in(view_function: Callable[P, R]) -> Callable[P, R]:
+    """Send anonymous visitors to the sign-in page, keeping the view typed.
+
+    A thin wrapper around Flask-Login's own `login_required`. The wrapper
+    exists because Flask-Login ships no type information: applying its
+    decorator directly erases the view's signature, and `mypy --strict`
+    then stops checking the whole function underneath it - including
+    whether it returns something Flask can actually serve. Wrapping it once
+    here keeps that checking, and keeps the knowledge that Flask-Login is
+    untyped in one file rather than in every controller.
+
+    Args:
+        view_function: The view to protect.
+
+    Returns:
+        The view, wrapped so an anonymous request is redirected first.
+    """
+    return cast("Callable[P, R]", _flask_login_required(view_function))

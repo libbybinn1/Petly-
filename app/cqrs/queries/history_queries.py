@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -16,7 +17,7 @@ from sqlalchemy.orm import Session
 from app.cqrs.base import Query, QueryHandler
 from app.cqrs.queries.dashboard_queries import EVENT_DESCRIPTIONS
 from app.domain.enums import AggregateType
-from app.eventstore.store import EventStore
+from app.eventstore.store import EventStore, RecordedEvent
 from app.infrastructure.models import Animal, User
 
 
@@ -99,7 +100,9 @@ class GetAggregateHistoryHandler(QueryHandler[AggregateHistory | None]):
         )
 
 
-def _resolve_actors(session: Session, events: list) -> dict[str, str]:
+def _resolve_actors(
+    session: Session, events: list[RecordedEvent]
+) -> dict[str, str]:
     """Look up every actor in one query."""
     actor_ids = {event.actor_user_id for event in events if event.actor_user_id}
     if not actor_ids:
@@ -107,12 +110,15 @@ def _resolve_actors(session: Session, events: list) -> dict[str, str]:
 
     rows = session.execute(
         select(User.user_id, User.full_name).where(User.user_id.in_(actor_ids))
-    ).all()
+    ).tuples().all()
     return dict(rows)
 
 
 def _title_for(
-    session: Session, aggregate_type: AggregateType, aggregate_id: str, events: list
+    session: Session,
+    aggregate_type: AggregateType,
+    aggregate_id: str,
+    events: list[RecordedEvent],
 ) -> str:
     """Build a readable heading for the timeline."""
     if aggregate_type is AggregateType.ANIMAL:
@@ -133,7 +139,7 @@ def _title_for(
     return aggregate_type.value
 
 
-def _describe_payload(payload: dict) -> str:
+def _describe_payload(payload: dict[str, Any]) -> str:
     """Summarise the parts of a payload worth showing.
 
     Only the fields that explain *why* something happened are surfaced. The

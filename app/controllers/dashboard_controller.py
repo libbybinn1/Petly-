@@ -3,18 +3,17 @@
 from __future__ import annotations
 
 from flask import Blueprint, abort, render_template
-from flask_login import login_required
 
 from app.controllers.helpers import get_bus
 from app.cqrs.queries.dashboard_queries import GetDashboardSummaryQuery
 from app.cqrs.queries.history_queries import GetAggregateHistoryQuery
-from app.security.authorization import require_staff
+from app.security.authorization import require_sign_in, require_staff
 
 dashboard_blueprint = Blueprint("dashboard", __name__)
 
 
 @dashboard_blueprint.route("/dashboard")
-@login_required
+@require_sign_in
 @require_staff()
 def dashboard() -> str:
     """Show the operational dashboard.
@@ -27,7 +26,7 @@ def dashboard() -> str:
 
 
 @dashboard_blueprint.route("/history/<aggregate_type>/<aggregate_id>")
-@login_required
+@require_sign_in
 @require_staff()
 def aggregate_history(aggregate_type: str, aggregate_id: str) -> str:
     """Show one aggregate's recorded history (blueprint section 10).

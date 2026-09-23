@@ -7,8 +7,10 @@ server for every staff route (blueprint section 12).
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from flask import Blueprint, abort, flash, redirect, render_template, request, url_for
-from flask_login import current_user, login_required
+from flask_login import current_user
 from werkzeug.wrappers import Response
 
 from app.controllers.helpers import get_bus, get_configuration
@@ -26,13 +28,16 @@ from app.cqrs.queries.match_queries import (
     RankApplicantsQuery,
 )
 from app.domain.invitation_rules import InvitationNotAllowedError
-from app.security.authorization import require_adopter, require_staff
+from app.security.authorization import require_adopter, require_sign_in, require_staff
+
+if TYPE_CHECKING:  # Import for typing only; see _build_interpreter.
+    from agent_service.intent import IntentInterpreter
 
 match_blueprint = Blueprint("matches", __name__)
 
 
 @match_blueprint.route("/my/matches")
-@login_required
+@require_sign_in
 @require_adopter()
 def find_my_pet() -> str | Response:
     """Rank available animals for the signed-in adopter (spec section 6.1).
@@ -57,7 +62,7 @@ def find_my_pet() -> str | Response:
 
 
 @match_blueprint.route("/animals/<animal_id>/adopters")
-@login_required
+@require_sign_in
 @require_staff()
 def find_my_adopter(animal_id: str) -> str:
     """Rank the adopters who already applied for this animal (spec section 7.2)."""
@@ -73,7 +78,7 @@ def find_my_adopter(animal_id: str) -> str:
 
 
 @match_blueprint.route("/animals/<animal_id>/discover")
-@login_required
+@require_sign_in
 @require_staff()
 def find_more_adopters(animal_id: str) -> str:
     """Discover eligible adopters who did not apply (spec section 7.3).
@@ -94,7 +99,7 @@ def find_more_adopters(animal_id: str) -> str:
 
 
 @match_blueprint.route("/analyses/<match_analysis_id>")
-@login_required
+@require_sign_in
 @require_staff()
 def analysis_detail(match_analysis_id: str) -> str:
     """Show one stored analysis in full, with its evidence."""
@@ -108,7 +113,7 @@ def analysis_detail(match_analysis_id: str) -> str:
 
 
 @match_blueprint.route("/animals/<animal_id>/invite", methods=["POST"])
-@login_required
+@require_sign_in
 @require_staff()
 def send_invitation(animal_id: str) -> Response:
     """Invite one discovered adopter to consider this animal (spec section 7.4).
@@ -140,7 +145,7 @@ def send_invitation(animal_id: str) -> Response:
     return redirect(url_for("matches.find_more_adopters", animal_id=animal_id))
 
 
-def _build_interpreter():  # noqa: ANN202 - IntentInterpreter, imported lazily
+def _build_interpreter() -> IntentInterpreter:
     """Construct the intent interpreter from configuration.
 
     Imported inside the function so the web tier does not load the agent's

@@ -37,8 +37,8 @@ from agent_service.llm_client import (
     LanguageModelUnavailableError,
     MalformedModelOutputError,
 )
-from agent_service.rag.knowledge_base import KnowledgeBase, RetrievedChunk
-from agent_service.tools.mcp_tools import McpToolClient
+from agent_service.rag.knowledge_base import KnowledgeRetriever, RetrievedChunk
+from agent_service.tools.mcp_tools import ProfileLookup
 from agent_service.tools.web_search import (
     SearchDecision,
     SearchResult,
@@ -108,8 +108,8 @@ class MatchAnalysisAgent:
     def __init__(
         self,
         language_model: LanguageModel,
-        knowledge_base: KnowledgeBase,
-        mcp_client: McpToolClient,
+        knowledge_base: KnowledgeRetriever,
+        mcp_client: ProfileLookup,
         search_provider: WebSearchProvider,
         max_reasoning_steps: int = 8,
     ) -> None:
@@ -264,7 +264,7 @@ def build_adopter_facts(payload: dict[str, Any]) -> AdopterFacts:
         home_type=_to_enum(HomeType, payload.get("home_type"), HomeType.APARTMENT),
         has_yard=bool(payload.get("has_yard")),
         household_has_children=bool(payload.get("household_has_children")),
-        youngest_child_age=payload.get("youngest_child_age"),
+        youngest_child_age=_to_optional_int(payload.get("youngest_child_age")),
         has_other_animals=bool(payload.get("has_other_animals")),
         experience_level=_to_enum(
             ExperienceLevel, payload.get("experience_level"), ExperienceLevel.NONE
@@ -274,10 +274,7 @@ def build_adopter_facts(payload: dict[str, Any]) -> AdopterFacts:
         ),
         daily_hours_available=float(payload.get("daily_hours_available") or 0.0),
         city=str(payload.get("city") or ""),
-        preferred_species=frozenset(
-            _to_enum(Species, value, Species.OTHER)
-            for value in payload.get("preferred_species") or []
-        ),
+        preferred_species=_payload_species(payload.get("preferred_species")),
         open_to_proactive_suggestions=bool(payload.get("open_to_proactive_suggestions")),
         is_complete=bool(payload.get("is_complete")),
     )
@@ -301,6 +298,55 @@ def build_animal_facts(payload: dict[str, Any]) -> AnimalFacts:
         ),
         city=str(payload.get("city") or ""),
     )
+
+
+def _payload_species(raw_values: object) -> frozenset[Species]:
+    """Read species preferences from an MCP payload, dropping unrecognised ones.
+
+    The same rule as the web tier's `_stored_species`, and for the same
+    reason: `Species.OTHER` is a preference an adopter can hold, not a
+    stand-in for a value that failed to parse. Translating one into the
+    other would hand the heaviest criterion a preference nobody expressed.
+
+    Args:
+        raw_values: Whatever the payload held, which may not be a list.
+
+    Returns:
+        The species that parsed, empty if the field was absent or malformed.
+    """
+    if not isinstance(raw_values, list):
+        return frozenset()
+
+    parsed: list[Species] = []
+    for value in raw_values:
+        try:
+            parsed.append(Species(str(value).strip()))
+        except ValueError:
+            continue
+    return frozenset(parsed)
+
+
+def _to_optional_int(raw_value: object) -> int | None:
+    """Coerce a payload value to a whole number, or None when unusable.
+
+    Every other numeric field in the payload is coerced; this one was
+    passed through untouched, so a JSON string age reached the scorer and
+    was compared against an int - raising TypeError from inside the child
+    safety rule and failing the whole analysis job. A field the agent
+    cannot read should degrade to "not stated", not crash the queue.
+
+    Args:
+        raw_value: The payload value, of whatever type arrived.
+
+    Returns:
+        The value as an int, or None if absent or not numeric.
+    """
+    if raw_value is None:
+        return None
+    try:
+        return int(float(str(raw_value)))
+    except (TypeError, ValueError):
+        return None
 
 
 def _to_enum(enum_class: type, raw_value: object, default: Any) -> Any:  # noqa: ANN401

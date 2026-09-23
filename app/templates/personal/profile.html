@@ -25,6 +25,7 @@
 {% endif %}
 
 <form method="post" action="{{ url_for('personal.my_profile') }}" class="card card--padded">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
   <h2 style="font-size:1.1rem">Your home</h2>
 

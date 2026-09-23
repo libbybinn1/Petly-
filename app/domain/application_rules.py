@@ -41,9 +41,9 @@ ALLOWED_APPLICATION_TRANSITIONS: dict[ApplicationStatus, frozenset[ApplicationSt
     ),
     ApplicationStatus.REJECTED: frozenset(),
     ApplicationStatus.WITHDRAWN: frozenset(),
-    # Only a cascade-closed application may reopen, and that is enforced
-    # separately by `may_reopen` - reaching SUBMITTED again is necessary but
-    # not sufficient.
+    # Structurally legal, but not sufficient on its own: only an
+    # application closed *by* a specific approval may reopen when that
+    # approval is reversed. `may_reopen` below decides which.
     ApplicationStatus.CLOSED: frozenset({ApplicationStatus.SUBMITTED}),
 }
 
@@ -178,6 +178,30 @@ def select_applications_to_close(
     )
 
 
+def may_reopen(
+    application: ApplicationSnapshot, reversed_application_id: str
+) -> bool:
+    """Whether reversing one approval makes this closed application reopenable.
+
+    Reaching SUBMITTED again is structurally legal from CLOSED, but that is
+    not the whole rule. An application the adopter withdrew, or that staff
+    rejected on its own merits, is also CLOSED - and reopening it would
+    resurrect a decision nobody reversed. The cause recorded on the closing
+    event is what tells those cases apart.
+
+    Args:
+        application: The application to judge.
+        reversed_application_id: The approval that was undone.
+
+    Returns:
+        True only when this application was closed by that approval.
+    """
+    return (
+        application.status is ApplicationStatus.CLOSED
+        and application.closed_because_application_id == reversed_application_id
+    )
+
+
 def select_applications_to_reopen(
     reversed_application_id: str, adopter_applications: list[ApplicationSnapshot]
 ) -> list[ApplicationSnapshot]:
@@ -205,8 +229,7 @@ def select_applications_to_reopen(
         (
             application
             for application in adopter_applications
-            if application.status is ApplicationStatus.CLOSED
-            and application.closed_because_application_id == reversed_application_id
+            if may_reopen(application, reversed_application_id)
         ),
         key=lambda application: application.application_id,
     )

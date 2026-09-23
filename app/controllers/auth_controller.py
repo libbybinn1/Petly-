@@ -8,21 +8,27 @@ rather than a domain rule; everything else is delegated.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from urllib.parse import urlparse
 
 from flask import Blueprint, flash, redirect, render_template, request, url_for
-from flask_login import current_user, login_required, login_user, logout_user
+from flask_login import current_user, login_user, logout_user
 from sqlalchemy import select
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.wrappers import Response
 
-from app.controllers.helpers import get_session_factory
+from app.controllers.helpers import ViewResult, get_session_factory
 from app.domain.enums import UserRole
 from app.infrastructure.models import AdopterProfile, User, new_identifier
-from app.security.authorization import AuthenticatedUser
+from app.security.authorization import AuthenticatedUser, require_sign_in
 
 auth_blueprint = Blueprint("auth", __name__)
 
 MINIMUM_PASSWORD_LENGTH = 8
+
+# Matches users.full_name, NVARCHAR(150). Longer input truncates on SQL
+# Server 2014 rather than saving, which surfaces as a 500 on a form that
+# looked perfectly valid.
+MAXIMUM_FULL_NAME_LENGTH = 150
 
 
 def _validate_registration(
@@ -36,6 +42,10 @@ def _validate_registration(
     errors: list[str] = []
     if not full_name.strip():
         errors.append("Please enter your full name.")
+    elif len(full_name.strip()) > MAXIMUM_FULL_NAME_LENGTH:
+        errors.append(
+            f"Please keep your name under {MAXIMUM_FULL_NAME_LENGTH} characters."
+        )
     if "@" not in email or "." not in email.split("@")[-1]:
         errors.append("Please enter a valid email address.")
     if len(password) < MINIMUM_PASSWORD_LENGTH:
@@ -46,7 +56,7 @@ def _validate_registration(
 
 
 @auth_blueprint.route("/login", methods=["GET", "POST"])
-def login() -> str | Response:
+def login() -> ViewResult:
     """Sign a user in."""
     if current_user.is_authenticated:
         return redirect(url_for("home.index"))
@@ -87,13 +97,42 @@ def login() -> str | Response:
     flash(f"Welcome back, {authenticated.full_name.split()[0]}.", "success")
 
     next_url = request.args.get("next")
-    if next_url and next_url.startswith("/"):
+    if next_url is not None and _is_safe_redirect_target(next_url):
         return redirect(next_url)
     return redirect(url_for("home.index"))
 
 
+def _is_safe_redirect_target(target: str) -> bool:
+    """Whether a `next` value points inside this application.
+
+    The value is attacker-controlled: anyone can send a victim a link to
+    /login?next=... . A check for a leading "/" is not enough, because
+    "//evil.example.com" also starts with one and is a fully qualified
+    off-site address. That makes the sign-in form redirect a user to an
+    attacker's page immediately after they typed their password on a
+    genuine screen, which is a credible phishing step.
+
+    Parsing decides it rather than character inspection: a URL with any
+    scheme or any host is off-site, whatever spelling was used to smuggle
+    it past, including a backslash that some browsers normalise to "/".
+
+    Args:
+        target: The raw `next` query parameter.
+
+    Returns:
+        True only for a relative path within this application.
+    """
+    if not target.startswith("/"):
+        return False
+    if target.startswith(("//", "/\\")):
+        return False
+
+    parsed = urlparse(target)
+    return not parsed.scheme and not parsed.netloc
+
+
 @auth_blueprint.route("/register", methods=["GET", "POST"])
-def register() -> str | Response:
+def register() -> ViewResult:
     """Create a new adopter account."""
     if current_user.is_authenticated:
         return redirect(url_for("home.index"))
@@ -144,7 +183,7 @@ def register() -> str | Response:
 
 
 @auth_blueprint.route("/logout", methods=["POST"])
-@login_required
+@require_sign_in
 def logout() -> Response:
     """Sign the current user out.
 
