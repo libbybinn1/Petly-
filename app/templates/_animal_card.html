@@ -3,18 +3,22 @@
    One partial for the home page, search results, natural-language results and
    every match grid, so those four screens cannot drift apart (docs/UX.md 3).
 
-   `loop` is the enclosing grid's loop when there is one, so the first four
-   cards - the ones above the fold at every width - load eagerly and the rest
-   stay lazy. `loading="lazy"` on a card the visitor is already looking at
-   delays the image rather than saving anything. #}
-{% set card_position = loop.index if loop is defined else 1 %}
+   Optional `card_position` (1-based). The first four cards - the ones above
+   the fold at every width - load eagerly and the rest stay lazy, because
+   `loading="lazy"` on a card the visitor is already looking at delays the
+   image rather than saving anything. A grid opts in with
+   `{% raw %}{% with card_position = loop.index %}{% endraw %}` around the
+   include; Jinja keeps `loop` in the enclosing template's own frame, so an
+   include cannot read it. Without it every card loads eagerly, which is what
+   the page did before. #}
+{% set card_index = card_position|default(1, true) %}
 <a class="animal-card" href="{{ url_for('animals.details', animal_id=animal.animal_id) }}">
   <div class="animal-card__media">
     {% if animal.image_url %}
       <img src="{{ animal.image_url }}"
            alt="{{ animal.name }}, a {{ animal.species_label|lower }}"
            decoding="async"
-           {% if card_position > 4 %}loading="lazy"{% endif %}>
+           {% if card_index > 4 %}loading="lazy"{% endif %}>
     {% else %}
       <div class="animal-card__placeholder" aria-hidden="true">
         <svg class="icon icon--filled icon--xl"><use href="#icon-paw"></use></svg>

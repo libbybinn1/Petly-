@@ -72,7 +72,10 @@
       four-column track leaves a row of two orphaned. -#}
   <div class="grid-animals grid-animals--featured">
     {% for animal in featured_animals %}
-      {% include "_animal_card.html" %}
+      {#- `card_position` is what lets the partial load the first four eagerly
+          and the rest lazily: Jinja keeps `loop` in this template's frame, so
+          an include cannot see it. -#}
+      {% with card_position = loop.index %}{% include "_animal_card.html" %}{% endwith %}
     {% endfor %}
   </div>
 {% else %}
