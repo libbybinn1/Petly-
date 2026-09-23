@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}My matches — PetMatch{% endblock %}
+
+{% block content %}
+<div class="section-heading">
+  <div>
+    <h1>Animals that suit you</h1>
+    <p>Ranked from your profile — your home, your routine and what you told us you are looking for.</p>
+  </div>
+  <a class="btn btn--secondary btn--small" href="{{ url_for('animals.search') }}">Browse everything instead</a>
+</div>
+
+{% if matches %}
+  <div class="stack">
+    {% for match in matches %}
+    <article class="card card--padded candidate">
+      <div class="candidate__head">
+        {% with score = match.score %}{% include "matches/_score_badge.html" %}{% endwith %}
+
+        <a class="match-thumb" href="{{ url_for('animals.details', animal_id=match.animal_id) }}">
+          {% if match.image_url %}
+            <img src="{{ match.image_url }}" alt="{{ match.name }}" loading="lazy">
+          {% else %}
+            <span aria-hidden="true">🐾</span>
+          {% endif %}
+        </a>
+
+        <div class="candidate__identity">
+          <h3 style="margin-bottom:2px">
+            <a href="{{ url_for('animals.details', animal_id=match.animal_id) }}">{{ match.name }}</a>
+          </h3>
+          <p class="candidate__meta">
+            {{ match.species_label }}{% if match.breed %} · {{ match.breed }}{% endif %} · {{ match.city }}
+          </p>
+        </div>
+
+        <div class="candidate__actions">
+          <a class="btn btn--primary btn--small" href="{{ url_for('animals.details', animal_id=match.animal_id) }}">
+            Meet {{ match.name }}
+          </a>
+        </div>
+      </div>
+
+      <div class="candidate__body">
+        <div class="candidate__column">
+          <h4 class="panel-title">Why {{ match.name }} could suit you</h4>
+          {% if match.analysis and match.analysis.reasons %}
+            <ul class="reason-list">
+              {% for reason in match.analysis.reasons %}<li>{{ reason }}</li>{% endfor %}
+            </ul>
+          {% elif match.analysis_is_pending %}
+            <p class="pending">We are still preparing this explanation. The score is already final.</p>
+          {% endif %}
+
+          {% if match.analysis and match.analysis.concerns %}
+            <h4 class="panel-title" style="margin-top: var(--space-4)">Things to consider</h4>
+            <ul class="reason-list reason-list--concern">
+              {% for concern in match.analysis.concerns %}<li>{{ concern }}</li>{% endfor %}
+            </ul>
+          {% endif %}
+        </div>
+
+        <div class="candidate__column">
+          <h4 class="panel-title">How this was scored</h4>
+          <div class="mini-criteria">
+            {% for item in match.score.criterion_scores[:4] %}
+            <div class="mini-criterion">
+              <span class="mini-criterion__name">{{ item.criterion.value|humanize }}</span>
+              <span class="mini-criterion__track">
+                <span class="mini-criterion__fill {% if item.score >= 75 %}is-strong{% elif item.score >= 50 %}is-fair{% else %}is-weak{% endif %}"
+                      style="width: {{ item.score }}%"></span>
+              </span>
+              <span class="mini-criterion__value">{{ item.score }}</span>
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+{% else %}
+  <div class="empty">
+    <div class="empty__icon">🐾</div>
+    <h3>No matches yet</h3>
+    <p>
+      {% if not has_complete_profile %}
+        Complete your adoption profile and we can rank animals for your situation.
+      {% else %}
+        No currently available animal clears the eligibility rules for your household.
+        That usually changes as new animals arrive.
+      {% endif %}
+    </p>
+    <a class="btn btn--primary" href="{{ url_for('animals.search') }}">Browse all animals</a>
+  </div>
+{% endif %}
+{% endblock %}

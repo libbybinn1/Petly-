@@ -145,3 +145,8 @@ Google-convention docstrings. `ruff check` and `mypy --strict` must pass.
   See the `db-management` skill for the full list of engine constraints.
 - **Secrets live in `.env`**, which is gitignored. Never commit credentials,
   never hardcode them, never paste them into documentation.
+- **The virtual environment lives outside the project**, at
+  `C:\Users\libbyb\venvs\petmatch`. The project sits in OneDrive, and OneDrive
+  syncing a venv corrupts it: Python fails to read its own site-packages and
+  raises a *different* error on each run. Never create a `.venv` inside this
+  directory. See README.md.

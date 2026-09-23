@@ -24,6 +24,9 @@
         {% if current_user.is_staff %}
           <a class="navlink {% if request.endpoint == 'animals.manage' %}navlink--active{% endif %}"
              href="{{ url_for('animals.manage') }}">Manage</a>
+        {% else %}
+          <a class="navlink {% if request.endpoint == 'matches.find_my_pet' %}navlink--active{% endif %}"
+             href="{{ url_for('matches.find_my_pet') }}">My matches</a>
         {% endif %}
 
         <span class="avatar" title="{{ current_user.full_name }}">{{ current_user.initials }}</span>

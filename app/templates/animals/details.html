@@ -84,11 +84,21 @@
 
     {% if current_user.is_authenticated and current_user.is_staff %}
       <div class="card card--padded">
-        <h3 style="font-size: 0.95rem">Staff view</h3>
-        <p style="margin-bottom: 0; color: var(--text-muted)">
+        <h3 style="font-size: 0.95rem">Staff actions</h3>
+        <p style="color: var(--text-muted)">
           {{ animal.active_application_count }} active application{{ '' if animal.active_application_count == 1 else 's' }}
           for {{ animal.name }}.
         </p>
+        <div style="display:flex; gap: var(--space-2); flex-wrap: wrap">
+          <a class="btn btn--primary btn--small"
+             href="{{ url_for('matches.find_my_adopter', animal_id=animal.animal_id) }}">
+            Find my adopter
+          </a>
+          <a class="btn btn--secondary btn--small"
+             href="{{ url_for('matches.find_more_adopters', animal_id=animal.animal_id) }}">
+            Find more adopters
+          </a>
+        </div>
       </div>
     {% elif animal.is_available %}
       <a class="btn btn--primary btn--block" href="#">Apply to adopt {{ animal.name }}</a>

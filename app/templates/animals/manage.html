@@ -77,7 +77,10 @@
             <span class="tag tag--warning">{{ animal.status|humanize }}</span>
           {% endif %}
         </td>
-        <td><a class="btn btn--secondary btn--small" href="{{ url_for('animals.details', animal_id=animal.animal_id) }}">Open</a></td>
+        <td style="white-space:nowrap">
+          <a class="btn btn--secondary btn--small" href="{{ url_for('animals.details', animal_id=animal.animal_id) }}">Open</a>
+          <a class="btn btn--ghost btn--small" href="{{ url_for('matches.find_my_adopter', animal_id=animal.animal_id) }}">Rank</a>
+        </td>
       </tr>
       {% endfor %}
     </tbody>

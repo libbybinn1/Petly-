@@ -1,0 +1,12 @@
+{# Score badge. Expects `score` (a MatchScore). #}
+{% if score.is_disqualified %}
+  <span class="score score--blocked" title="{{ score.disqualification_reason }}">
+    <span class="score__value">—</span>
+    <span class="score__label">Not eligible</span>
+  </span>
+{% else %}
+  <span class="score {% if score.score >= 75 %}score--strong{% elif score.score >= 50 %}score--fair{% else %}score--weak{% endif %}">
+    <span class="score__value">{{ score.score }}</span>
+    <span class="score__label">match</span>
+  </span>
+{% endif %}

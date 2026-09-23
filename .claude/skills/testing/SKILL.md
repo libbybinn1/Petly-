@@ -5,12 +5,17 @@ description: Run and debug PetMatch test suites. Use when running pytest or Play
 
 # Testing — PetMatch
 
-One entry point: `scripts/test.py`. It selects suites by marker and formats
-output for fast diagnosis.
+Run pytest by marker. Note the interpreter path: the virtual environment is
+**outside** the project, because OneDrive corrupts a venv it syncs.
 
 ```bash
-.venv/Scripts/python.exe scripts/test.py <suite> [options]
+C:\Users\libbyb\venvs\petmatch\Scripts\python.exe -m pytest tests/ -q
+C:\Users\libbyb\venvs\petmatch\Scripts\python.exe -m pytest -m unit -q
 ```
+
+If a test fails with `OSError: [Errno 22]`, an `AttributeError` raised from
+inside `site-packages`, or a different import error on each run, the
+interpreter in use is a venv inside OneDrive. Use the external one.
 
 ## Suites
 

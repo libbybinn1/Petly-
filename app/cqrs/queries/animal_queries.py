@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.cqrs.base import Query, QueryHandler
 from app.domain.enums import ActivityLevel, AnimalSize, AnimalStatus, ApplicationStatus, Species
 from app.infrastructure.models import AdoptionApplication, Animal
+from app.infrastructure.sql_helpers import is_true
 
 # A results page stays small enough to scan without scrolling forever.
 DEFAULT_PAGE_SIZE = 12
@@ -187,9 +188,9 @@ def _apply_filters(statement: Select, filters: AnimalSearchFilters) -> Select:
     if filters.city:
         statement = statement.where(Animal.city == filters.city)
     if filters.good_with_children:
-        statement = statement.where(Animal.good_with_children.is_(True))
+        statement = statement.where(is_true(Animal.good_with_children))
     if filters.good_with_other_animals:
-        statement = statement.where(Animal.good_with_other_animals.is_(True))
+        statement = statement.where(is_true(Animal.good_with_other_animals))
     if filters.text:
         pattern = f"%{filters.text.strip()}%"
         statement = statement.where(

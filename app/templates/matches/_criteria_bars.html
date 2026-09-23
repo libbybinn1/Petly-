@@ -1,0 +1,16 @@
+{# Per-criterion breakdown. Expects `criteria` (list of CriterionScore). #}
+<div class="criteria">
+  {% for item in criteria %}
+  <div class="criterion">
+    <div class="criterion__head">
+      <span class="criterion__name">{{ item.criterion.value|humanize }}</span>
+      <span class="criterion__score">{{ item.score }}<span class="criterion__weight">· {{ (item.weight * 100)|round|int }}% weight</span></span>
+    </div>
+    <div class="criterion__track">
+      <div class="criterion__fill {% if item.score >= 75 %}is-strong{% elif item.score >= 50 %}is-fair{% else %}is-weak{% endif %}"
+           style="width: {{ item.score }}%"></div>
+    </div>
+    <p class="criterion__why">{{ item.explanation }}</p>
+  </div>
+  {% endfor %}
+</div>

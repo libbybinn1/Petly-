@@ -79,6 +79,16 @@ def create_app(configuration: Configuration | None = None) -> Flask:
 
 def _register_handlers(bus: MessageBus) -> None:
     """Register every command and query handler on the bus."""
+    from app.cqrs.commands.application_commands import (
+        ApproveApplicationCommand,
+        ApproveApplicationHandler,
+        ReverseApprovalCommand,
+        ReverseApprovalHandler,
+        SubmitApplicationCommand,
+        SubmitApplicationHandler,
+        WithdrawApplicationCommand,
+        WithdrawApplicationHandler,
+    )
     from app.cqrs.queries.animal_queries import (
         GetAnimalDetailsHandler,
         GetAnimalDetailsQuery,
@@ -87,10 +97,29 @@ def _register_handlers(bus: MessageBus) -> None:
         SearchAnimalsHandler,
         SearchAnimalsQuery,
     )
+    from app.cqrs.queries.match_queries import (
+        FindMoreAdoptersHandler,
+        FindMoreAdoptersQuery,
+        FindMyPetHandler,
+        FindMyPetQuery,
+        GetMatchAnalysisHandler,
+        GetMatchAnalysisQuery,
+        RankApplicantsHandler,
+        RankApplicantsQuery,
+    )
 
     bus.register_query(SearchAnimalsQuery, SearchAnimalsHandler())
     bus.register_query(GetAnimalDetailsQuery, GetAnimalDetailsHandler())
     bus.register_query(ListAllAnimalsQuery, ListAllAnimalsHandler())
+    bus.register_query(RankApplicantsQuery, RankApplicantsHandler())
+    bus.register_query(FindMoreAdoptersQuery, FindMoreAdoptersHandler())
+    bus.register_query(FindMyPetQuery, FindMyPetHandler())
+    bus.register_query(GetMatchAnalysisQuery, GetMatchAnalysisHandler())
+
+    bus.register_command(SubmitApplicationCommand, SubmitApplicationHandler())
+    bus.register_command(WithdrawApplicationCommand, WithdrawApplicationHandler())
+    bus.register_command(ApproveApplicationCommand, ApproveApplicationHandler())
+    bus.register_command(ReverseApprovalCommand, ReverseApprovalHandler())
 
 
 def _register_blueprints(application: Flask) -> None:
@@ -98,10 +127,12 @@ def _register_blueprints(application: Flask) -> None:
     from app.controllers.animal_controller import animal_blueprint
     from app.controllers.auth_controller import auth_blueprint
     from app.controllers.home_controller import home_blueprint
+    from app.controllers.match_controller import match_blueprint
 
     application.register_blueprint(home_blueprint)
     application.register_blueprint(auth_blueprint)
     application.register_blueprint(animal_blueprint)
+    application.register_blueprint(match_blueprint)
 
 
 def _register_error_handlers(application: Flask) -> None:
