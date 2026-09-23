@@ -65,10 +65,13 @@
               Full analysis
             </a>
           {% endif %}
-          {% if is_discovery %}
-            <button class="btn btn--primary btn--small" type="button" disabled title="Invitations are the next feature">
-              Send invitation
-            </button>
+          {% if is_discovery and not candidate.score.is_disqualified %}
+            <form method="post" action="{{ url_for('matches.send_invitation', animal_id=ranking.animal_id) }}">
+              <input type="hidden" name="adopter_profile_id" value="{{ candidate.adopter_profile_id }}">
+              <input type="hidden" name="staff_message"
+                     value="We thought {{ ranking.animal_name }} might be a good fit for your home.">
+              <button class="btn btn--primary btn--small" type="submit">Send invitation</button>
+            </form>
           {% endif %}
         </div>
       </div>

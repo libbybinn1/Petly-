@@ -27,6 +27,10 @@
         {% else %}
           <a class="navlink {% if request.endpoint == 'matches.find_my_pet' %}navlink--active{% endif %}"
              href="{{ url_for('matches.find_my_pet') }}">My matches</a>
+          <a class="navlink {% if request.endpoint == 'personal.my_applications' %}navlink--active{% endif %}"
+             href="{{ url_for('personal.my_applications') }}">Applications</a>
+          <a class="navlink {% if request.endpoint == 'personal.my_invitations' %}navlink--active{% endif %}"
+             href="{{ url_for('personal.my_invitations') }}">Invitations</a>
         {% endif %}
 
         <span class="avatar" title="{{ current_user.full_name }}">{{ current_user.initials }}</span>

@@ -55,6 +55,10 @@ class RecordNotFoundError(LookupError):
     """Raised when a command targets a record that does not exist."""
 
 
+class NotYourRecordError(PermissionError):
+    """Raised when a command targets a record belonging to somebody else."""
+
+
 # --------------------------------------------------------------------------
 # Submit
 # --------------------------------------------------------------------------
@@ -151,10 +155,15 @@ class SubmitApplicationHandler(CommandHandler[str]):
 
 @dataclass(frozen=True)
 class WithdrawApplicationCommand(Command):
-    """An adopter withdraws their own application."""
+    """An adopter withdraws their own application.
+
+    Carries the withdrawing adopter's profile identifier so the handler can
+    prove the application is theirs (FR-2.4).
+    """
 
     application_id: str
     actor_user_id: str
+    adopter_profile_id: str
 
 
 class WithdrawApplicationHandler(CommandHandler[None]):
@@ -165,6 +174,7 @@ class WithdrawApplicationHandler(CommandHandler[None]):
 
         Raises:
             RecordNotFoundError: The application does not exist.
+            NotYourRecordError: It belongs to a different adopter.
             IllegalTransitionError: It is already in a final state.
         """
         assert isinstance(command, WithdrawApplicationCommand)
@@ -172,6 +182,10 @@ class WithdrawApplicationHandler(CommandHandler[None]):
         application = session.get(AdoptionApplication, command.application_id)
         if application is None:
             raise RecordNotFoundError("Application does not exist.")
+
+        # Ownership belongs with the rule, not only in the controller.
+        if application.adopter_profile_id != command.adopter_profile_id:
+            raise NotYourRecordError("This application belongs to another adopter.")
 
         ensure_application_transition_allowed(
             ApplicationStatus(application.status), ApplicationStatus.WITHDRAWN

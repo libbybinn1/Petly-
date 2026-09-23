@@ -15,18 +15,18 @@ Status legend: **Done** · **In progress** · **Planned**
 | F-04 | Structured animal search | Done |
 | F-05 | Animal details view | Done |
 | F-06 | Adopter profile | Planned |
-| F-07 | Adoption application | Planned |
-| F-08 | Approval cascade and reopen | Planned |
-| F-09 | Deterministic matching engine | In progress |
-| F-10 | MCP tool server | In progress |
-| F-11 | RAG knowledge base | In progress |
-| F-12 | Autonomous agent process | In progress |
-| F-13 | Find My Pet | Planned |
+| F-07 | Adoption application | Done |
+| F-08 | Approval cascade and reopen | Done |
+| F-09 | Deterministic matching engine | Done |
+| F-10 | MCP tool server | Done |
+| F-11 | RAG knowledge base | Done |
+| F-12 | Autonomous agent process | Done |
+| F-13 | Find My Pet | Done |
 | F-14 | Natural-language search | Planned |
-| F-15 | Find My Adopter | Planned |
-| F-16 | Find More Adopters | Planned |
-| F-17 | Invitations | Planned |
-| F-18 | Internal notifications | Planned |
+| F-15 | Find My Adopter | Done |
+| F-16 | Find More Adopters | Done |
+| F-17 | Invitations | Done |
+| F-18 | Internal notifications | Done |
 | F-19 | Staff dashboard | Planned |
 | F-20 | Activity history | Planned |
 
@@ -158,7 +158,7 @@ Child age given without children present → rejected as inconsistent.
 
 ---
 
-## F-07 Adoption application — Planned
+## F-07 Adoption application — Done
 
 **User story.** As an adopter, I want to apply for several animals, so that
 I am not limited to one chance.
@@ -187,7 +187,7 @@ asynchronous — the adopter never waits on the model.
 
 ---
 
-## F-08 Approval cascade and reopen — Planned
+## F-08 Approval cascade and reopen — Done
 
 **User story.** As staff, I want approving one application to close that
 adopter's other active applications, without losing the ability to undo it.
@@ -217,7 +217,7 @@ system queries applications where `closed_because_application_id = A`. Those,
 
 ---
 
-## F-09 Deterministic matching engine — In progress
+## F-09 Deterministic matching engine — Done
 
 **User story.** As a user of either role, I want match scores I can
 interrogate, so that I trust the recommendation.
@@ -243,7 +243,7 @@ temperament, special-care requirements, location.
 
 ---
 
-## F-10 MCP tool server — In progress
+## F-10 MCP tool server — Done
 
 **User story.** As the agent, I need to fetch adopter and animal records
 through tools, so that I do not depend on the application's internals.
@@ -260,7 +260,7 @@ tools.
 
 ---
 
-## F-11 RAG knowledge base — In progress
+## F-11 RAG knowledge base — Done
 
 **User story.** As the agent, I need curated care knowledge, so that my
 explanations rest on documented guidance rather than invention.
@@ -277,7 +277,7 @@ DB holds knowledge only — never adopter or animal records.
 
 ---
 
-## F-12 Autonomous agent process — In progress
+## F-12 Autonomous agent process — Done
 
 **User story.** As the organization, I want an assistant that assembles
 evidence and explains matches, while people keep the decisions.
@@ -305,7 +305,7 @@ gating, failure handling.
 
 ---
 
-## F-13 Find My Pet — Planned
+## F-13 Find My Pet — Done
 
 **User story.** As an adopter, I want suggestions without typing a query, so
 that I can start from who I am rather than what I can describe.
@@ -334,7 +334,7 @@ intent is explicit and visible in the interface.
 
 ---
 
-## F-15 Find My Adopter — Planned
+## F-15 Find My Adopter — Done
 
 **User story.** As staff, I want existing applicants for one animal ranked,
 so that I review the strongest first.
@@ -348,7 +348,7 @@ inspectable, never a bare number. Staff decide; the agent does not.
 
 ---
 
-## F-16 Find More Adopters — Planned
+## F-16 Find More Adopters — Done
 
 **User story.** As staff, I want to find suitable adopters who never applied,
 so that a good home is not missed.
@@ -361,7 +361,7 @@ people who did **not** apply. Only opted-in adopters appear (spec §10).
 
 ---
 
-## F-17 Invitations — Planned
+## F-17 Invitations — Done
 
 **User story.** As staff, I want to invite a candidate to consider an animal;
 as an adopter, I want to accept or decline.
@@ -379,7 +379,7 @@ timezone-aware datetimes.
 
 ---
 
-## F-18 Internal notifications — Planned
+## F-18 Internal notifications — Done
 
 Internal inbox only, no email (spec §23). Generated for invitations received,
 invitation responses, application status changes and completed analyses.

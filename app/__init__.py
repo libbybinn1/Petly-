@@ -89,6 +89,16 @@ def _register_handlers(bus: MessageBus) -> None:
         WithdrawApplicationCommand,
         WithdrawApplicationHandler,
     )
+    from app.cqrs.commands.invitation_commands import (
+        ExpireOverdueInvitationsCommand,
+        ExpireOverdueInvitationsHandler,
+        MarkInvitationViewedCommand,
+        MarkInvitationViewedHandler,
+        RespondToInvitationCommand,
+        RespondToInvitationHandler,
+        SendInvitationCommand,
+        SendInvitationHandler,
+    )
     from app.cqrs.queries.animal_queries import (
         GetAnimalDetailsHandler,
         GetAnimalDetailsQuery,
@@ -107,6 +117,14 @@ def _register_handlers(bus: MessageBus) -> None:
         RankApplicantsHandler,
         RankApplicantsQuery,
     )
+    from app.cqrs.queries.personal_queries import (
+        CountUnreadNotificationsHandler,
+        CountUnreadNotificationsQuery,
+        ListMyApplicationsHandler,
+        ListMyApplicationsQuery,
+        ListMyInvitationsHandler,
+        ListMyInvitationsQuery,
+    )
 
     bus.register_query(SearchAnimalsQuery, SearchAnimalsHandler())
     bus.register_query(GetAnimalDetailsQuery, GetAnimalDetailsHandler())
@@ -120,6 +138,18 @@ def _register_handlers(bus: MessageBus) -> None:
     bus.register_command(WithdrawApplicationCommand, WithdrawApplicationHandler())
     bus.register_command(ApproveApplicationCommand, ApproveApplicationHandler())
     bus.register_command(ReverseApprovalCommand, ReverseApprovalHandler())
+    bus.register_command(SendInvitationCommand, SendInvitationHandler())
+    bus.register_command(MarkInvitationViewedCommand, MarkInvitationViewedHandler())
+    bus.register_command(RespondToInvitationCommand, RespondToInvitationHandler())
+    bus.register_command(
+        ExpireOverdueInvitationsCommand, ExpireOverdueInvitationsHandler()
+    )
+
+    bus.register_query(ListMyInvitationsQuery, ListMyInvitationsHandler())
+    bus.register_query(ListMyApplicationsQuery, ListMyApplicationsHandler())
+    bus.register_query(
+        CountUnreadNotificationsQuery, CountUnreadNotificationsHandler()
+    )
 
 
 def _register_blueprints(application: Flask) -> None:
@@ -128,11 +158,13 @@ def _register_blueprints(application: Flask) -> None:
     from app.controllers.auth_controller import auth_blueprint
     from app.controllers.home_controller import home_blueprint
     from app.controllers.match_controller import match_blueprint
+    from app.controllers.personal_controller import personal_blueprint
 
     application.register_blueprint(home_blueprint)
     application.register_blueprint(auth_blueprint)
     application.register_blueprint(animal_blueprint)
     application.register_blueprint(match_blueprint)
+    application.register_blueprint(personal_blueprint)
 
 
 def _register_error_handlers(application: Flask) -> None:

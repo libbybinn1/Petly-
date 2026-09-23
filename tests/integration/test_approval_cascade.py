@@ -374,7 +374,12 @@ class TestReopenRule:
 
         with session_factory() as session:
             WithdrawApplicationHandler().handle(
-                WithdrawApplicationCommand(withdrawn, world["adopter_user_id"]), session
+                WithdrawApplicationCommand(
+                    withdrawn,
+                    world["adopter_user_id"],
+                    world["adopter_profile_id"],
+                ),
+                session,
             )
             session.commit()
 
@@ -501,7 +506,12 @@ class TestEventLogIntegrity:
 
         with session_factory() as session:
             WithdrawApplicationHandler().handle(
-                WithdrawApplicationCommand(withdrawn, world["adopter_user_id"]), session
+                WithdrawApplicationCommand(
+                    withdrawn,
+                    world["adopter_user_id"],
+                    world["adopter_profile_id"],
+                ),
+                session,
             )
             session.commit()
         with session_factory() as session:
@@ -552,7 +562,11 @@ class TestIllegalTransitions:
 
         with pytest.raises(IllegalTransitionError), session_factory() as session:
             WithdrawApplicationHandler().handle(
-                WithdrawApplicationCommand(application_id, world["adopter_user_id"]),
+                WithdrawApplicationCommand(
+                    application_id,
+                    world["adopter_user_id"],
+                    world["adopter_profile_id"],
+                ),
                 session,
             )
 
@@ -564,7 +578,11 @@ class TestIllegalTransitions:
 
         with session_factory() as session:
             WithdrawApplicationHandler().handle(
-                WithdrawApplicationCommand(application_id, world["adopter_user_id"]),
+                WithdrawApplicationCommand(
+                    application_id,
+                    world["adopter_user_id"],
+                    world["adopter_profile_id"],
+                ),
                 session,
             )
             session.commit()

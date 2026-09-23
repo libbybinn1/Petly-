@@ -7,17 +7,20 @@ server for every staff route (blueprint section 12).
 
 from __future__ import annotations
 
-from flask import Blueprint, abort, flash, redirect, render_template, url_for
+from flask import Blueprint, abort, flash, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
 from werkzeug.wrappers import Response
 
 from app.controllers.helpers import get_bus
+from app.cqrs.commands.application_commands import RecordNotFoundError
+from app.cqrs.commands.invitation_commands import SendInvitationCommand
 from app.cqrs.queries.match_queries import (
     FindMoreAdoptersQuery,
     FindMyPetQuery,
     GetMatchAnalysisQuery,
     RankApplicantsQuery,
 )
+from app.domain.invitation_rules import InvitationNotAllowedError
 from app.security.authorization import require_adopter, require_staff
 
 match_blueprint = Blueprint("matches", __name__)
@@ -97,3 +100,36 @@ def analysis_detail(match_analysis_id: str) -> str:
         abort(404)
 
     return render_template("matches/analysis.html", analysis=analysis)
+
+
+@match_blueprint.route("/animals/<animal_id>/invite", methods=["POST"])
+@login_required
+@require_staff()
+def send_invitation(animal_id: str) -> Response:
+    """Invite one discovered adopter to consider this animal (spec section 7.4).
+
+    The invitation opens a 72-hour window. Eligibility is re-checked in the
+    command rather than trusted from the page that offered the button, since
+    the roster can change between rendering and clicking.
+    """
+    adopter_profile_id = request.form.get("adopter_profile_id", "")
+    if not adopter_profile_id:
+        abort(400)
+
+    try:
+        get_bus().dispatch_command(
+            SendInvitationCommand(
+                animal_id=animal_id,
+                adopter_profile_id=adopter_profile_id,
+                staff_user_id=current_user.user_id,
+                staff_message=request.form.get("staff_message") or None,
+            )
+        )
+    except InvitationNotAllowedError as error:
+        flash(str(error), "error")
+        return redirect(url_for("matches.find_more_adopters", animal_id=animal_id))
+    except RecordNotFoundError:
+        abort(404)
+
+    flash("Invitation sent. The adopter has 72 hours to respond.", "success")
+    return redirect(url_for("matches.find_more_adopters", animal_id=animal_id))

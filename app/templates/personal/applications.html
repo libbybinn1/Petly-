@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}My applications — PetMatch{% endblock %}
+
+{% block content %}
+<div class="section-heading">
+  <div>
+    <h1>My applications</h1>
+    <p>You may apply for several animals. If one is approved, the others close automatically.</p>
+  </div>
+  <a class="btn btn--secondary btn--small" href="{{ url_for('animals.search') }}">Browse animals</a>
+</div>
+
+{% if applications %}
+<div class="table-wrap">
+  <table class="table">
+    <thead>
+      <tr>
+        <th></th>
+        <th>Animal</th>
+        <th>Submitted</th>
+        <th>Status</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for application in applications %}
+      <tr>
+        <td>
+          {% if application.animal_image_url %}
+            <img class="table__thumb" src="{{ application.animal_image_url }}" alt="" loading="lazy">
+          {% else %}
+            <div class="table__thumb" style="display:grid;place-items:center">🐾</div>
+          {% endif %}
+        </td>
+        <td>
+          <a href="{{ url_for('animals.details', animal_id=application.animal_id) }}">
+            <strong>{{ application.animal_name }}</strong>
+          </a><br>
+          <span style="color:var(--text-muted); font-size:0.85rem">
+            {{ application.animal_species|humanize }}
+            {% if application.came_from_invitation %} · from an invitation{% endif %}
+          </span>
+        </td>
+        <td style="white-space:nowrap">{{ application.submitted_at.strftime('%d %b %Y') }}</td>
+        <td>
+          {% if application.status == 'APPROVED' %}
+            <span class="tag tag--success">Approved</span>
+          {% elif application.status == 'REJECTED' %}
+            <span class="tag tag--danger">Not successful</span>
+          {% elif application.status == 'WITHDRAWN' %}
+            <span class="tag">Withdrawn</span>
+          {% elif application.status == 'CLOSED' %}
+            <span class="tag tag--info">Closed</span>
+          {% elif application.status == 'UNDER_REVIEW' %}
+            <span class="tag tag--warning">Under review</span>
+          {% else %}
+            <span class="tag tag--brand">Submitted</span>
+          {% endif %}
+        </td>
+        <td style="white-space:nowrap">
+          {% if application.is_active %}
+            <form method="post"
+                  action="{{ url_for('personal.withdraw_application', application_id=application.application_id) }}">
+              <button class="btn btn--ghost btn--small" type="submit">Withdraw</button>
+            </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<p class="pending" style="margin-top: var(--space-4)">
+  A closed application was ended because another of your applications was approved.
+  Its history is kept, and it can be reopened if that adoption does not go ahead.
+</p>
+
+{% else %}
+  <div class="empty">
+    <div class="empty__icon">📋</div>
+    <h3>You have not applied for anything yet</h3>
+    <p>When you find an animal that suits you, apply from its page.</p>
+    <a class="btn btn--primary" href="{{ url_for('matches.find_my_pet') }}">See your matches</a>
+  </div>
+{% endif %}
+{% endblock %}
