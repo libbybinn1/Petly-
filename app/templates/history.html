@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}History — {{ history.title }}{% endblock %}
+
+{% block content %}
+<div class="section-heading">
+  <div>
+    <h1>{{ history.title }}</h1>
+    <p>Everything recorded for this {{ history.aggregate_type|lower }}, oldest first.</p>
+  </div>
+  <a class="btn btn--secondary btn--small" href="{{ url_for('dashboard.dashboard') }}">Back to dashboard</a>
+</div>
+
+<div class="card card--padded">
+  <ol class="timeline">
+    {% for entry in history.entries %}
+    <li class="timeline__item">
+      <span class="timeline__marker {% if entry.was_caused_by_the_system %}is-system{% endif %}"></span>
+      <div class="timeline__body">
+        <div class="timeline__head">
+          <strong>{{ entry.actor_name }}</strong> {{ entry.description }}
+          {% if entry.detail %}<span class="timeline__detail">&mdash; {{ entry.detail }}</span>{% endif %}
+        </div>
+        <div class="timeline__meta">
+          {{ entry.occurred_at.strftime('%d %b %Y, %H:%M') }} ·
+          step {{ entry.sequence_number }} · {{ entry.event_type }}
+        </div>
+      </div>
+    </li>
+    {% endfor %}
+  </ol>
+</div>
+
+<p class="pending" style="margin-top: var(--space-4)">
+  Read from the append-only event log. Nothing here is ever edited or deleted,
+  which is what lets a closed application be reopened correctly if the approval
+  that closed it is reversed.
+</p>
+{% endblock %}

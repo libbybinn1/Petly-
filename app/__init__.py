@@ -115,6 +115,10 @@ def _register_handlers(bus: MessageBus) -> None:
         GetDashboardSummaryHandler,
         GetDashboardSummaryQuery,
     )
+    from app.cqrs.queries.history_queries import (
+        GetAggregateHistoryHandler,
+        GetAggregateHistoryQuery,
+    )
     from app.cqrs.queries.match_queries import (
         FindMoreAdoptersHandler,
         FindMoreAdoptersQuery,
@@ -157,6 +161,7 @@ def _register_handlers(bus: MessageBus) -> None:
 
     bus.register_query(GetDashboardSummaryQuery, GetDashboardSummaryHandler())
     bus.register_query(GetMyProfileQuery, GetMyProfileHandler())
+    bus.register_query(GetAggregateHistoryQuery, GetAggregateHistoryHandler())
     bus.register_query(ListMyInvitationsQuery, ListMyInvitationsHandler())
     bus.register_query(ListMyApplicationsQuery, ListMyApplicationsHandler())
     bus.register_query(

@@ -810,3 +810,20 @@ img { max-width: 100%; display: block; }
   padding: var(--space-4);
   margin-top: var(--space-4);
 }
+
+/* Event timeline */
+.timeline { list-style: none; margin: 0; padding: 0; }
+.timeline__item { display: grid; grid-template-columns: 18px 1fr; gap: var(--space-3); padding-bottom: var(--space-4); position: relative; }
+.timeline__item:not(:last-child)::before {
+  content: ""; position: absolute; left: 8px; top: 18px; bottom: 0;
+  width: 2px; background: var(--border-soft);
+}
+.timeline__marker {
+  width: 10px; height: 10px; border-radius: var(--radius-pill);
+  background: var(--brand-500); margin-top: 6px; z-index: 1;
+  box-shadow: 0 0 0 3px var(--surface-card);
+}
+.timeline__marker.is-system { background: var(--text-muted); }
+.timeline__head { font-size: 0.93rem; color: var(--text-normal); }
+.timeline__detail { color: var(--text-muted); }
+.timeline__meta { font-size: 0.78rem; color: var(--text-muted); margin-top: 2px; }

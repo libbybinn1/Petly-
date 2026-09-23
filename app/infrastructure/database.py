@@ -54,14 +54,20 @@ def create_database_engine(configuration: Configuration) -> Engine:
     if is_sqlite:
         return create_engine(url, echo=False, future=True)
 
+    # Somee's free tier allows few concurrent connections and throttles when
+    # pushed. A pool of 5 plus 5 overflow asks for up to ten, which is enough
+    # to get the whole application throttled under a burst - browser page
+    # loads fan out into parallel requests, so this is easy to hit. A smaller
+    # pool is slower in theory and far more reliable in practice.
     return create_engine(
         url,
         echo=False,
         future=True,
         pool_pre_ping=True,
         pool_recycle=280,
-        pool_size=5,
-        max_overflow=5,
+        pool_size=2,
+        max_overflow=3,
+        pool_timeout=30,
     )
 
 

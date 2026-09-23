@@ -80,6 +80,7 @@
         <td style="white-space:nowrap">
           <a class="btn btn--secondary btn--small" href="{{ url_for('animals.details', animal_id=animal.animal_id) }}">Open</a>
           <a class="btn btn--ghost btn--small" href="{{ url_for('matches.find_my_adopter', animal_id=animal.animal_id) }}">Rank</a>
+          <a class="btn btn--ghost btn--small" href="{{ url_for('dashboard.aggregate_history', aggregate_type='Animal', aggregate_id=animal.animal_id) }}">History</a>
         </td>
       </tr>
       {% endfor %}

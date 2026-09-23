@@ -11,7 +11,6 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-
 from agent_service.intent import IntentInterpreter, SearchIntent
 from agent_service.llm_client import (
     LanguageModelUnavailableError,
