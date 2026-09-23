@@ -114,6 +114,12 @@ def _to_item(row: Notification) -> NotificationItem:
     )
 
 
+SECONDS_PER_MINUTE = 60
+SECONDS_PER_HOUR = 60 * SECONDS_PER_MINUTE
+SECONDS_PER_DAY = 24 * SECONDS_PER_HOUR
+DAYS_PER_MONTH = 30
+
+
 def _relative_time(moment: datetime) -> str:
     """Describe how long ago something happened.
 
@@ -124,20 +130,22 @@ def _relative_time(moment: datetime) -> str:
         A short phrase such as "2 hours ago".
     """
     now = datetime.now(UTC).replace(tzinfo=None)
-    aware_moment = moment.replace(tzinfo=None) if moment.tzinfo else moment
-    seconds = (now - aware_moment).total_seconds()
+    naive_moment = moment.replace(tzinfo=None) if moment.tzinfo else moment
+    seconds = (now - naive_moment).total_seconds()
 
-    if seconds < 60:
+    if seconds < SECONDS_PER_MINUTE:
         return "just now"
-    if seconds < 3600:
-        minutes = int(seconds // 60)
-        return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
-    if seconds < 86400:
-        hours = int(seconds // 3600)
-        return f"{hours} hour{'s' if hours != 1 else ''} ago"
+    if seconds < SECONDS_PER_HOUR:
+        return _plural(int(seconds // SECONDS_PER_MINUTE), "minute")
+    if seconds < SECONDS_PER_DAY:
+        return _plural(int(seconds // SECONDS_PER_HOUR), "hour")
 
-    days = int(seconds // 86400)
-    if days < 30:
-        return f"{days} day{'s' if days != 1 else ''} ago"
-    months = days // 30
-    return f"{months} month{'s' if months != 1 else ''} ago"
+    days = int(seconds // SECONDS_PER_DAY)
+    if days < DAYS_PER_MONTH:
+        return _plural(days, "day")
+    return _plural(days // DAYS_PER_MONTH, "month")
+
+
+def _plural(count: int, unit: str) -> str:
+    """Format a count of time units as "3 days ago"."""
+    return f"{count} {unit}{'s' if count != 1 else ''} ago"

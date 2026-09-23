@@ -18,8 +18,8 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import Configuration, load_configuration
 from app.cqrs.base import MessageBus
-from app.infrastructure.database import create_database_engine, create_session_factory
 from app.cqrs.queries.personal_queries import CountUnreadNotificationsQuery
+from app.infrastructure.database import create_database_engine, create_session_factory
 from app.infrastructure.models import AdopterProfile, User
 from app.security.authorization import AuthenticatedUser
 
@@ -118,21 +118,32 @@ def create_app(configuration: Configuration | None = None) -> Flask:
 def _register_handlers(bus: MessageBus, settings: Configuration) -> None:
     """Register every command and query handler on the bus.
 
+    Split along the line the architecture already draws: commands and
+    queries live in separate maps and are dispatched by separate methods,
+    so listing them together made one function long enough that a missing
+    handler could hide in it.
+
     Args:
         bus: The bus to register on.
         settings: Loaded configuration, for the handlers that need a
             configured value rather than a hard-coded one.
     """
-    from app.cqrs.commands.notification_commands import (
-        MarkAllNotificationsReadCommand,
-        MarkAllNotificationsReadHandler,
-        MarkNotificationReadCommand,
-        MarkNotificationReadHandler,
-    )
-    from app.cqrs.queries.notification_queries import (
-        ListMyNotificationsHandler,
-        ListMyNotificationsQuery,
-    )
+    _register_commands(bus, settings)
+    _register_queries(bus)
+
+
+def _register_commands(bus: MessageBus, settings: Configuration) -> None:
+    """Register every write handler.
+
+    Imports are deferred into the function body, as they were before this
+    was split: these modules reach the ORM models, which import this
+    package, so importing them at module level would be circular.
+
+    Args:
+        bus: The bus to register on.
+        settings: Loaded configuration, for the one handler that takes a
+            configured value rather than a hard-coded one.
+    """
     from app.cqrs.commands.animal_commands import (
         ChangeAnimalStatusCommand,
         ChangeAnimalStatusHandler,
@@ -165,10 +176,54 @@ def _register_handlers(bus: MessageBus, settings: Configuration) -> None:
         SendInvitationCommand,
         SendInvitationHandler,
     )
+    from app.cqrs.commands.notification_commands import (
+        MarkAllNotificationsReadCommand,
+        MarkAllNotificationsReadHandler,
+        MarkNotificationReadCommand,
+        MarkNotificationReadHandler,
+    )
     from app.cqrs.commands.profile_commands import (
         SaveAdopterProfileCommand,
         SaveAdopterProfileHandler,
     )
+
+    bus.register_command(SubmitApplicationCommand, SubmitApplicationHandler())
+    bus.register_command(WithdrawApplicationCommand, WithdrawApplicationHandler())
+    bus.register_command(ApproveApplicationCommand, ApproveApplicationHandler())
+    bus.register_command(ReverseApprovalCommand, ReverseApprovalHandler())
+    bus.register_command(RejectApplicationCommand, RejectApplicationHandler())
+    bus.register_command(
+        MarkNotificationReadCommand, MarkNotificationReadHandler()
+    )
+    bus.register_command(
+        MarkAllNotificationsReadCommand, MarkAllNotificationsReadHandler()
+    )
+    bus.register_command(CreateAnimalCommand, CreateAnimalHandler())
+    bus.register_command(UpdateAnimalCommand, UpdateAnimalHandler())
+    bus.register_command(ChangeAnimalStatusCommand, ChangeAnimalStatusHandler())
+    bus.register_command(
+        MarkApplicationUnderReviewCommand, MarkApplicationUnderReviewHandler()
+    )
+    bus.register_command(SaveAdopterProfileCommand, SaveAdopterProfileHandler())
+    bus.register_command(
+        SendInvitationCommand,
+        SendInvitationHandler(
+            response_window_hours=settings.invitation_expiry_hours
+        ),
+    )
+    bus.register_command(MarkInvitationViewedCommand, MarkInvitationViewedHandler())
+    bus.register_command(RespondToInvitationCommand, RespondToInvitationHandler())
+    bus.register_command(
+        ExpireOverdueInvitationsCommand, ExpireOverdueInvitationsHandler()
+    )
+
+
+def _register_queries(bus: MessageBus) -> None:
+    """Register every read handler.
+
+    Takes no configuration: a query answers from stored state, so there is
+    nothing here for a setting to change.
+    """
     from app.cqrs.queries.animal_queries import (
         GetAnimalDetailsHandler,
         GetAnimalDetailsQuery,
@@ -195,6 +250,10 @@ def _register_handlers(bus: MessageBus, settings: Configuration) -> None:
         RankApplicantsHandler,
         RankApplicantsQuery,
     )
+    from app.cqrs.queries.notification_queries import (
+        ListMyNotificationsHandler,
+        ListMyNotificationsQuery,
+    )
     from app.cqrs.queries.personal_queries import (
         CountUnreadNotificationsHandler,
         CountUnreadNotificationsQuery,
@@ -212,38 +271,7 @@ def _register_handlers(bus: MessageBus, settings: Configuration) -> None:
     bus.register_query(FindMoreAdoptersQuery, FindMoreAdoptersHandler())
     bus.register_query(FindMyPetQuery, FindMyPetHandler())
     bus.register_query(GetMatchAnalysisQuery, GetMatchAnalysisHandler())
-
-    bus.register_command(SubmitApplicationCommand, SubmitApplicationHandler())
-    bus.register_command(WithdrawApplicationCommand, WithdrawApplicationHandler())
-    bus.register_command(ApproveApplicationCommand, ApproveApplicationHandler())
-    bus.register_command(ReverseApprovalCommand, ReverseApprovalHandler())
-    bus.register_command(RejectApplicationCommand, RejectApplicationHandler())
-    bus.register_command(
-        MarkNotificationReadCommand, MarkNotificationReadHandler()
-    )
-    bus.register_command(
-        MarkAllNotificationsReadCommand, MarkAllNotificationsReadHandler()
-    )
     bus.register_query(ListMyNotificationsQuery, ListMyNotificationsHandler())
-    bus.register_command(CreateAnimalCommand, CreateAnimalHandler())
-    bus.register_command(UpdateAnimalCommand, UpdateAnimalHandler())
-    bus.register_command(ChangeAnimalStatusCommand, ChangeAnimalStatusHandler())
-    bus.register_command(
-        MarkApplicationUnderReviewCommand, MarkApplicationUnderReviewHandler()
-    )
-    bus.register_command(SaveAdopterProfileCommand, SaveAdopterProfileHandler())
-    bus.register_command(
-        SendInvitationCommand,
-        SendInvitationHandler(
-            response_window_hours=settings.invitation_expiry_hours
-        ),
-    )
-    bus.register_command(MarkInvitationViewedCommand, MarkInvitationViewedHandler())
-    bus.register_command(RespondToInvitationCommand, RespondToInvitationHandler())
-    bus.register_command(
-        ExpireOverdueInvitationsCommand, ExpireOverdueInvitationsHandler()
-    )
-
     bus.register_query(GetDashboardSummaryQuery, GetDashboardSummaryHandler())
     bus.register_query(GetMyProfileQuery, GetMyProfileHandler())
     bus.register_query(GetAggregateHistoryQuery, GetAggregateHistoryHandler())
