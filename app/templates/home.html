@@ -11,6 +11,9 @@
   </p>
   <div class="hero__actions">
     <a class="btn btn--primary" href="{{ url_for('animals.search') }}">Browse {{ available_count }} animals</a>
+    <a class="btn btn--secondary" href="{{ url_for('matches.natural_language_search') }}">
+      Describe what you want
+    </a>
     {% if not is_signed_in %}
       <a class="btn btn--secondary" href="{{ url_for('auth.register') }}">Create a profile</a>
     {% endif %}

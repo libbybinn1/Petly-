@@ -14,7 +14,7 @@ Status legend: **Done** · **In progress** · **Planned**
 | F-03 | Animal catalogue and management | Done |
 | F-04 | Structured animal search | Done |
 | F-05 | Animal details view | Done |
-| F-06 | Adopter profile | Planned |
+| F-06 | Adopter profile | Done |
 | F-07 | Adoption application | Done |
 | F-08 | Approval cascade and reopen | Done |
 | F-09 | Deterministic matching engine | Done |
@@ -22,13 +22,13 @@ Status legend: **Done** · **In progress** · **Planned**
 | F-11 | RAG knowledge base | Done |
 | F-12 | Autonomous agent process | Done |
 | F-13 | Find My Pet | Done |
-| F-14 | Natural-language search | Planned |
+| F-14 | Natural-language search | Done |
 | F-15 | Find My Adopter | Done |
 | F-16 | Find More Adopters | Done |
 | F-17 | Invitations | Done |
 | F-18 | Internal notifications | Done |
-| F-19 | Staff dashboard | Planned |
-| F-20 | Activity history | Planned |
+| F-19 | Staff dashboard | Done |
+| F-20 | Activity history | Partial — dashboard feed done, per-aggregate timeline outstanding |
 
 ---
 
@@ -132,7 +132,7 @@ broken image. Staff additionally see the active applicant count.
 
 ---
 
-## F-06 Adopter profile — Planned
+## F-06 Adopter profile — Done
 
 **User story.** As an adopter, I want to describe my home and routine once,
 so that recommendations reflect my actual situation.
@@ -319,7 +319,7 @@ waiting for the model (NFR-3.1).
 
 ---
 
-## F-14 Natural-language search — Planned
+## F-14 Natural-language search — Done
 
 **User story.** As an adopter, I want to describe what I am looking for in my
 own words.
@@ -386,7 +386,7 @@ invitation responses, application status changes and completed analyses.
 
 ---
 
-## F-19 Staff dashboard — Planned
+## F-19 Staff dashboard — Done
 
 Blueprint 4.4. Available animals, pending applications, applications needing
 attention, open invitations, expired invitations, animals with no suitable
@@ -396,7 +396,7 @@ applicants, animals with no applicants at all, recent activity — plus a
 
 ---
 
-## F-20 Activity history — Planned
+## F-20 Activity history — Partial
 
 **User story.** As staff, I want to see how a case reached its current state.
 

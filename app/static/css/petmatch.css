@@ -783,3 +783,30 @@ img { max-width: 100%; display: block; }
   .attention { flex-direction: column; align-items: flex-start; }
   .activity__item { grid-template-columns: 1fr; gap: 2px; }
 }
+
+/* Profile form: field errors, checkbox grid, and the opt-in callout */
+.field__error {
+  font-size: 0.83rem;
+  color: var(--danger-fg);
+  font-weight: 500;
+}
+.field:has(.field__error) .input,
+.field:has(.field__error) .select,
+.field:has(.field__error) .textarea { border-color: var(--danger-fg); }
+
+.checkbox-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: var(--space-2);
+}
+
+/* The proactive-suggestions opt-in is the one field that changes who can
+   contact the adopter, so it is visually separated from the preferences
+   above it rather than sitting in the same undifferentiated list. */
+.opt-in {
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  margin-top: var(--space-4);
+}

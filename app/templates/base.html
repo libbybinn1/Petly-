@@ -33,6 +33,8 @@
              href="{{ url_for('personal.my_applications') }}">Applications</a>
           <a class="navlink {% if request.endpoint == 'personal.my_invitations' %}navlink--active{% endif %}"
              href="{{ url_for('personal.my_invitations') }}">Invitations</a>
+          <a class="navlink {% if request.endpoint == 'personal.my_profile' %}navlink--active{% endif %}"
+             href="{{ url_for('personal.my_profile') }}">Profile</a>
         {% endif %}
 
         <span class="avatar" title="{{ current_user.full_name }}">{{ current_user.initials }}</span>

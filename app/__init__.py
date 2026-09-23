@@ -99,6 +99,10 @@ def _register_handlers(bus: MessageBus) -> None:
         SendInvitationCommand,
         SendInvitationHandler,
     )
+    from app.cqrs.commands.profile_commands import (
+        SaveAdopterProfileCommand,
+        SaveAdopterProfileHandler,
+    )
     from app.cqrs.queries.animal_queries import (
         GetAnimalDetailsHandler,
         GetAnimalDetailsQuery,
@@ -129,6 +133,7 @@ def _register_handlers(bus: MessageBus) -> None:
         ListMyInvitationsHandler,
         ListMyInvitationsQuery,
     )
+    from app.cqrs.queries.profile_queries import GetMyProfileHandler, GetMyProfileQuery
 
     bus.register_query(SearchAnimalsQuery, SearchAnimalsHandler())
     bus.register_query(GetAnimalDetailsQuery, GetAnimalDetailsHandler())
@@ -142,6 +147,7 @@ def _register_handlers(bus: MessageBus) -> None:
     bus.register_command(WithdrawApplicationCommand, WithdrawApplicationHandler())
     bus.register_command(ApproveApplicationCommand, ApproveApplicationHandler())
     bus.register_command(ReverseApprovalCommand, ReverseApprovalHandler())
+    bus.register_command(SaveAdopterProfileCommand, SaveAdopterProfileHandler())
     bus.register_command(SendInvitationCommand, SendInvitationHandler())
     bus.register_command(MarkInvitationViewedCommand, MarkInvitationViewedHandler())
     bus.register_command(RespondToInvitationCommand, RespondToInvitationHandler())
@@ -150,6 +156,7 @@ def _register_handlers(bus: MessageBus) -> None:
     )
 
     bus.register_query(GetDashboardSummaryQuery, GetDashboardSummaryHandler())
+    bus.register_query(GetMyProfileQuery, GetMyProfileHandler())
     bus.register_query(ListMyInvitationsQuery, ListMyInvitationsHandler())
     bus.register_query(ListMyApplicationsQuery, ListMyApplicationsHandler())
     bus.register_query(

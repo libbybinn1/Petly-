@@ -101,7 +101,25 @@
         </div>
       </div>
     {% elif animal.is_available %}
-      <a class="btn btn--primary btn--block" href="#">Apply to adopt {{ animal.name }}</a>
+      {% if current_user.is_authenticated %}
+        <form method="post" action="{{ url_for('personal.apply_to_animal', animal_id=animal.animal_id) }}">
+          <div class="field">
+            <label class="field__label" for="applicant_message">
+              Anything you would like us to know? (optional)
+            </label>
+            <textarea class="textarea" id="applicant_message" name="applicant_message"
+                      maxlength="2000"
+                      placeholder="A little about your home, and why {{ animal.name }} appeals to you."></textarea>
+          </div>
+          <button class="btn btn--primary btn--block" type="submit">
+            Apply to adopt {{ animal.name }}
+          </button>
+        </form>
+      {% else %}
+        <a class="btn btn--primary btn--block" href="{{ url_for('auth.login') }}">
+          Sign in to apply for {{ animal.name }}
+        </a>
+      {% endif %}
     {% endif %}
   </div>
 </div>

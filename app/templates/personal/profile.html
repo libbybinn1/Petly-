@@ -1,0 +1,178 @@
+{% extends "base.html" %}
+{% block title %}My profile — PetMatch{% endblock %}
+
+{# `current` prefers the saved profile, falling back to the rejected
+   submission so a failed save does not wipe what was typed. #}
+{% set current = profile or submission %}
+{% macro value_of(field, default='') %}{{ current[field] if current and current[field] is not none else default }}{% endmacro %}
+{% macro checked_if(field) %}{% if current and current[field] %}checked{% endif %}{% endmacro %}
+
+{% block content %}
+<div class="section-heading">
+  <div>
+    <h1>My adoption profile</h1>
+    <p>
+      This is how we match animals to you. It describes your home and routine —
+      the things that stay the same, rather than what you happen to be looking for today.
+    </p>
+  </div>
+</div>
+
+{% if errors %}
+  <div class="alert alert--error" style="margin-bottom: var(--space-5)">
+    Please fix {{ errors|length }} {{ 'problem' if errors|length == 1 else 'problems' }} below.
+  </div>
+{% endif %}
+
+<form method="post" action="{{ url_for('personal.my_profile') }}" class="card card--padded">
+
+  <h2 style="font-size:1.1rem">Your home</h2>
+
+  <div class="field">
+    <label class="field__label" for="home_type">What kind of home do you live in?</label>
+    <select class="select" id="home_type" name="home_type" required>
+      <option value="">Please choose…</option>
+      {% for option in options.home_type %}
+        <option value="{{ option }}" {% if current and current.home_type == option %}selected{% endif %}>
+          {{ option|humanize }}
+        </option>
+      {% endfor %}
+    </select>
+    {% if errors.home_type %}<span class="field__error">{{ errors.home_type }}</span>{% endif %}
+  </div>
+
+  <div class="field">
+    <label class="checkbox">
+      <input type="checkbox" name="has_yard" value="1" {{ checked_if('has_yard') }}>
+      I have a secure garden or yard
+    </label>
+    <span class="field__hint">A garden raises the size of animal a home can comfortably take.</span>
+  </div>
+
+  <div class="field">
+    <label class="field__label" for="yard_size_sqm">Yard size in square metres (optional)</label>
+    <input class="input" type="number" min="0" id="yard_size_sqm" name="yard_size_sqm"
+           value="{{ value_of('yard_size_sqm') }}">
+    {% if errors.yard_size_sqm %}<span class="field__error">{{ errors.yard_size_sqm }}</span>{% endif %}
+  </div>
+
+  <div class="field">
+    <label class="field__label" for="city">Which city do you live in?</label>
+    <input class="input" type="text" id="city" name="city" required value="{{ value_of('city') }}">
+    {% if errors.city %}<span class="field__error">{{ errors.city }}</span>{% endif %}
+  </div>
+
+  <h2 style="font-size:1.1rem; margin-top: var(--space-6)">Your household</h2>
+
+  <div class="field">
+    <label class="checkbox">
+      <input type="checkbox" name="household_has_children" value="1" {{ checked_if('household_has_children') }}>
+      Children live with me
+    </label>
+  </div>
+
+  <div class="field">
+    <label class="field__label" for="youngest_child_age">Age of your youngest child</label>
+    <input class="input" type="number" min="0" max="18" id="youngest_child_age"
+           name="youngest_child_age" value="{{ value_of('youngest_child_age') }}">
+    <span class="field__hint">
+      Required if children live with you. Some animals are not suited to young children,
+      and the age decides whether that rules them out.
+    </span>
+    {% if errors.youngest_child_age %}<span class="field__error">{{ errors.youngest_child_age }}</span>{% endif %}
+  </div>
+
+  <div class="field">
+    <label class="checkbox">
+      <input type="checkbox" name="has_other_animals" value="1" {{ checked_if('has_other_animals') }}>
+      I already have pets at home
+    </label>
+  </div>
+
+  <div class="field">
+    <label class="field__label" for="other_animals_description">Tell us about them (optional)</label>
+    <textarea class="textarea" id="other_animals_description" name="other_animals_description"
+              maxlength="500">{{ value_of('other_animals_description') }}</textarea>
+    {% if errors.other_animals_description %}
+      <span class="field__error">{{ errors.other_animals_description }}</span>
+    {% endif %}
+  </div>
+
+  <h2 style="font-size:1.1rem; margin-top: var(--space-6)">You and your routine</h2>
+
+  <div class="field">
+    <label class="field__label" for="experience_level">How much experience do you have with animals?</label>
+    <select class="select" id="experience_level" name="experience_level" required>
+      <option value="">Please choose…</option>
+      {% for option in options.experience_level %}
+        <option value="{{ option }}" {% if current and current.experience_level == option %}selected{% endif %}>
+          {{ option|humanize }}
+        </option>
+      {% endfor %}
+    </select>
+    {% if errors.experience_level %}<span class="field__error">{{ errors.experience_level }}</span>{% endif %}
+  </div>
+
+  <div class="field">
+    <label class="field__label" for="activity_level">How active is your household?</label>
+    <select class="select" id="activity_level" name="activity_level" required>
+      <option value="">Please choose…</option>
+      {% for option in options.activity_level %}
+        <option value="{{ option }}" {% if current and current.activity_level == option %}selected{% endif %}>
+          {{ option|humanize }}
+        </option>
+      {% endfor %}
+    </select>
+    {% if errors.activity_level %}<span class="field__error">{{ errors.activity_level }}</span>{% endif %}
+  </div>
+
+  <div class="field">
+    <label class="field__label" for="daily_hours_available">Hours a day you can give an animal</label>
+    <input class="input" type="number" step="0.5" min="0" max="24" required
+           id="daily_hours_available" name="daily_hours_available"
+           value="{{ value_of('daily_hours_available') }}">
+    <span class="field__hint">
+      Walks, training, play and handling — not time merely in the same room.
+      A high-energy dog needs around four hours; a cat or rabbit around one.
+    </span>
+    {% if errors.daily_hours_available %}
+      <span class="field__error">{{ errors.daily_hours_available }}</span>
+    {% endif %}
+  </div>
+
+  <h2 style="font-size:1.1rem; margin-top: var(--space-6)">What you are hoping for</h2>
+
+  <div class="field">
+    <span class="field__label">Species you are interested in (optional)</span>
+    <div class="checkbox-grid">
+      {% for option in options.species %}
+        <label class="checkbox">
+          <input type="checkbox" name="preferred_species" value="{{ option }}"
+                 {% if current and current.preferred_species and option in current.preferred_species %}checked{% endif %}>
+          {{ option|humanize }}
+        </label>
+      {% endfor %}
+    </div>
+    <span class="field__hint">Leave all unticked if you are open to anything.</span>
+    {% if errors.preferred_species %}<span class="field__error">{{ errors.preferred_species }}</span>{% endif %}
+  </div>
+
+  <div class="field opt-in">
+    <label class="checkbox">
+      <input type="checkbox" name="open_to_proactive_suggestions" value="1"
+             {{ checked_if('open_to_proactive_suggestions') }}>
+      <strong>Staff may contact me about animals I have not applied for</strong>
+    </label>
+    <span class="field__hint">
+      Entirely optional, and off unless you tick it. With it on, staff can invite you
+      to consider an animal they think suits your home. You always have 72 hours to
+      say yes or no, and saying yes only starts an application.
+    </span>
+  </div>
+
+  <div style="display:flex; gap: var(--space-3); margin-top: var(--space-5); flex-wrap: wrap">
+    <button class="btn btn--primary" type="submit">Save profile</button>
+    <a class="btn btn--ghost" href="{{ url_for('animals.search') }}">Cancel</a>
+  </div>
+</form>
+{% endblock %}

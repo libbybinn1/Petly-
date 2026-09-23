@@ -1,4 +1,4 @@
-"""Controller for an adopter's own area: applications and invitations.
+"""Controller for an adopter's own area: profile, applications and invitations.
 
 Ownership is enforced two different ways here, because the routes differ in
 shape (FR-2.4):
@@ -23,18 +23,26 @@ from app.controllers.helpers import get_bus
 from app.cqrs.commands.application_commands import (
     NotYourRecordError,
     RecordNotFoundError,
+    SubmitApplicationCommand,
     WithdrawApplicationCommand,
 )
 from app.cqrs.commands.invitation_commands import (
     MarkInvitationViewedCommand,
     RespondToInvitationCommand,
 )
+from app.cqrs.commands.profile_commands import SaveAdopterProfileCommand
 from app.cqrs.queries.personal_queries import (
     ListMyApplicationsQuery,
     ListMyInvitationsQuery,
 )
-from app.domain.application_rules import IllegalTransitionError
+from app.cqrs.queries.profile_queries import GetMyProfileQuery
+from app.domain.application_rules import (
+    ApplicationNotAllowedError,
+    IllegalTransitionError,
+)
+from app.domain.enums import ActivityLevel, ExperienceLevel, HomeType, Species
 from app.domain.invitation_rules import InvitationExpiredError, InvitationNotAllowedError
+from app.domain.profile_rules import ProfileSubmission, validate_profile
 from app.security.authorization import require_adopter
 
 personal_blueprint = Blueprint("personal", __name__, url_prefix="/my")
@@ -45,7 +53,7 @@ def _require_profile() -> Response | None:
     if current_user.adopter_profile_id:
         return None
     flash("Create your adoption profile first.", "info")
-    return redirect(url_for("animals.search"))
+    return redirect(url_for("personal.my_profile"))
 
 
 @personal_blueprint.route("/applications")
@@ -156,4 +164,115 @@ def withdraw_application(application_id: str) -> Response:
         return redirect(url_for("personal.my_applications"))
 
     flash("Application withdrawn.", "info")
+    return redirect(url_for("personal.my_applications"))
+
+
+def _profile_form_options() -> dict[str, list[str]]:
+    """The values the profile form's selects offer."""
+    return {
+        "home_type": [member.value for member in HomeType],
+        "experience_level": [member.value for member in ExperienceLevel],
+        "activity_level": [member.value for member in ActivityLevel],
+        "species": [member.value for member in Species],
+    }
+
+
+def _submission_from_request() -> ProfileSubmission:
+    """Read the profile form into an untrusted submission object.
+
+    Parsing lives here because it is an HTTP concern; validating lives in the
+    domain, so the same rules apply to any future caller (rule R2).
+    """
+    return ProfileSubmission(
+        home_type=request.form.get("home_type"),
+        has_yard=request.form.get("has_yard") is not None,
+        yard_size_sqm=request.form.get("yard_size_sqm"),
+        household_has_children=request.form.get("household_has_children") is not None,
+        youngest_child_age=request.form.get("youngest_child_age"),
+        has_other_animals=request.form.get("has_other_animals") is not None,
+        other_animals_description=request.form.get("other_animals_description"),
+        experience_level=request.form.get("experience_level"),
+        activity_level=request.form.get("activity_level"),
+        daily_hours_available=request.form.get("daily_hours_available"),
+        city=request.form.get("city"),
+        preferred_species=tuple(request.form.getlist("preferred_species")),
+        open_to_proactive_suggestions=(
+            request.form.get("open_to_proactive_suggestions") is not None
+        ),
+    )
+
+
+@personal_blueprint.route("/profile", methods=["GET", "POST"])
+@login_required
+@require_adopter()
+def my_profile() -> str | Response:
+    """Create or update the signed-in adopter's profile (spec section 5.1).
+
+    A complete profile is what unlocks personal matching, and the opt-in it
+    carries is what makes an adopter visible to proactive discovery.
+    """
+    bus = get_bus()
+
+    if request.method == "GET":
+        profile = bus.dispatch_query(GetMyProfileQuery(user_id=current_user.user_id))
+        return render_template(
+            "personal/profile.html",
+            profile=profile,
+            options=_profile_form_options(),
+            errors={},
+        )
+
+    submission = _submission_from_request()
+    result = validate_profile(submission)
+
+    if not result.is_valid:
+        # Server-side validation is the real check. The browser's is a
+        # convenience, and a forged post bypasses it entirely (NFR-5.2).
+        return render_template(
+            "personal/profile.html",
+            profile=None,
+            submission=submission,
+            options=_profile_form_options(),
+            errors=result.errors,
+        ), 400
+
+    assert result.profile is not None
+    bus.dispatch_command(
+        SaveAdopterProfileCommand(user_id=current_user.user_id, profile=result.profile)
+    )
+
+    flash("Profile saved. We can now match animals to your situation.", "success")
+    return redirect(url_for("matches.find_my_pet"))
+
+
+@personal_blueprint.route("/apply/<animal_id>", methods=["POST"])
+@login_required
+@require_adopter()
+def apply_to_animal(animal_id: str) -> Response:
+    """Submit an adoption application for one animal (feature F-07).
+
+    Queues an analysis job as a side effect but does not wait for it: the
+    adopter is redirected immediately, and the explanation appears once the
+    agent has written it (NFR-3.1).
+    """
+    if not current_user.adopter_profile_id:
+        flash("Complete your adoption profile before applying.", "info")
+        return redirect(url_for("personal.my_profile"))
+
+    try:
+        get_bus().dispatch_command(
+            SubmitApplicationCommand(
+                adopter_profile_id=current_user.adopter_profile_id,
+                animal_id=animal_id,
+                actor_user_id=current_user.user_id,
+                applicant_message=request.form.get("applicant_message") or None,
+            )
+        )
+    except ApplicationNotAllowedError as error:
+        flash(str(error), "error")
+        return redirect(url_for("animals.details", animal_id=animal_id))
+    except RecordNotFoundError:
+        abort(404)
+
+    flash("Application submitted. A staff member will review it.", "success")
     return redirect(url_for("personal.my_applications"))

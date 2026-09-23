@@ -14,6 +14,9 @@
     <input class="input" type="search" name="q" value="{{ filters.text or '' }}"
            placeholder="Search by name, breed or description…" aria-label="Search animals">
     <button class="btn btn--primary" type="submit">Search</button>
+    <a class="btn btn--secondary" href="{{ url_for('matches.natural_language_search') }}">
+      Describe it instead
+    </a>
   </div>
 
   <div class="filter-bar">

@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Describe what you are looking for — PetMatch{% endblock %}
+
+{% block content %}
+<div class="section-heading">
+  <div>
+    <h1>Describe what you are looking for</h1>
+    <p>In your own words. We will work out what that means and show you matching animals.</p>
+  </div>
+  <a class="btn btn--secondary btn--small" href="{{ url_for('animals.search') }}">Use filters instead</a>
+</div>
+
+<form method="post" action="{{ url_for('matches.natural_language_search') }}" class="card card--padded">
+  <div class="field">
+    <label class="field__label" for="description">What kind of animal are you hoping for?</label>
+    <textarea class="textarea" id="description" name="description" required
+              placeholder="For example: something like a hamster or rabbit, a small rodent. Or: an animal that works well in an apartment and does not need much activity.">{{ described }}</textarea>
+  </div>
+  <button class="btn btn--primary" type="submit">Find animals</button>
+</form>
+
+{% if intent and not intent.understood %}
+  <div class="alert alert--warning" style="margin-top: var(--space-5)">
+    {{ intent.interpretation }}
+  </div>
+{% elif intent and not intent.has_any_criteria %}
+  <div class="alert alert--info" style="margin-top: var(--space-5)">
+    We could not pick out any specific requirements from that. Try mentioning a
+    species, a size, or how active you would like the animal to be.
+  </div>
+{% elif intent %}
+  <div class="card card--padded" style="margin-top: var(--space-5)">
+    <h3 class="panel-title">How we read that</h3>
+    <p style="margin-bottom: var(--space-3)">{{ intent.interpretation }}</p>
+    <div class="tag-row" style="padding-top:0">
+      {% for species in intent.species %}
+        <span class="tag tag--brand">{{ species.value|humanize }}</span>
+      {% endfor %}
+      {% if intent.size %}<span class="tag">{{ intent.size.value|humanize }} size</span>{% endif %}
+      {% if intent.activity_level %}
+        <span class="tag">{{ intent.activity_level.value|humanize }} energy</span>
+      {% endif %}
+      {% if intent.temperament %}
+        <span class="tag">{{ intent.temperament.value|humanize }}</span>
+      {% endif %}
+      {% if intent.good_with_children %}<span class="tag tag--success">Good with children</span>{% endif %}
+      {% if intent.good_with_other_animals %}
+        <span class="tag tag--success">Good with other animals</span>
+      {% endif %}
+    </div>
+    <p class="pending" style="margin-top: var(--space-3)">
+      Only what you actually said is used. Anything you did not mention is left open,
+      so nothing is quietly ruled out.
+    </p>
+  </div>
+{% endif %}
+
+{% if results %}
+  <div class="section-heading" style="margin-top: var(--space-6)">
+    <div>
+      <h2>{{ results.total_count }} matching animal{{ '' if results.total_count == 1 else 's' }}</h2>
+    </div>
+  </div>
+
+  {% if results.animals %}
+    <div class="grid-animals">
+      {% for animal in results.animals %}
+        {% include "_animal_card.html" %}
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="empty">
+      <div class="empty__icon">🔍</div>
+      <h3>Nothing available matches that right now</h3>
+      <p>Our roster changes often. Browsing everything may turn up something close.</p>
+      <a class="btn btn--primary" href="{{ url_for('animals.search') }}">Browse all animals</a>
+    </div>
+  {% endif %}
+{% endif %}
+{% endblock %}

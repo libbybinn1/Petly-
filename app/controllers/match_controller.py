@@ -11,9 +11,14 @@ from flask import Blueprint, abort, flash, redirect, render_template, request, u
 from flask_login import current_user, login_required
 from werkzeug.wrappers import Response
 
-from app.controllers.helpers import get_bus
+from app.controllers.helpers import get_bus, get_configuration
 from app.cqrs.commands.application_commands import RecordNotFoundError
 from app.cqrs.commands.invitation_commands import SendInvitationCommand
+from app.cqrs.queries.animal_queries import (
+    DEFAULT_PAGE_SIZE,
+    AnimalSearchFilters,
+    SearchAnimalsQuery,
+)
 from app.cqrs.queries.match_queries import (
     FindMoreAdoptersQuery,
     FindMyPetQuery,
@@ -38,7 +43,7 @@ def find_my_pet() -> str | Response:
     """
     if not current_user.adopter_profile_id:
         flash("Complete your adoption profile to see personal matches.", "info")
-        return redirect(url_for("animals.search"))
+        return redirect(url_for("personal.my_profile"))
 
     matches = get_bus().dispatch_query(
         FindMyPetQuery(adopter_profile_id=current_user.adopter_profile_id)
@@ -133,3 +138,67 @@ def send_invitation(animal_id: str) -> Response:
 
     flash("Invitation sent. The adopter has 72 hours to respond.", "success")
     return redirect(url_for("matches.find_more_adopters", animal_id=animal_id))
+
+
+def _build_interpreter():  # noqa: ANN202 - IntentInterpreter, imported lazily
+    """Construct the intent interpreter from configuration.
+
+    Imported inside the function so the web tier does not load the agent's
+    modules at start-up. The two run as separate processes (rule R2); this
+    is the one narrow place the app borrows the interpretation helper.
+    """
+    from agent_service.intent import IntentInterpreter
+    from agent_service.llm_client import OllamaLanguageModel
+
+    settings = get_configuration()
+    return IntentInterpreter(
+        OllamaLanguageModel(
+            base_url=settings.agent.ollama_base_url,
+            name=settings.agent.chat_model,
+        )
+    )
+
+
+@match_blueprint.route("/search/describe", methods=["GET", "POST"])
+def natural_language_search() -> str:
+    """Search by describing what you are looking for (spec section 6.3).
+
+    The model converts the description into criteria; the ordinary
+    deterministic search then runs against them. Nothing the model produces
+    selects an animal or scores anything.
+
+    Open to anyone, including signed-out visitors: describing what you want
+    is a browsing feature, not a personal one.
+    """
+    described = (request.form.get("description") or request.args.get("q") or "").strip()
+
+    if not described:
+        return render_template("matches/describe.html", intent=None, results=None, described="")
+
+    intent = _build_interpreter().interpret(described)
+
+    if not intent.understood or not intent.has_any_criteria:
+        return render_template(
+            "matches/describe.html", intent=intent, results=None, described=described
+        )
+
+    results = get_bus().dispatch_query(
+        SearchAnimalsQuery(
+            filters=AnimalSearchFilters(
+                species=intent.species[0].value if len(intent.species) == 1 else None,
+                size=intent.size.value if intent.size else None,
+                activity_level=(
+                    intent.activity_level.value if intent.activity_level else None
+                ),
+                good_with_children=bool(intent.good_with_children),
+                good_with_other_animals=bool(intent.good_with_other_animals),
+                available_only=True,
+            ),
+            page=1,
+            page_size=DEFAULT_PAGE_SIZE,
+        )
+    )
+
+    return render_template(
+        "matches/describe.html", intent=intent, results=results, described=described
+    )
