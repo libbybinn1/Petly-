@@ -35,11 +35,11 @@ from app.cqrs.commands.notification_commands import (
     MarkNotificationReadCommand,
 )
 from app.cqrs.commands.profile_commands import SaveAdopterProfileCommand
+from app.cqrs.queries.notification_queries import ListMyNotificationsQuery
 from app.cqrs.queries.personal_queries import (
     ListMyApplicationsQuery,
     ListMyInvitationsQuery,
 )
-from app.cqrs.queries.notification_queries import ListMyNotificationsQuery
 from app.cqrs.queries.profile_queries import GetMyProfileQuery
 from app.domain.application_rules import (
     ApplicationNotAllowedError,

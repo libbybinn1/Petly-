@@ -224,6 +224,10 @@ def _register_queries(bus: MessageBus) -> None:
     Takes no configuration: a query answers from stored state, so there is
     nothing here for a setting to change.
     """
+    from app.cqrs.queries.analysis_status_queries import (
+        GetAnalysisStatusHandler,
+        GetAnalysisStatusQuery,
+    )
     from app.cqrs.queries.animal_queries import (
         GetAnimalDetailsHandler,
         GetAnimalDetailsQuery,
@@ -264,6 +268,7 @@ def _register_queries(bus: MessageBus) -> None:
     )
     from app.cqrs.queries.profile_queries import GetMyProfileHandler, GetMyProfileQuery
 
+    bus.register_query(GetAnalysisStatusQuery, GetAnalysisStatusHandler())
     bus.register_query(SearchAnimalsQuery, SearchAnimalsHandler())
     bus.register_query(GetAnimalDetailsQuery, GetAnimalDetailsHandler())
     bus.register_query(ListAllAnimalsQuery, ListAllAnimalsHandler())

@@ -9,7 +9,16 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from flask import Blueprint, abort, flash, redirect, render_template, request, url_for
+from flask import (
+    Blueprint,
+    abort,
+    flash,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    url_for,
+)
 from flask_login import current_user
 from werkzeug.wrappers import Response
 
@@ -22,6 +31,7 @@ from app.cqrs.commands.application_commands import (
     ReverseApprovalCommand,
 )
 from app.cqrs.commands.invitation_commands import SendInvitationCommand
+from app.cqrs.queries.analysis_status_queries import GetAnalysisStatusQuery
 from app.cqrs.queries.animal_queries import (
     DEFAULT_PAGE_SIZE,
     AnimalSearchFilters,
@@ -290,6 +300,48 @@ def _build_interpreter() -> IntentInterpreter:
             name=settings.agent.chat_model,
         )
     )
+
+
+
+@match_blueprint.route("/api/analysis-status")
+@require_sign_in
+def analysis_status() -> Response:
+    """Report how much agent work is outstanding, as JSON.
+
+    Exists so a page can poll without re-rendering itself. The agent
+    writes explanations asynchronously, and the alternative - blocking the
+    request until it finishes - is what rule R4 forbids.
+
+    Two scopes, and which one applies is decided by the signed-in account
+    rather than by the query string:
+
+    - `?scope=my-matches` answers about the adopter's own analyses, using
+      their profile identifier from the session. An adopter cannot ask
+      about anybody else because there is no parameter that would let
+      them.
+    - `?animal_id=<id>` answers about one animal, and is staff-only. It
+      returns counts and a timestamp, never a name or a score.
+
+    Returns:
+        A small JSON object: pending, completed, failed, generation and
+        oldest_pending_at.
+    """
+    scope = (request.args.get("scope") or "").strip().lower()
+    animal_id = (request.args.get("animal_id") or "").strip()
+
+    if scope == "my-matches":
+        query = GetAnalysisStatusQuery(
+            adopter_profile_id=current_user.adopter_profile_id
+        )
+    elif animal_id:
+        if not current_user.is_staff:
+            abort(403)
+        query = GetAnalysisStatusQuery(animal_id=animal_id)
+    else:
+        abort(400)
+
+    status = get_bus().dispatch_query(query)
+    return jsonify(status.as_dictionary())
 
 
 @match_blueprint.route("/search/describe", methods=["GET", "POST"])

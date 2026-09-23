@@ -63,14 +63,32 @@ class StoredAnalysis:
     reasons: list[str]
     concerns: list[str]
     missing_information: list[str]
-    evidence_sources: list[dict[str, str]]
+    # Passed through as whatever the agent stored. The values are not all
+    # strings - each source carries a boolean saying whether a reason
+    # actually cited it - and rebuilding these dicts key by key would drop
+    # any field the agent adds later.
+    evidence_sources: list[dict[str, Any]]
     used_web_search: bool
     model_name: str
+    # The ordered steps the agent took, each a dict of step, action and
+    # detail. Empty for an analysis written before the agent recorded one,
+    # which is why the template guards on it.
+    reasoning_trace: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def was_generated_by_a_model(self) -> bool:
         """Whether a language model wrote this, or the deterministic fallback did."""
         return self.model_name != "deterministic-fallback"
+
+    @property
+    def cited_sources(self) -> list[dict[str, Any]]:
+        """The sources a reason actually referred to.
+
+        Rule R4 requires every claim to trace to something retrieved. An
+        uncited source was fetched and not used, which is worth keeping in
+        the record but is not evidence for anything on screen.
+        """
+        return [source for source in self.evidence_sources if source.get("cited")]
 
 
 @dataclass(frozen=True)
@@ -629,6 +647,7 @@ def _to_stored_analysis(row: MatchAnalysis) -> StoredAnalysis:
         evidence_sources=_decode_list(row.evidence_sources),
         used_web_search=bool(row.used_web_search),
         model_name=row.model_name,
+        reasoning_trace=_decode_list(row.reasoning_trace),
     )
 
 
