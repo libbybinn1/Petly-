@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — PetMatch{% endblock %}
+
+{% block content %}
+<div class="section-heading">
+  <div>
+    <h1>Dashboard</h1>
+    <p>Where the organization stands right now, and what needs doing.</p>
+  </div>
+  <a class="btn btn--secondary btn--small" href="{{ url_for('animals.manage') }}">Manage animals</a>
+</div>
+
+<div class="stat-row" style="margin-bottom: var(--space-6)">
+  <div class="stat">
+    <div class="stat__value">{{ summary.available_animals }}</div>
+    <div class="stat__label">Available for adoption</div>
+  </div>
+  <div class="stat">
+    <div class="stat__value">{{ summary.pending_applications }}</div>
+    <div class="stat__label">Applications awaiting review</div>
+  </div>
+  <div class="stat">
+    <div class="stat__value">{{ summary.applications_under_review }}</div>
+    <div class="stat__label">Under review</div>
+  </div>
+  <div class="stat">
+    <div class="stat__value">{{ summary.open_invitations }}</div>
+    <div class="stat__label">Invitations awaiting a reply</div>
+  </div>
+  <div class="stat">
+    <div class="stat__value">{{ summary.adoptions_in_progress }}</div>
+    <div class="stat__label">Adoptions in progress</div>
+  </div>
+  <div class="stat">
+    <div class="stat__value">{{ summary.analyses_completed }}</div>
+    <div class="stat__label">Match analyses completed</div>
+  </div>
+</div>
+
+<div class="detail-layout">
+  <section>
+    <h2 style="font-size:1.25rem">Needs attention</h2>
+    {% if summary.needs_attention %}
+      <div class="stack">
+        {% for item in summary.attention_items %}
+        <article class="card card--padded attention attention--{{ item.severity }}">
+          <div class="attention__body">
+            <h3 style="font-size:1rem; margin-bottom:4px">{{ item.headline }}</h3>
+            <p style="margin:0; color:var(--text-muted); font-size:0.9rem">{{ item.detail }}</p>
+          </div>
+          <a class="btn btn--secondary btn--small" href="{{ item.action_url }}">{{ item.action_label }}</a>
+        </article>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="card card--padded" style="text-align:center; padding: var(--space-6)">
+        <div style="font-size:2rem; margin-bottom: var(--space-2)">✅</div>
+        <h3 style="font-size:1rem">Nothing needs attention</h3>
+        <p class="pending" style="margin:0">
+          No stale applications, no expired invitations, and every available animal
+          has at least one suitable applicant.
+        </p>
+      </div>
+    {% endif %}
+
+    <h2 style="font-size:1.25rem; margin-top: var(--space-6)">Coverage</h2>
+    <div class="card card--padded">
+      <div class="coverage">
+        <div class="coverage__row">
+          <span class="coverage__label">Animals with no applicants at all</span>
+          <span class="coverage__value {% if summary.animals_without_applicants %}is-warning{% endif %}">
+            {{ summary.animals_without_applicants }}
+          </span>
+        </div>
+        <div class="coverage__row">
+          <span class="coverage__label">Animals with no <em>suitable</em> applicant</span>
+          <span class="coverage__value {% if summary.animals_without_suitable_applicants %}is-warning{% endif %}">
+            {{ summary.animals_without_suitable_applicants }}
+          </span>
+        </div>
+        <div class="coverage__row">
+          <span class="coverage__label">Invitations that expired unanswered</span>
+          <span class="coverage__value {% if summary.expired_invitations %}is-warning{% endif %}">
+            {{ summary.expired_invitations }}
+          </span>
+        </div>
+        <div class="coverage__row">
+          <span class="coverage__label">Applications older than a week</span>
+          <span class="coverage__value {% if summary.stale_applications %}is-warning{% endif %}">
+            {{ summary.stale_applications }}
+          </span>
+        </div>
+        <div class="coverage__row">
+          <span class="coverage__label">Animals in total</span>
+          <span class="coverage__value">{{ summary.total_animals }}</span>
+        </div>
+      </div>
+      <p class="pending" style="margin-top: var(--space-4)">
+        &ldquo;No suitable applicant&rdquo; counts animals whose best analysed applicant scores
+        below the recommendation threshold. Animals whose applicants have not yet been
+        analysed are not counted — absence of evidence is not evidence of a poor match.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <h2 style="font-size:1.25rem">Recent activity</h2>
+    <div class="card card--padded">
+      {% if summary.recent_activity %}
+        <ol class="activity">
+          {% for entry in summary.recent_activity %}
+          <li class="activity__item">
+            <span class="activity__time">{{ entry.occurred_at.strftime('%d %b, %H:%M') }}</span>
+            <span class="activity__text">
+              {% if entry.animal_id %}
+                {{ entry.actor_name }} {{ entry.description }}
+                <a href="{{ url_for('animals.details', animal_id=entry.animal_id) }}">{{ entry.animal_name }}</a>
+              {% else %}
+                {{ entry.sentence }}
+              {% endif %}
+            </span>
+          </li>
+          {% endfor %}
+        </ol>
+        <p class="pending" style="margin-top: var(--space-4)">
+          Read directly from the event log, not a separate audit table.
+        </p>
+      {% else %}
+        <p class="pending">No activity recorded yet.</p>
+      {% endif %}
+    </div>
+  </section>
+</div>
+{% endblock %}

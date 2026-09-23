@@ -1,10 +1,37 @@
 # PetMatch — Master Implementation Plan
 
-**Status:** Awaiting answers to the Blocking Questions in §2 before Phase 1 begins.
+**Status:** All blocking questions in §2 are resolved — see the answers recorded there. Build in progress; current position is in §0.
 
 **Method:** Specification-Driven Agentic Development (SDAD). Document first, then implement, then test, then verify against the spec. No feature starts before its spec section is written.
 
 **Source of truth:** `PetMatch_Final_Project_Specification_EN.docx` (product) + `Final_Project_Specification_and_Requirements_...docx` (course blueprint). Where the two disagree, the course blueprint wins — it states this explicitly in its §1.
+
+---
+
+## 0. Progress
+
+Updated as phases complete, per rule R5.
+
+| Phase | Status |
+|---|---|
+| 0 Foundations, skills, rules | Done |
+| 1 Documentation set (11 files) | Done |
+| 2 Data layer and cloud DB | Done |
+| 3 Event store | Done |
+| 4 CQRS skeleton | Done |
+| 5 Auth and authorization | Done |
+| 6 Animals and adopter profiles | Partial - animal CRUD done, adopter profile form outstanding (F-06) |
+| 7 Search, details, tables | Done |
+| 8 Applications and invitations | Done, including the spec 7.5 cascade and 72-hour window |
+| 9 Deterministic matching engine | Done |
+| 10 MCP server over stdio | Done |
+| 11 RAG pipeline | Done |
+| 12 Autonomous agent process | Done |
+| 13 AI-facing screens | Partial - rankings and analyses done, natural-language search outstanding (F-14) |
+| 14 Dashboard | Done |
+| 15 E2E, hardening, demo | Outstanding - API and E2E suites not yet written |
+
+Currently on: Phase 15, plus the two partial items above.
 
 ---
 
@@ -17,7 +44,7 @@ Every mandatory checklist item from course blueprint §20, mapped to where it ge
 | 1 | Defined topic, not the HR example | Whole system — animal adoption | `docs/PRD.md` |
 | 2 | Authentication | `app/controllers/auth_controller.py` | `tests/integration/test_auth.py` |
 | 3 | Two+ roles (Adopter, Staff) | `app/domain/user.py`, `app/security/` | `tests/api/test_authorization.py` |
-| 4.1 | Search | Structured + natural-language animal search | `tests/integration/test_search.py`, E2E |
+| 4.1 | Search | Structured search done; natural-language outstanding (F-14) | E2E |
 | 4.2 | Details view | Animal details screen | E2E `test_adopter_journey.py` |
 | 4.3 | Tabular display | Staff animal + application tables | E2E `test_staff_journey.py` |
 | 4.4 | Dashboard | Staff operational dashboard (spec §22) | `tests/integration/test_dashboard_queries.py` |
@@ -30,10 +57,10 @@ Every mandatory checklist item from course blueprint §20, mapped to where it ge
 | 10 | MVC | `controllers/` / `views/` / `domain/` separation | `docs/ARCHITECTURE.md` + arch test |
 | 11 | CQRS | `app/cqrs/commands/` vs `app/cqrs/queries/` | `tests/unit/test_cqrs_separation.py` |
 | 12 | Event Sourcing | `app/eventstore/` append-only + projections | `tests/integration/test_event_sourcing.py` |
-| 13 | Cloud database | Managed PostgreSQL — see §2 Q2 | connection smoke test |
-| 14 | External skill (sh.skills) | see §2 Q5 | `.claude/skills/` |
+| 13 | Cloud database | Somee.com **SQL Server 2014** — see §2 Q2 | `scripts/check_environment.py` |
+| 14 | External skill (sh.skills) | `mcp-builder`, `webapp-testing` | `.claude/skills/` |
 | 15 | Self-defined skill | Clean Code, DB Mgmt, Testing skills | `.claude/skills/` |
-| 16 | One+ Rule | `CLAUDE.md` + `.claude/rules/` | reviewed in presentation |
+| 16 | One+ Rule | `CLAUDE.md` — five rules, R1–R5 | `docs/SKILLS_AND_RULES.md` |
 | 17 | Organized MD docs | `docs/` — 11 files | `docs/` |
 | 18 | GitHub | repo + clear commits | git history |
 | 19 | Unit/Integration/E2E/Agent tests | `tests/` | pytest + Playwright reports |
@@ -41,9 +68,23 @@ Every mandatory checklist item from course blueprint §20, mapped to where it ge
 
 ---
 
-## 2. Blocking Questions
+## 2. Blocking Questions — all resolved
 
-These are the decisions from PetMatch spec §30 that I cannot resolve from the documents. Each one materially changes the code I write.
+These were the decisions from PetMatch spec §30 that could not be resolved from
+the documents. Recorded here with their answers, because two of them changed the
+architecture substantially.
+
+| # | Question | Answer |
+|---|---|---|
+| Q1 | LLM provider | Local Ollama, `qwen2.5:3b-instruct`. The 7B is blocked at 95% by the corporate proxy; swapping it in is one `.env` line. |
+| Q2 | Cloud database | **Somee.com, MS SQL Server 2014** — the spec's "SOMY.com". Not PostgreSQL, which changed the dialect, the JSON strategy and the key strategy. |
+| Q3 | Web search | Tavily. Needed `truststore` to work behind the corporate TLS proxy. |
+| Q4 | Embeddings | `nomic-embed-text` via Ollama — one runtime, no PyTorch. |
+| Q5 | sh.skills | `mcp-builder` and `webapp-testing`, installed from the ecosystem's GitHub source while skills.sh itself was returning 503. |
+| Q6 | GitHub | Local repository; remote push pending the user's sign-in. |
+
+The original questions follow, kept because they record *why* each decision
+was open rather than assumed.
 
 ### Q1 — LLM provider and credentials
 The Agent needs a real LLM. No API key is present in this environment. Which do you have: OpenAI, Anthropic, Azure OpenAI, Google Gemini, a course-provided endpoint, or a local model via Ollama? I will build behind an `LLMProvider` interface either way, with a deterministic offline stub so the whole test suite runs without keys — but I need to know which real adapter to wire and demo.

@@ -22,6 +22,8 @@
 
       {% if current_user.is_authenticated %}
         {% if current_user.is_staff %}
+          <a class="navlink {% if request.endpoint == 'dashboard.dashboard' %}navlink--active{% endif %}"
+             href="{{ url_for('dashboard.dashboard') }}">Dashboard</a>
           <a class="navlink {% if request.endpoint == 'animals.manage' %}navlink--active{% endif %}"
              href="{{ url_for('animals.manage') }}">Manage</a>
         {% else %}

@@ -216,6 +216,11 @@ class AgentWorker:
                 job.application_id or job.animal_id or analysis_id,
                 payload={
                     "match_analysis_id": analysis_id,
+                    # animal_id lets the dashboard activity feed name the
+                    # animal. Without it the feed reads "completed a match
+                    # analysis for" with nothing after it.
+                    "animal_id": job.animal_id,
+                    "adopter_profile_id": job.adopter_profile_id,
                     "score": outcome.score.score,
                     "direction": direction.value,
                     "used_web_search": outcome.used_web_search,

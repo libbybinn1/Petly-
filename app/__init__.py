@@ -107,6 +107,10 @@ def _register_handlers(bus: MessageBus) -> None:
         SearchAnimalsHandler,
         SearchAnimalsQuery,
     )
+    from app.cqrs.queries.dashboard_queries import (
+        GetDashboardSummaryHandler,
+        GetDashboardSummaryQuery,
+    )
     from app.cqrs.queries.match_queries import (
         FindMoreAdoptersHandler,
         FindMoreAdoptersQuery,
@@ -145,6 +149,7 @@ def _register_handlers(bus: MessageBus) -> None:
         ExpireOverdueInvitationsCommand, ExpireOverdueInvitationsHandler()
     )
 
+    bus.register_query(GetDashboardSummaryQuery, GetDashboardSummaryHandler())
     bus.register_query(ListMyInvitationsQuery, ListMyInvitationsHandler())
     bus.register_query(ListMyApplicationsQuery, ListMyApplicationsHandler())
     bus.register_query(
@@ -156,6 +161,7 @@ def _register_blueprints(application: Flask) -> None:
     """Attach the controller blueprints."""
     from app.controllers.animal_controller import animal_blueprint
     from app.controllers.auth_controller import auth_blueprint
+    from app.controllers.dashboard_controller import dashboard_blueprint
     from app.controllers.home_controller import home_blueprint
     from app.controllers.match_controller import match_blueprint
     from app.controllers.personal_controller import personal_blueprint
@@ -165,6 +171,7 @@ def _register_blueprints(application: Flask) -> None:
     application.register_blueprint(animal_blueprint)
     application.register_blueprint(match_blueprint)
     application.register_blueprint(personal_blueprint)
+    application.register_blueprint(dashboard_blueprint)
 
 
 def _register_error_handlers(application: Flask) -> None:
