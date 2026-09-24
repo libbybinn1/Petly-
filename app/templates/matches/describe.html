@@ -21,7 +21,7 @@
 </div>
 
 {% if error %}
-  <div class="alert alert--error" style="margin-bottom: var(--space-4)">{{ error }}</div>
+  <div class="alert alert--error alert--page">{{ error }}</div>
 {% endif %}
 
 <form method="post" action="{{ url_for('matches.natural_language_search') }}" class="card card--padded">

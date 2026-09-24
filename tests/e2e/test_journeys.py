@@ -141,7 +141,9 @@ class TestAdopterJourney:
         page.fill("#youngest_child_age", "")
         page.click("button:has-text('Save profile')")
 
-        expect(page.locator(".alert--error")).to_be_visible()
+        # The summary is found by its role rather than its class, so a restyle
+        # cannot break the proof that the server's check reaches the screen.
+        expect(page.locator("[role=alert]")).to_be_visible()
         expect(page.locator(".field__error")).to_be_visible()
 
 
