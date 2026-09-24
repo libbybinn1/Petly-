@@ -129,8 +129,17 @@ def my_invitations() -> str | Response:
 @require_sign_in
 @require_adopter()
 def respond_to_invitation(invitation_id: str) -> Response:
-    """Accept or decline an invitation."""
-    accepted = request.form.get("response") == "ACCEPT"
+    """Accept or decline an invitation (spec section 7.4).
+
+    The answer must be one of the two words the form offers. A missing or
+    unrecognised value is refused rather than read as a decline: silently
+    turning a garbled request into "no" would record an answer the adopter
+    never gave.
+    """
+    answer = (request.form.get("response") or "").strip().upper()
+    if answer not in ("ACCEPT", "DECLINE"):
+        abort(400)
+    accepted = answer == "ACCEPT"
 
     try:
         get_bus().dispatch_command(

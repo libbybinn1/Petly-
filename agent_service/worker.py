@@ -653,10 +653,24 @@ def _close_job(session: Session, job_id: str) -> None:
 
 
 def build_language_model(configuration: Configuration) -> LanguageModel:
-    """Build the chat model the agent and the intent interpreter share."""
+    """Build the chat model that writes explanations inside the tool loop."""
     return OllamaLanguageModel(
         base_url=configuration.agent.ollama_base_url,
         name=configuration.agent.chat_model,
+    )
+
+
+def build_intent_model(configuration: Configuration) -> LanguageModel:
+    """Build the model that interprets natural-language searches (spec 6.3).
+
+    Intent parsing is a short prompt with no tools and a JSON answer, so it
+    can run on the smaller, faster model named by OLLAMA_CHAT_MODEL_FAST
+    while the explanation loop uses OLLAMA_CHAT_MODEL. On the measured
+    hardware that keeps the describe page's wait to one short call.
+    """
+    return OllamaLanguageModel(
+        base_url=configuration.agent.ollama_base_url,
+        name=configuration.agent.fast_chat_model,
     )
 
 
@@ -711,7 +725,7 @@ def main() -> int:
         configuration,
         session_factory,
         build_agent(configuration, language_model),
-        language_model,
+        build_intent_model(configuration),
     )
 
     def handle_signal(_signal_number: int, _frame: FrameType | None) -> None:

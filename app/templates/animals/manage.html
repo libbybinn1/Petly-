@@ -24,6 +24,9 @@
 {%- if selected_species -%}
   {%- set _ = applied_filters.append(('species', species_label(selected_species))) -%}
 {%- endif -%}
+{%- if selected_size -%}
+  {%- set _ = applied_filters.append(('size', selected_size|humanize ~ ' size')) -%}
+{%- endif -%}
 {%- for value, label in age_ranges if value == selected_age_range -%}
   {%- set _ = applied_filters.append(('age_range', label)) -%}
 {%- endfor -%}
@@ -67,6 +70,15 @@
       <option value="">All species</option>
       {% for value in options.species %}
         <option value="{{ value }}" {% if selected_species == value %}selected{% endif %}>{{ species_label(value) }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="field">
+    <label class="field__label" for="size">Size</label>
+    <select class="select" id="size" name="size">
+      <option value="">Any size</option>
+      {% for value in options.size %}
+        <option value="{{ value }}" {% if selected_size == value %}selected{% endif %}>{{ value|humanize }}</option>
       {% endfor %}
     </select>
   </div>

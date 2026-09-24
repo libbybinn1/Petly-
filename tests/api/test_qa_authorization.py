@@ -159,6 +159,48 @@ class TestEveryPostRouteRefusesTheWrongRole:
             assert session.execute(select(AdoptionInvitation)).scalars().all() == []
 
 
+class TestInvitationAnswersAreValidated:
+    """Spec 7.4: the answer is ACCEPT or DECLINE, and nothing else is an answer."""
+
+    @pytest.mark.parametrize("answer", ["", "maybe", "YES", "DECLINED", "ACCEPT; DROP"])
+    def test_an_unrecognised_answer_is_refused_and_records_nothing(
+        self, adopter_client: FlaskClient, world: dict[str, str],
+        session_factory: sessionmaker[Session], answer: str,
+    ) -> None:
+        """Proves a garbled or missing answer is a 400, not a silent decline.
+
+        The old code read anything other than the exact word ACCEPT as a
+        decline, so a forged or malformed post could close an invitation with
+        an answer the adopter never gave.
+        """
+        invitation = make_invitation(
+            session_factory, world["adopter_profile_id"], world["available_animal_id"]
+        )
+
+        response = adopter_client.post(
+            f"/my/invitations/{invitation}/respond", data={"response": answer}
+        )
+
+        assert response.status_code == 400
+        assert invitation_status(session_factory, invitation) == InvitationStatus.SENT.value
+
+    def test_a_lowercase_answer_with_whitespace_is_still_an_answer(
+        self, adopter_client: FlaskClient, world: dict[str, str],
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        """Proves normalisation is forgiving about case and spacing, not about meaning."""
+        invitation = make_invitation(
+            session_factory, world["adopter_profile_id"], world["available_animal_id"]
+        )
+
+        response = adopter_client.post(
+            f"/my/invitations/{invitation}/respond", data={"response": " decline "}
+        )
+
+        assert response.status_code in (302, 200)
+        assert invitation_status(session_factory, invitation) == InvitationStatus.DECLINED.value
+
+
 class TestOneAdopterCannotActOnAnothersRecords:
     """FR-2.4, exercised by changing the identifier in the URL."""
 

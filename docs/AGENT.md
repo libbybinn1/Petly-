@@ -526,6 +526,7 @@ From spec §6.4 and blueprint §6.4. These are product requirements.
 |---|---|---|
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Model host |
 | `OLLAMA_CHAT_MODEL` | `qwen2.5:3b-instruct` | Reasoning, tool choice and explanation |
+| `OLLAMA_CHAT_MODEL_FAST` | `qwen2.5:3b-instruct` | Interpreting natural-language searches (`INTERPRET_INTENT`): one short JSON prompt, no tools, so a smaller model serves; built by `worker.build_intent_model` |
 | `OLLAMA_EMBED_MODEL` | `nomic-embed-text` | Embeddings |
 | `TAVILY_API_KEY` | — | Web search; absent falls back to an offline stub |
 | `AGENT_POLL_INTERVAL_SECONDS` | 3 | Queue poll interval |
