@@ -24,7 +24,7 @@ import random
 import sys
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -38,6 +38,7 @@ truststore.inject_into_ssl()
 from app.config import load_configuration  # noqa: E402
 from app.domain.enums import UserRole  # noqa: E402
 from app.eventstore.store import EventStore  # noqa: E402
+from app.infrastructure.clock import utc_now  # noqa: E402
 from app.infrastructure.database import (  # noqa: E402
     create_database_engine,
     create_session_factory,
@@ -86,6 +87,16 @@ DEMO_PASSWORD = "Password123!"
 FALLBACK_PHOTOGRAPH_NAME = "sample.jpg"
 FALLBACK_PHOTOGRAPH_URL = f"/static/uploads/{FALLBACK_PHOTOGRAPH_NAME}"
 
+# The committed copy of that placeholder, un-ignored in .gitignore for this
+# one file. Seeding offline used to leave *every* animal without an image -
+# no download to copy a fallback from, so `_attach_images` skipped each one -
+# and the run still printed "photo unavailable - using the fallback" and
+# exited 0, leaving a database whose every listing was broken.
+COMMITTED_PLACEHOLDER = (
+    Path(__file__).resolve().parents[1] / "app" / "static" / "uploads"
+    / FALLBACK_PHOTOGRAPH_NAME
+)
+
 
 @dataclass
 class AnimalRoster:
@@ -95,6 +106,10 @@ class AnimalRoster:
     images: list[AnimalImage] = field(default_factory=list)
     downloaded_count: int = 0
     fallback_count: int = 0
+    # Animals that ended up with no image at all. FR-4.2 says there should
+    # never be one, so this list existing is a failure rather than a state to
+    # report: the seed refuses to write a roster it would have to break.
+    animals_without_a_photograph: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -261,7 +276,7 @@ def _report_progress(
     index: int, specification: AnimalSpecification, file_name: str | None
 ) -> None:
     """Print one line per animal so a long fetch does not look like a hang."""
-    outcome = "photo ok" if file_name else "photo unavailable - using the fallback"
+    outcome = "photo ok" if file_name else "photo unavailable - using the placeholder"
     print(
         f"  [{index + 1:>3}/{len(ANIMAL_SPECIFICATIONS)}] "
         f"{specification.name:<14}{kind_group(specification):<14}{outcome}"
@@ -278,6 +293,11 @@ def _ensure_fallback_photograph(
     has run. Creating it here makes the file a side effect of seeding rather
     than something a developer has to remember.
 
+    Three sources, in order of preference: a file already in the upload
+    directory, one of this run's own downloads, and the placeholder committed
+    to the repository. The last one is what makes an offline seed produce a
+    usable demo instead of a listing full of broken images.
+
     Args:
         upload_directory: Where animal photographs are written.
         photograph_names: File names of this run's successful downloads.
@@ -293,11 +313,15 @@ def _ensure_fallback_photograph(
     first_download = next(
         (name for name in photograph_names.values() if name and name.endswith(".jpg")), None
     )
-    if first_download is None:
-        return False
+    if first_download is not None:
+        fallback_path.write_bytes((upload_directory / first_download).read_bytes())
+        return True
 
-    fallback_path.write_bytes((upload_directory / first_download).read_bytes())
-    return True
+    if COMMITTED_PLACEHOLDER.exists():
+        fallback_path.write_bytes(COMMITTED_PLACEHOLDER.read_bytes())
+        return True
+
+    return False
 
 
 def _attach_images(
@@ -320,6 +344,10 @@ def _attach_images(
             roster.fallback_count += 1
             image_url = FALLBACK_PHOTOGRAPH_URL
         else:
+            # Recorded rather than skipped. Skipping produced an animal with
+            # no image row, which FR-4.2 forbids and no reader of the summary
+            # would have noticed.
+            roster.animals_without_a_photograph.append(animal.name)
             continue
 
         roster.images.append(
@@ -345,8 +373,24 @@ def _write_demo_data(
     roster: AnimalRoster,
     randomizer: random.Random,
     now: datetime,
+    invitation_expiry_hours: int,
 ) -> HistoryCounts:
-    """Write every record in one transaction and report what was written."""
+    """Write every record in one transaction and report what was written.
+
+    Args:
+        session_factory: How to open the write session.
+        people: The accounts and profiles to write.
+        roster: The animals and their photographs.
+        randomizer: The seeded randomizer, so a run is reproducible.
+        now: The clock the whole seed is built against.
+        invitation_expiry_hours: The configured response window, passed
+            through rather than re-declared: a seeded invitation whose
+            window disagreed with the one the application enforces would
+            make the dashboard expiry figure contradict the rows it counted.
+
+    Returns:
+        Counts of the history that was written.
+    """
     with session_scope(session_factory) as session:
         session.add_all(people.staff_users)
         session.add_all(people.adopter_users)
@@ -363,6 +407,7 @@ def _write_demo_data(
             randomizer=randomizer,
             now=now,
             staff_users=people.staff_users,
+            invitation_expiry_hours=invitation_expiry_hours,
         )
         return write_history(context, people.profiles, roster.animals)
 
@@ -375,7 +420,7 @@ def run_seed() -> int:
     """
     configuration = load_configuration()
     randomizer = random.Random(RANDOM_SEED)
-    now = datetime.now(UTC).replace(tzinfo=None)
+    now = utc_now()
 
     upload_directory = configuration.upload_directory
     upload_directory.mkdir(parents=True, exist_ok=True)
@@ -389,13 +434,32 @@ def run_seed() -> int:
     # services answer, and a shared stream would let a flaky download change
     # which city an animal lives in and who applied for it. The seeded data
     # has to be reproducible whether or not the network cooperated.
-    roster = _build_animals(
+    photo_fetcher = PhotoFetcher(randomizer=random.Random(RANDOM_SEED))
+    try:
+        roster = _build_animals(randomizer, now, upload_directory, photo_fetcher)
+    finally:
+        photo_fetcher.close()
+    if roster.animals_without_a_photograph:
+        # Refused before anything is written: a half-listed roster is worse
+        # than no roster, and the cause is nearly always that the machine is
+        # offline *and* app/static/uploads/sample.jpg is missing.
+        print(
+            f"\naborted: {len(roster.animals_without_a_photograph)} animal(s) have no "
+            f"photograph and none could be borrowed - "
+            f"{COMMITTED_PLACEHOLDER} is missing. Spec 24 requires every animal "
+            f"to have an image, so nothing was written.",
+            file=sys.stderr,
+        )
+        return 1
+
+    counts = _write_demo_data(
+        session_factory,
+        people,
+        roster,
         randomizer,
         now,
-        upload_directory,
-        PhotoFetcher(randomizer=random.Random(RANDOM_SEED)),
+        configuration.invitation_expiry_hours,
     )
-    counts = _write_demo_data(session_factory, people, roster, randomizer, now)
 
     _print_summary(people, roster, counts)
     return 0
@@ -416,7 +480,7 @@ def _print_summary(people: DemoPeople, roster: AnimalRoster, counts: HistoryCoun
     )
     print(
         f"photographs: {roster.downloaded_count} downloaded, "
-        f"{roster.fallback_count} using the shared fallback"
+        f"{roster.fallback_count} using the shared placeholder"
     )
     print("\nanimals by kind:")
     for kind, count in sorted(by_kind.items(), key=lambda pair: (-pair[1], pair[0])):

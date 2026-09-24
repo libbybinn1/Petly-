@@ -40,6 +40,7 @@ from app.domain.enums import (
     AnimalSize,
     AnimalStatus,
     ApplicationStatus,
+    DomainEventType,
     ExperienceLevel,
     HomeType,
     InvitationStatus,
@@ -385,6 +386,42 @@ class MatchAnalysis(Base):
         CheckConstraint("score >= 0 AND score <= 100", name="score_range"),
         Index("ix_analyses_animal_direction", "animal_id", "direction"),
         Index("ix_analyses_adopter_direction", "adopter_profile_id", "direction"),
+        # One analysis per pairing per direction. `agent_service.worker`
+        # promises to update an existing row in place rather than insert a
+        # second one, and it finds that row with exactly these columns - but
+        # the find-then-write is not atomic, so two workers claiming the same
+        # pairing would each find nothing and each insert. The read side then
+        # shows whichever row it happened to order last, beside a score
+        # computed from the other one.
+        #
+        # Two filtered indexes rather than one, because `application_id` is
+        # nullable and NULL is not equal to itself: a single index over all
+        # four columns would let any number of rows through whenever the
+        # application is absent, which is the discovery case - most of them.
+        #
+        # SQLite parses `sqlite_where` and honours it. It is spelled out here
+        # anyway because the two engines must agree on which rows are unique,
+        # and a test suite that enforced a weaker rule than production would
+        # be worse than one that enforced none.
+        Index(
+            "uq_analysis_per_application",
+            "adopter_profile_id",
+            "animal_id",
+            "direction",
+            "application_id",
+            unique=True,
+            mssql_where=text("application_id IS NOT NULL"),
+            sqlite_where=text("application_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_analysis_without_application",
+            "adopter_profile_id",
+            "animal_id",
+            "direction",
+            unique=True,
+            mssql_where=text("application_id IS NULL"),
+            sqlite_where=text("application_id IS NULL"),
+        ),
     )
 
 
@@ -435,6 +472,13 @@ class DomainEvent(Base):
 
     __table_args__ = (
         _enum_check("aggregate_type", AggregateType),
+        # `DomainEventType` is the authoritative catalogue (see its
+        # docstring), and only `aggregate_type` was actually holding the
+        # database to it. A row whose `event_type` names no member cannot be
+        # read back - `EventStore._to_recorded_event` raises on it - so the
+        # write is what has to be refused, and only the database can refuse a
+        # write that did not come through the ORM.
+        _enum_check("event_type", DomainEventType),
         UniqueConstraint("aggregate_id", "sequence_number", name="aggregate_sequence"),
         Index("ix_events_aggregate", "aggregate_type", "aggregate_id", "sequence_number"),
         Index("ix_events_occurred", "occurred_at"),

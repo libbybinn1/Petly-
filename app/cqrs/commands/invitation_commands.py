@@ -11,7 +11,6 @@ it does not approve an adoption.** The human decision still happens later.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -38,6 +37,7 @@ from app.domain.invitation_rules import (
     status_after_expiry_sweep,
 )
 from app.eventstore.store import EventStore
+from app.infrastructure.clock import as_aware_utc, as_naive_utc, aware_utc_now
 from app.infrastructure.models import (
     AdopterProfile,
     AdoptionApplication,
@@ -48,26 +48,6 @@ from app.infrastructure.models import (
     User,
     new_identifier,
 )
-
-
-def _utc_now() -> datetime:
-    """Timezone-aware current time, for the 72-hour arithmetic."""
-    return datetime.now(UTC)
-
-
-def _naive(moment: datetime) -> datetime:
-    """Strip the timezone for storage.
-
-    SQL Server 2014 DATETIME columns are naive. Everything is stored as UTC
-    and read back as UTC; the conversion happens only at the boundary.
-    """
-    return moment.replace(tzinfo=None)
-
-
-def _aware(moment: datetime) -> datetime:
-    """Re-attach UTC to a value read from the database."""
-    return moment.replace(tzinfo=UTC)
-
 
 # --------------------------------------------------------------------------
 # Send
@@ -136,7 +116,7 @@ class SendInvitationHandler(CommandHandler[str]):
             )
         )
 
-        sent_at = _utc_now()
+        sent_at = aware_utc_now()
         expires_at = calculate_expiry(sent_at, self._response_window_hours)
         invitation_id = new_identifier()
 
@@ -148,8 +128,8 @@ class SendInvitationHandler(CommandHandler[str]):
                 sent_by_user_id=command.staff_user_id,
                 status=InvitationStatus.SENT.value,
                 staff_message=command.staff_message,
-                sent_at=_naive(sent_at),
-                expires_at=_naive(expires_at),
+                sent_at=as_naive_utc(sent_at),
+                expires_at=as_naive_utc(expires_at),
             )
         )
 
@@ -215,7 +195,7 @@ class MarkInvitationViewedHandler(CommandHandler[None]):
             return
 
         invitation.status = InvitationStatus.VIEWED.value
-        invitation.viewed_at = _naive(_utc_now())
+        invitation.viewed_at = as_naive_utc(aware_utc_now())
 
         EventStore(session).append(
             DomainEventType.INVITATION_VIEWED,
@@ -276,13 +256,13 @@ class RespondToInvitationHandler(CommandHandler[str | None]):
         if invitation.adopter_profile_id != command.adopter_profile_id:
             raise NotYourRecordError("This invitation belongs to another adopter.")
 
-        now = _utc_now()
+        now = aware_utc_now()
         ensure_response_is_allowed(
-            InvitationStatus(invitation.status), _aware(invitation.expires_at), now
+            InvitationStatus(invitation.status), as_aware_utc(invitation.expires_at), now
         )
 
         event_store = EventStore(session)
-        invitation.responded_at = _naive(now)
+        invitation.responded_at = as_naive_utc(now)
         invitation.status = (
             InvitationStatus.ACCEPTED.value
             if command.accepted
@@ -350,7 +330,7 @@ class RespondToInvitationHandler(CommandHandler[str | None]):
         )
 
         application_id = new_identifier()
-        submitted_at = _naive(_utc_now())
+        submitted_at = as_naive_utc(aware_utc_now())
 
         session.add(
             AdoptionApplication(
@@ -418,7 +398,7 @@ class ExpireOverdueInvitationsHandler(CommandHandler[int]):
         """
         assert isinstance(command, ExpireOverdueInvitationsCommand)
 
-        now = _utc_now()
+        now = aware_utc_now()
         awaiting = [status.value for status in InvitationStatus if status.is_awaiting_response]
 
         candidates = (
@@ -434,7 +414,7 @@ class ExpireOverdueInvitationsHandler(CommandHandler[int]):
 
         for invitation in candidates:
             new_status = status_after_expiry_sweep(
-                InvitationStatus(invitation.status), _aware(invitation.expires_at), now
+                InvitationStatus(invitation.status), as_aware_utc(invitation.expires_at), now
             )
             if new_status is None:
                 continue
@@ -526,6 +506,6 @@ def _notify(
             body=body,
             link_url=link_url,
             is_read=False,
-            created_at=_naive(_utc_now()),
+            created_at=as_naive_utc(aware_utc_now()),
         )
     )

@@ -3,14 +3,19 @@
 Course blueprint section 9.2 requires that state-changing operations and
 read operations be separated conceptually *and in implementation*. That
 separation is expressed here as two distinct type hierarchies with different
-contracts, and is verified by tests/unit/test_cqrs_separation.py.
+contracts, and is verified by tests/unit/test_architecture_guard.py.
 
 The contract, from docs/ARCHITECTURE.md section 3:
 
-    Command  changes state, returns an identifier or nothing, appends events
+    Command  changes state, returns an identifier, a count of what it
+             affected, or nothing; appends events
     Query    reads state, returns a DTO, never mutates, never commits
 
-A command never returns read data. When a screen needs data after a write,
+A command never returns read *data*. A count is not data about a record - it
+is how much the write did, which the caller cannot learn any other way and
+which no query can answer afterwards, because by then the rows have already
+moved. `MarkAllNotificationsReadHandler` returns how many messages it
+cleared, so the page can say so. When a screen needs the records themselves,
 the controller dispatches a query next.
 """
 
@@ -53,8 +58,9 @@ class CommandHandler(ABC, Generic[ResultT]):
             session: An open write transaction owned by the bus.
 
         Returns:
-            An identifier of what was created or changed, or None. Never a
-            read DTO - that is what queries are for.
+            An identifier of what was created or changed, a count of the
+            records it affected, or None. Never a read DTO - that is what
+            queries are for.
         """
 
 
@@ -123,7 +129,8 @@ class MessageBus:
             command: The command to execute.
 
         Returns:
-            Whatever the registered handler returns: an identifier, or None.
+            Whatever the registered handler returns: an identifier, a count,
+            or None.
 
         Raises:
             HandlerNotRegisteredError: If no handler is registered.

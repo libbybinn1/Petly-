@@ -53,6 +53,44 @@ MINIMUM_SCORE = 0
 # everyone or no one.
 RECOMMENDATION_THRESHOLD = 50
 
+# Above this, a pairing is worth leading with rather than merely allowing.
+# Five screens had pasted 75 and 50 into their own markup, which made the
+# thresholds a presentation detail that could drift per page; they are a
+# product judgement (spec section 8), so they live here with the arithmetic
+# and the screens ask for the band.
+STRONG_MATCH_THRESHOLD = 75
+
+
+class ScoreBand(StrEnum):
+    """How a score reads at a glance.
+
+    Three bands rather than a number, because that is the only thing the
+    presentation layer needs from the score's magnitude - and a template that
+    compares numbers is a template making a decision (rule R2). The values
+    double as the CSS modifier suffix, so a screen writes
+    `score--{{ score.band }}`.
+    """
+
+    STRONG = "strong"
+    FAIR = "fair"
+    WEAK = "weak"
+
+
+def band_for(score: int) -> ScoreBand:
+    """Place a 0-100 score in its band (spec section 8).
+
+    Args:
+        score: Any criterion or total score.
+
+    Returns:
+        The band, with each threshold inclusive at its lower bound.
+    """
+    if score >= STRONG_MATCH_THRESHOLD:
+        return ScoreBand.STRONG
+    if score >= RECOMMENDATION_THRESHOLD:
+        return ScoreBand.FAIR
+    return ScoreBand.WEAK
+
 
 class Criterion(StrEnum):
     """The matching criteria named in spec section 8."""
@@ -173,6 +211,12 @@ class AnimalFacts:
     has_special_needs: bool
     required_space: AnimalSize
     city: str
+    # False when the stored species named no member of the enum. The animal
+    # still has to carry a species for the rest of scoring to run, so it is
+    # filed under OTHER - but OTHER is a real catalogue category, and letting
+    # an unreadable value pass as one would hand the heaviest criterion a
+    # match nobody recorded. See `app.domain.facts.parse_species`.
+    species_is_known: bool = True
 
 
 @dataclass(frozen=True)
@@ -189,6 +233,11 @@ class CriterionScore:
         """This criterion's share of the final score."""
         return self.score * self.weight
 
+    @property
+    def band(self) -> ScoreBand:
+        """How this criterion's score reads at a glance (spec section 8)."""
+        return band_for(self.score)
+
 
 @dataclass(frozen=True)
 class MatchScore:
@@ -204,6 +253,16 @@ class MatchScore:
     def is_recommended(self) -> bool:
         """Whether this pairing is strong enough to present."""
         return not self.is_disqualified and self.score >= RECOMMENDATION_THRESHOLD
+
+    @property
+    def band(self) -> ScoreBand:
+        """How this total reads at a glance (spec section 8).
+
+        A disqualified pairing scores zero and therefore bands as weak; every
+        screen tests `is_disqualified` first and renders the blocked state
+        instead, so the band is never what a reader sees for one.
+        """
+        return band_for(self.score)
 
     @classmethod
     def disqualified(cls, direction: MatchDirection, reason: str) -> MatchScore:
@@ -500,6 +559,14 @@ def score_species_preference(adopter: AdopterFacts, animal: AnimalFacts) -> Crit
         return CriterionScore(
             Criterion.SPECIES_PREFERENCE, NEUTRAL_SCORE, 0.0,
             "The adopter expressed no species preference.",
+        )
+    if not animal.species_is_known:
+        # Neither a match nor a mismatch can be claimed about a species the
+        # record does not state, and rule R4 forbids asserting either.
+        return CriterionScore(
+            Criterion.SPECIES_PREFERENCE, NEUTRAL_SCORE, 0.0,
+            "This animal's species is not recorded, so it cannot be compared "
+            "with what the adopter asked for.",
         )
     if animal.species in adopter.preferred_species:
         return CriterionScore(

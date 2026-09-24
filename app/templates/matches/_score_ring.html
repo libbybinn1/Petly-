@@ -21,7 +21,8 @@
     <span class="score__label">Not eligible</span>
   </span>
 {% else %}
-  <span class="score {% if score.score >= 75 %}score--strong{% elif score.score >= 50 %}score--fair{% else %}score--weak{% endif %}"
+  {#- `band` comes from the domain, so this template holds no threshold. -#}
+  <span class="score score--{{ score.band }}"
         style="--ring-target: {{ score.score }}"
         role="img" aria-label="{{ score.score }} out of 100 match">
     <span class="score__value">{{ score.score }}</span>

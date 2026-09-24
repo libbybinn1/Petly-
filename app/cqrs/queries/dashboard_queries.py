@@ -18,7 +18,7 @@ Two implementation notes:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -34,6 +34,7 @@ from app.domain.enums import (
 )
 from app.domain.matching import RECOMMENDATION_THRESHOLD
 from app.eventstore.store import EventStore, RecordedEvent
+from app.infrastructure.clock import utc_now
 from app.infrastructure.models import (
     AdoptionApplication,
     AdoptionInvitation,
@@ -237,7 +238,7 @@ class GetDashboardSummaryHandler(QueryHandler[DashboardSummary]):
         """
         assert isinstance(query, GetDashboardSummaryQuery)
 
-        now = datetime.now(UTC).replace(tzinfo=None)
+        now = utc_now()
 
         animals_by_status = _count_animals_by_status(session)
         applications_by_status = _count_applications_by_status(session)

@@ -78,13 +78,22 @@ def find_my_pet() -> str | Response:
         flash("Complete your adoption profile to see personal matches.", "info")
         return redirect(url_for("personal.my_profile"))
 
-    matches = get_bus().dispatch_query(
+    bus = get_bus()
+    matches = bus.dispatch_query(
         FindMyPetQuery(adopter_profile_id=current_user.adopter_profile_id)
+    )
+    # Rendered into the page so the poller knows what it is looking at.
+    # Without a baseline it compared the first answer against nothing, so a
+    # page whose work had already finished polled every thirty seconds for
+    # as long as the tab stayed open (docs/UX.md section 3).
+    analysis_status = bus.dispatch_query(
+        GetAnalysisStatusQuery(adopter_profile_id=current_user.adopter_profile_id)
     )
 
     return render_template(
         "matches/find_my_pet.html",
         matches=matches,
+        analysis_status=analysis_status,
         has_complete_profile=current_user.has_complete_profile,
     )
 
@@ -94,13 +103,15 @@ def find_my_pet() -> str | Response:
 @require_staff()
 def find_my_adopter(animal_id: str) -> str:
     """Rank the adopters who already applied for this animal (spec section 7.2)."""
-    ranking = get_bus().dispatch_query(RankApplicantsQuery(animal_id=animal_id))
+    bus = get_bus()
+    ranking = bus.dispatch_query(RankApplicantsQuery(animal_id=animal_id))
     if ranking is None:
         abort(404)
 
     return render_template(
         "matches/find_my_adopter.html",
         ranking=ranking,
+        analysis_status=bus.dispatch_query(GetAnalysisStatusQuery(animal_id=animal_id)),
         mode="applicants",
     )
 
@@ -233,13 +244,15 @@ def find_more_adopters(animal_id: str) -> str:
     population, and only candidates passing every eligibility rule in spec
     section 10 are considered.
     """
-    ranking = get_bus().dispatch_query(FindMoreAdoptersQuery(animal_id=animal_id))
+    bus = get_bus()
+    ranking = bus.dispatch_query(FindMoreAdoptersQuery(animal_id=animal_id))
     if ranking is None:
         abort(404)
 
     return render_template(
         "matches/find_my_adopter.html",
         ranking=ranking,
+        analysis_status=bus.dispatch_query(GetAnalysisStatusQuery(animal_id=animal_id)),
         mode="discovery",
     )
 

@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.cqrs.base import Query, QueryHandler
 from app.domain.enums import AnalysisJobStatus
+from app.infrastructure.clock import as_aware_utc
 from app.infrastructure.models import AnalysisJob, MatchAnalysis
 
 SelectT = TypeVar("SelectT", bound=Select[Any])
@@ -62,8 +63,12 @@ class AnalysisStatus:
             "completed": self.completed,
             "failed": self.failed,
             "generation": self.generation,
+            # Read as UTC before it is formatted. These columns are naive
+            # (SQL Server 2014 has no timezone type), and an ISO string
+            # with no offset is a moment the browser reads as local time -
+            # which on this machine is two or three hours out.
             "oldest_pending_at": (
-                self.oldest_pending_at.isoformat()
+                as_aware_utc(self.oldest_pending_at).isoformat()
                 if self.oldest_pending_at is not None
                 else None
             ),
@@ -156,7 +161,11 @@ def _newest_analysis_epoch(session: Session, query: GetAnalysisStatusQuery) -> i
     newest: datetime | None = session.execute(statement).scalar_one_or_none()
     if newest is None:
         return 0
-    return int(newest.timestamp())
+    # `.timestamp()` on a naive value reads it as *local* time, so the
+    # generation number jumped by the machine's UTC offset - and every
+    # poller saw one spurious change the first time it compared two
+    # answers across that boundary.
+    return int(as_aware_utc(newest).timestamp())
 
 
 def _oldest_outstanding_at(

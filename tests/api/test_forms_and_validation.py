@@ -407,3 +407,43 @@ class TestAnimalStatusVisibility:
         response = client.get(f"/animals/{world['adopted_animal_id']}")
         assert response.status_code == 200
         assert AnimalStatus.ADOPTED.value.encode() in response.data.upper()
+
+
+class TestPaginationIsClampedTheSameWayEverywhere:
+    """Both listings paginate, and each used to clamp differently.
+
+    The staff table floored the page at one; the public search clamped only
+    the computed offset, so `?page=0` rendered page one's rows underneath a
+    pager that reported page 0 - with "previous" enabled and pointing at
+    page -1.
+    """
+
+    def test_a_zero_page_reads_as_the_first_page(
+        self, application: Flask, world: dict[str, str]
+    ) -> None:
+        """Proves the reported page is the one that was actually shown."""
+        from app.cqrs.queries.animal_queries import AnimalSearchFilters, SearchAnimalsQuery
+
+        results = application.config["BUS"].dispatch_query(
+            SearchAnimalsQuery(filters=AnimalSearchFilters(), page=0)
+        )
+
+        assert results.page == 1
+        assert results.has_previous is False
+
+    def test_a_negative_page_size_cannot_reach_the_query(
+        self, application: Flask, world: dict[str, str]
+    ) -> None:
+        """Proves a forged page size is floored rather than passed to LIMIT.
+
+        Negative half of the pair: a negative LIMIT is a database error on
+        one engine and an unbounded read on another.
+        """
+        from app.cqrs.queries.animal_queries import AnimalSearchFilters, SearchAnimalsQuery
+
+        results = application.config["BUS"].dispatch_query(
+            SearchAnimalsQuery(filters=AnimalSearchFilters(), page=1, page_size=-10)
+        )
+
+        assert results.page_size == 1
+        assert len(results.animals) <= 1

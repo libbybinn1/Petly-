@@ -43,6 +43,7 @@ from app.domain.enums import (
     MatchDirection,
     UserRole,
 )
+from app.infrastructure.clock import utc_now
 from app.infrastructure.database import Base
 from app.infrastructure.models import (
     AdopterProfile,
@@ -54,6 +55,7 @@ from app.infrastructure.models import (
     new_identifier,
 )
 from sqlalchemy import Table, create_engine, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 pytestmark = pytest.mark.integration
@@ -511,10 +513,11 @@ class TestDuplicateActiveApplications:
         """Proves FR-7.2 is enforced by a constraint, not only by a handler check.
 
         docs/MODEL_DATA.md section 2.5 specifies a filtered unique index on
-        (adopter_profile_id, animal_id) for the active statuses. It was
-        missing from the model, which left the rule resting entirely on the
-        check-then-insert in `SubmitApplicationHandler` - and a
-        check-then-insert is not atomic, as the test below shows.
+        (adopter_profile_id, animal_id) for the active statuses. It is
+        declared as `uq_active_application`, and without it the rule would
+        rest entirely on the check-then-insert in
+        `SubmitApplicationHandler` - which is not atomic, as the concurrency
+        test below shows.
         """
         table = cast("Table", AdoptionApplication.__table__)
         unique_pairs = [
@@ -524,6 +527,82 @@ class TestDuplicateActiveApplications:
         ]
 
         assert {"adopter_profile_id", "animal_id"} in unique_pairs
+
+    def test_a_second_active_application_is_refused_by_the_index(
+        self, tmp_path: Path
+    ) -> None:
+        """Proves the index refuses the row, rather than merely being declared.
+
+        The structural test above would pass just as happily against an
+        index whose filter matched nothing. This inserts the second row
+        directly, bypassing the handler guard, which is what a lost race
+        would do.
+        """
+        engine = create_engine(f"sqlite:///{tmp_path.as_posix()}/duplicate.db", future=True)
+        Base.metadata.create_all(engine)
+        factory = sessionmaker(engine, expire_on_commit=False)
+
+        with factory() as setup:
+            user_id, profile_id = add_adopter(setup, "double@t.test")
+            animal_id = add_animal(setup, "Rex")
+            setup.commit()
+
+        with factory() as session:
+            for _ in range(2):
+                session.add(
+                    AdoptionApplication(
+                        application_id=new_identifier(),
+                        adopter_profile_id=profile_id,
+                        animal_id=animal_id,
+                        status=ApplicationStatus.SUBMITTED.value,
+                        submitted_at=utc_now(),
+                    )
+                )
+
+            with pytest.raises(IntegrityError) as failure:
+                session.commit()
+
+        # SQLite names the columns rather than the index, so the message is
+        # matched on what it does say.
+        message = str(failure.value)
+        assert "UNIQUE constraint failed" in message
+        assert "adoption_applications.adopter_profile_id" in message
+        assert "adoption_applications.animal_id" in message
+        engine.dispose()
+
+    def test_a_closed_application_does_not_block_a_later_one(
+        self, tmp_path: Path
+    ) -> None:
+        """Proves the index is filtered on the active statuses.
+
+        Negative half of the pair: the rule is one *active* application per
+        adopter per animal, so a rejected application must not stop the
+        person applying again when the animal comes back.
+        """
+        engine = create_engine(f"sqlite:///{tmp_path.as_posix()}/reapply.db", future=True)
+        Base.metadata.create_all(engine)
+        factory = sessionmaker(engine, expire_on_commit=False)
+
+        with factory() as setup:
+            user_id, profile_id = add_adopter(setup, "again@t.test")
+            animal_id = add_animal(setup, "Rex")
+            setup.commit()
+
+        with factory() as session:
+            for status in (ApplicationStatus.REJECTED, ApplicationStatus.SUBMITTED):
+                session.add(
+                    AdoptionApplication(
+                        application_id=new_identifier(),
+                        adopter_profile_id=profile_id,
+                        animal_id=animal_id,
+                        status=status.value,
+                        submitted_at=utc_now(),
+                    )
+                )
+            session.commit()
+
+            assert session.query(AdoptionApplication).count() == 2
+        engine.dispose()
 
     def test_the_guard_cannot_see_a_concurrent_uncommitted_application(
         self, tmp_path: Path
@@ -539,8 +618,9 @@ class TestDuplicateActiveApplications:
         SQLite cannot finish the demonstration because it takes a global write
         lock, which serialises the two inserts. SQL Server 2014 under its
         default READ COMMITTED does not, which is why the filtered unique
-        index documented in MODEL_DATA.md section 2.5 is the only real
-        protection - and it is missing (see the xfail above).
+        index documented in MODEL_DATA.md section 2.5 is the real protection.
+        It is declared as `uq_active_application`, and the test above proves
+        it refuses the row the guard would have let through.
         """
         from app.cqrs.commands.application_commands import _applications_of
         from app.domain.application_rules import ensure_application_may_be_submitted

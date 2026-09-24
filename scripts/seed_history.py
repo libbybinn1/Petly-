@@ -29,21 +29,19 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
+from app.domain.animal_rules import animal_status_changed_payload
 from app.domain.enums import (
-    ActivityLevel,
     AggregateType,
     AnimalSize,
     AnimalStatus,
     ApplicationStatus,
     DomainEventType,
-    ExperienceLevel,
     HomeType,
     InvitationStatus,
     MatchDirection,
     NotificationType,
-    Species,
-    Temperament,
 )
+from app.domain.facts import adopter_facts_from_row, animal_facts_from_row
 from app.domain.matching import (
     AdopterFacts,
     AnimalFacts,
@@ -99,11 +97,24 @@ INVITATION_PLAN: tuple[tuple[InvitationStatus, int], ...] = (
     (InvitationStatus.EXPIRED, 9),
 )
 
-INVITATION_EXPIRY_HOURS = 72
 # Ages for invitations that have expired, and for those still inside the
 # window. Kept apart so the status and the clock never contradict each other.
-EXPIRED_INVITATION_AGES_HOURS = (80, 96, 140, 200, 260)
-OPEN_INVITATION_AGES_HOURS = (1, 4, 10, 24, 40, 60)
+# The expiry window itself is configuration (`invitation_expiry_hours`) and
+# arrives on the SeedContext: a copy of it here would have gone on saying 72
+# while the application ran on something else, and the dashboard expiry
+# figure would then disagree with the rows it counted.
+# Expressed as multiples of the window rather than as hours, so the ages and
+# the window cannot disagree: with a fixed tuple tuned to 72 hours, raising
+# the configured window turned "expired" invitations into open ones.
+EXPIRED_INVITATION_AGE_MULTIPLES = (1.1, 1.3, 1.9, 2.8, 3.6)
+OPEN_INVITATION_AGE_FRACTIONS = (0.02, 0.06, 0.14, 0.33, 0.55, 0.83)
+
+# How long after submitting an application it was decided. One constant, used
+# for the stored `decided_at`, for the event that recorded the decision and
+# for the notification that announced it: they were three different offsets,
+# so a history page showed a rejection event a day before the decision the
+# row claimed.
+DECISION_DELAY = timedelta(days=1)
 
 # The model name the agent records when the deterministic scorer produced a
 # result without a language model. The read side keys "was this written by a
@@ -118,8 +129,6 @@ POOR_MATCH_SCORE = 50
 STRONG_CRITERION_SCORE = 80
 WEAK_CRITERION_SCORE = 60
 MAXIMUM_REASONS = 3
-
-YOUNG_CHILD_AGE = 12
 
 
 @dataclass
@@ -136,6 +145,26 @@ class SeedContext:
     randomizer: random.Random
     now: datetime
     staff_users: list[User] = field(default_factory=list)
+    # From `Configuration.invitation_expiry_hours`, so the seeded window is
+    # the one the running application enforces.
+    invitation_expiry_hours: int = 72
+
+    def at_or_before_now(self, moment: datetime) -> datetime:
+        """Clamp a computed timestamp to the present.
+
+        Seeded history is built by adding offsets to an age drawn at random,
+        and some of those ages are small: an invitation sent an hour ago with
+        a response two hours later was answered in the future. Nothing reads
+        such a row as impossible - it simply shows a reply that has not
+        happened yet.
+
+        Args:
+            moment: The computed timestamp.
+
+        Returns:
+            The same moment, or now if it had overshot.
+        """
+        return min(moment, self.now)
 
     def some_staff_member(self) -> User:
         """Pick a staff member to act, so events name a person.
@@ -244,7 +273,9 @@ def _seed_animal_status_history(context: SeedContext, animals: list[Animal]) -> 
             DomainEventType.ANIMAL_STATUS_CHANGED,
             AggregateType.ANIMAL,
             animal.animal_id,
-            payload={"from": AnimalStatus.AVAILABLE.value, "to": animal.status},
+            payload=animal_status_changed_payload(
+                animal.animal_id, AnimalStatus.AVAILABLE.value, animal.status
+            ),
             actor_user_id=context.some_staff_member().user_id,
             occurred_at=changed_at.replace(tzinfo=UTC),
         )
@@ -306,6 +337,7 @@ def _add_application(
     """Persist one application and append its lifecycle events."""
     age_in_days = context.randomizer.randint(NEWEST_APPLICATION_DAYS, OLDEST_APPLICATION_DAYS)
     submitted_at = context.now - timedelta(days=age_in_days)
+    decided_at = context.at_or_before_now(submitted_at + DECISION_DELAY)
     application_id = new_identifier()
 
     context.session.add(
@@ -318,7 +350,7 @@ def _add_application(
                 f"I would love to meet {animal.name}. I think we would suit each other."
             ),
             submitted_at=submitted_at,
-            decided_at=(submitted_at + timedelta(days=2)) if status.is_final else None,
+            decided_at=decided_at if status.is_final else None,
         )
     )
     context.event_store.append(
@@ -338,9 +370,9 @@ def _add_application(
         else context.some_staff_member().user_id
     )
     _append_application_outcome_event(
-        context, application_id, animal, status, submitted_at, actor_user_id
+        context, application_id, animal, status, decided_at, actor_user_id
     )
-    _notify_of_application_outcome(context, profile, animal, status, submitted_at)
+    _notify_of_application_outcome(context, profile, animal, status, decided_at)
 
     return SeededApplication(
         application_id=application_id,
@@ -363,10 +395,20 @@ def _append_application_outcome_event(
     application_id: str,
     animal: Animal,
     status: ApplicationStatus,
-    submitted_at: datetime,
+    decided_at: datetime,
     actor_user_id: str,
 ) -> None:
-    """Append the event that moved an application out of SUBMITTED."""
+    """Append the event that moved an application out of SUBMITTED.
+
+    Args:
+        context: The seeding collaborators.
+        application_id: The application being decided.
+        animal: The animal it was for.
+        status: The status it moved to.
+        decided_at: When it was decided - the same moment stored on the row,
+            so the timeline and the record cannot disagree.
+        actor_user_id: Who decided it.
+    """
     event_type = OUTCOME_EVENTS.get(status)
     if event_type is None:
         return
@@ -377,7 +419,7 @@ def _append_application_outcome_event(
         application_id,
         payload={"animal_id": animal.animal_id},
         actor_user_id=actor_user_id,
-        occurred_at=(submitted_at + timedelta(days=1)).replace(tzinfo=UTC),
+        occurred_at=decided_at.replace(tzinfo=UTC),
     )
 
 
@@ -386,7 +428,7 @@ def _notify_of_application_outcome(
     profile: AdopterProfile,
     animal: Animal,
     status: ApplicationStatus,
-    submitted_at: datetime,
+    decided_at: datetime,
 ) -> None:
     """Tell the adopter their application was decided (spec section 23).
 
@@ -405,7 +447,7 @@ def _notify_of_application_outcome(
             f"Another home was chosen for {animal.name}. We would be glad to "
             "suggest animals with a similar temperament."
         ),
-        submitted_at + timedelta(days=1),
+        decided_at,
     )
 
 
@@ -542,7 +584,11 @@ def _move_animal_into_adoption(
         DomainEventType.ANIMAL_STATUS_CHANGED,
         AggregateType.ANIMAL,
         application.animal.animal_id,
-        payload={"from": previous_status, "to": AnimalStatus.ADOPTION_IN_PROGRESS.value},
+        payload=animal_status_changed_payload(
+            application.animal.animal_id,
+            previous_status,
+            AnimalStatus.ADOPTION_IN_PROGRESS.value,
+        ),
         actor_user_id=deciding_staff.user_id,
         occurred_at=decided_at.replace(tzinfo=UTC),
     )
@@ -686,44 +732,19 @@ def _analysis_prose(score: MatchScore) -> tuple[list[str], list[str]]:
 
 
 def _adopter_facts(profile: AdopterProfile) -> AdopterFacts:
-    """Convert a seeded profile into the domain value object.
+    """Convert a seeded profile into the domain value object (spec section 8).
 
-    The read side has its own converter, but reaching into a query module for
-    a private helper would couple this script to that module's internals. The
-    stored values came from typed enums moments ago, so this cannot fail.
+    Delegated to `app.domain.facts` rather than mapped here. This script used
+    to own a third copy of the conversion, and like the agent's it never read
+    the adopter's age or size preference - so the analyses it seeded carried
+    scores the web tier would never compute for the same records.
     """
-    return AdopterFacts(
-        home_type=HomeType(profile.home_type),
-        has_yard=bool(profile.has_yard),
-        household_has_children=bool(profile.household_has_children),
-        youngest_child_age=profile.youngest_child_age,
-        has_other_animals=bool(profile.has_other_animals),
-        experience_level=ExperienceLevel(profile.experience_level),
-        activity_level=ActivityLevel(profile.activity_level),
-        daily_hours_available=float(profile.daily_hours_available),
-        city=profile.city,
-        preferred_species=frozenset(
-            Species(value) for value in (profile.preferred_species or "").split(",") if value
-        ),
-        open_to_proactive_suggestions=bool(profile.open_to_proactive_suggestions),
-        is_complete=bool(profile.is_complete),
-    )
+    return adopter_facts_from_row(profile)
 
 
 def _animal_facts(animal: Animal) -> AnimalFacts:
-    """Convert a seeded animal into the domain value object."""
-    return AnimalFacts(
-        species=Species(animal.species),
-        age_years=float(animal.age_years),
-        size=AnimalSize(animal.size),
-        temperament=Temperament(animal.temperament),
-        activity_level=ActivityLevel(animal.activity_level),
-        good_with_children=bool(animal.good_with_children),
-        good_with_other_animals=bool(animal.good_with_other_animals),
-        has_special_needs=bool(animal.has_special_needs),
-        required_space=AnimalSize(animal.required_space),
-        city=animal.city,
-    )
+    """Convert a seeded animal into the domain value object (spec section 8)."""
+    return animal_facts_from_row(animal)
 
 
 # --------------------------------------------------------------------------
@@ -868,20 +889,29 @@ def _invitation_timeline(context: SeedContext, status: InvitationStatus) -> Invi
     one must be inside it, or the dashboard's expiry figure and the row it
     counted would contradict each other.
     """
-    ages = (
-        EXPIRED_INVITATION_AGES_HOURS
+    window_hours = context.invitation_expiry_hours
+    proportions = (
+        EXPIRED_INVITATION_AGE_MULTIPLES
         if status is InvitationStatus.EXPIRED
-        else OPEN_INVITATION_AGES_HOURS
+        else OPEN_INVITATION_AGE_FRACTIONS
     )
-    sent_at = context.now - timedelta(hours=context.randomizer.choice(ages))
+    age_in_hours = window_hours * context.randomizer.choice(proportions)
+    sent_at = context.now - timedelta(hours=age_in_hours)
     was_seen = status not in (InvitationStatus.SENT, InvitationStatus.EXPIRED)
     was_answered = status in (InvitationStatus.ACCEPTED, InvitationStatus.DECLINED)
 
+    # Clamped, because the open-invitation ages go down to one hour: adding
+    # two hours to that put the reply in the future, which is a row nothing
+    # reads as impossible - it simply shows an answer that has not happened.
     return InvitationTimeline(
         sent_at=sent_at,
-        expires_at=sent_at + timedelta(hours=INVITATION_EXPIRY_HOURS),
-        viewed_at=sent_at + timedelta(hours=1) if was_seen else None,
-        responded_at=sent_at + timedelta(hours=2) if was_answered else None,
+        expires_at=sent_at + timedelta(hours=window_hours),
+        viewed_at=(
+            context.at_or_before_now(sent_at + timedelta(hours=1)) if was_seen else None
+        ),
+        responded_at=(
+            context.at_or_before_now(sent_at + timedelta(hours=2)) if was_answered else None
+        ),
     )
 
 

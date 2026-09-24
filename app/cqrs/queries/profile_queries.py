@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.cqrs.base import Query, QueryHandler
+from app.domain.facts import split_stored_values
 from app.infrastructure.models import AdopterProfile
 
 
@@ -73,11 +74,7 @@ class GetMyProfileHandler(QueryHandler[AdopterProfileView | None]):
             city=row.city,
             preferred_age_range=row.preferred_age_range,
             preferred_size=row.preferred_size,
-            preferred_species=[
-                value.strip()
-                for value in (row.preferred_species or "").split(",")
-                if value.strip()
-            ],
+            preferred_species=split_stored_values(row.preferred_species),
             open_to_proactive_suggestions=bool(row.open_to_proactive_suggestions),
             is_complete=bool(row.is_complete),
         )

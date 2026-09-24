@@ -6,7 +6,14 @@
     <h1>Welcome back</h1>
     <p class="auth-card__lead">Sign in to see your matches, applications and invitations.</p>
 
-    <form method="post" action="{{ url_for('auth.login') }}">
+    {#- `next` is carried through the post, because the controller reads it
+        from the query string and this action dropped it: anyone sent to
+        /login?next=/my/applications by the sign-in redirect landed on the
+        home page after typing their password, having lost the page they
+        asked for. The value is validated before it is followed
+        (`is_safe_redirect_target`), so echoing it here adds no risk. -#}
+    <form method="post"
+          action="{{ url_for('auth.login', next=request.args.get('next')) }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
       {#- Both fields are required, so saying it once is clearer than an

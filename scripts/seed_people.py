@@ -19,34 +19,23 @@ Two accounts are fixed and must not be renamed: `maya@example.com` and
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import StrEnum
 
 from app.domain.enums import ActivityLevel, AnimalSize, ExperienceLevel, HomeType, Species
+from app.domain.matching import AgePreference
+from app.domain.profile_rules import ProfileSubmission, validate_profile
 
-# The same bounds `app/domain/profile_rules.py` enforces on a submitted form.
-# Repeated rather than imported because the validation below is a check on
-# hand-written seed data, not a second implementation of the form rules.
-MINIMUM_DAILY_HOURS = 0.0
-MAXIMUM_DAILY_HOURS = 24.0
-MINIMUM_CHILD_AGE = 0
-MAXIMUM_CHILD_AGE = 18
-
-
-class PreferredAgeRange(StrEnum):
-    """Vocabulary for `adopter_profiles.preferred_age_range`.
-
-    The column is a free NVARCHAR(20) that no rule currently parses: matching
-    (spec section 8) scores age indirectly, through activity level and special
-    needs, so nothing depends on the exact spelling. It *is* handed to the
-    agent by the MCP `get_adopter_profile` tool, so the values are written to
-    read as English rather than as codes. If a later rule needs to compare
-    them, this enum is the one place to change.
-    """
-
-    BABY = "0-2 years"
-    ADULT = "2-8 years"
-    SENIOR = "8+ years"
-    ANY = "any"
+# `preferred_age_range` is spelled with the domain's own vocabulary
+# (`AgePreference`), not a copy of it. This module used to declare a parallel
+# `PreferredAgeRange` whose member for the youngest band was called BABY
+# where the domain calls it YOUNG - two names for one stored string, which is
+# how a seeded profile ends up holding a value no rule recognises. The
+# docstring beside it also still claimed nothing parsed the column; the age
+# criterion in `app/domain/matching.py` does, and scores it.
+#
+# The daily-hours and child-age bounds are imported from
+# `app/domain/profile_rules.py` for the same reason: seeded data that the
+# real form would have rejected is not demo data, it is a bug with a
+# plausible face.
 
 
 @dataclass(frozen=True)
@@ -67,7 +56,7 @@ class AdopterSpecification:
     daily_hours_available: float
     preferred_species: tuple[Species, ...]
     preferred_size: AnimalSize | None
-    preferred_age_range: PreferredAgeRange
+    preferred_age_range: AgePreference
     summary: str
     has_yard: bool = False
     yard_size_sqm: int | None = None
@@ -103,13 +92,13 @@ ADOPTER_SPECIFICATIONS: tuple[AdopterSpecification, ...] = (
     AdopterSpecification(
         "Maya Cohen", "maya@example.com", "Tel Aviv", HomeType.APARTMENT,
         ExperienceLevel.NONE, ActivityLevel.LOW, 2.0,
-        (Species.CAT, Species.RABBIT), AnimalSize.SMALL, PreferredAgeRange.ANY,
+        (Species.CAT, Species.RABBIT), AnimalSize.SMALL, AgePreference.ANY,
         "First-time adopter in a small flat. Quiet evenings, no garden.",
     ),
     AdopterSpecification(
         "Daniel Levi", "daniel@example.com", "Haifa", HomeType.HOUSE,
         ExperienceLevel.EXPERIENCED, ActivityLevel.HIGH, 5.0,
-        (Species.DOG,), AnimalSize.LARGE, PreferredAgeRange.ADULT,
+        (Species.DOG,), AnimalSize.LARGE, AgePreference.ADULT,
         "Family with a seven-year-old, a fenced garden and a resident cat.",
         has_yard=True, yard_size_sqm=150, household_has_children=True,
         youngest_child_age=7, other_animals_description="One resident cat, eight years old",
@@ -117,14 +106,14 @@ ADOPTER_SPECIFICATIONS: tuple[AdopterSpecification, ...] = (
     AdopterSpecification(
         "Noa Friedman", "noa@example.com", "Tel Aviv", HomeType.APARTMENT,
         ExperienceLevel.SOME, ActivityLevel.MODERATE, 3.5,
-        (Species.CAT,), AnimalSize.SMALL, PreferredAgeRange.ADULT,
+        (Species.CAT,), AnimalSize.SMALL, AgePreference.ADULT,
         "Works from home three days a week and already has one cat.",
         other_animals_description="A four-year-old tabby who tolerates company",
     ),
     AdopterSpecification(
         "Yossi Mizrahi", "yossi@example.com", "Beer Sheva", HomeType.FARM,
         ExperienceLevel.EXPERIENCED, ActivityLevel.HIGH, 8.0,
-        (Species.DOG,), AnimalSize.LARGE, PreferredAgeRange.ANY,
+        (Species.DOG,), AnimalSize.LARGE, AgePreference.ANY,
         "Runs a smallholding with two working dogs and a great deal of land.",
         has_yard=True, yard_size_sqm=4000,
         other_animals_description="Two working dogs who live outdoors",
@@ -132,27 +121,27 @@ ADOPTER_SPECIFICATIONS: tuple[AdopterSpecification, ...] = (
     AdopterSpecification(
         "Tamar Shapiro", "tamar@example.com", "Jerusalem", HomeType.APARTMENT,
         ExperienceLevel.SOME, ActivityLevel.MODERATE, 4.0,
-        (Species.CAT, Species.GUINEA_PIG), AnimalSize.SMALL, PreferredAgeRange.ADULT,
+        (Species.CAT, Species.GUINEA_PIG), AnimalSize.SMALL, AgePreference.ADULT,
         "Flat in the city with a twelve-year-old who has been asking for two years.",
         household_has_children=True, youngest_child_age=12,
     ),
     AdopterSpecification(
         "Amit Golan", "amit@example.com", "Netanya", HomeType.HOUSE,
         ExperienceLevel.NONE, ActivityLevel.MODERATE, 3.0,
-        (Species.DOG, Species.CAT), AnimalSize.MEDIUM, PreferredAgeRange.ADULT,
+        (Species.DOG, Species.CAT), AnimalSize.MEDIUM, AgePreference.ADULT,
         "House with a small garden. Wants to be found rather than to search.",
         has_yard=True, yard_size_sqm=40, open_to_proactive_suggestions=False,
     ),
     AdopterSpecification(
         "Shira Ben-David", "shira@example.com", "Rishon LeZion", HomeType.APARTMENT,
         ExperienceLevel.SOME, ActivityLevel.LOW, 2.5,
-        (Species.RABBIT, Species.HAMSTER), AnimalSize.SMALL, PreferredAgeRange.ANY,
+        (Species.RABBIT, Species.HAMSTER), AnimalSize.SMALL, AgePreference.ANY,
         "Kept rabbits as a teenager and would like to again.",
     ),
     AdopterSpecification(
         "Eitan Barak", "eitan@example.com", "Ramat Gan", HomeType.HOUSE,
         ExperienceLevel.EXPERIENCED, ActivityLevel.HIGH, 6.0,
-        (Species.DOG,), AnimalSize.LARGE, PreferredAgeRange.ADULT,
+        (Species.DOG,), AnimalSize.LARGE, AgePreference.ADULT,
         "Experienced dog owner with a four-year-old in the house.",
         has_yard=True, yard_size_sqm=80, household_has_children=True,
         youngest_child_age=4,
@@ -160,28 +149,28 @@ ADOPTER_SPECIFICATIONS: tuple[AdopterSpecification, ...] = (
     AdopterSpecification(
         "Liora Katz", "liora@example.com", "Haifa", HomeType.APARTMENT,
         ExperienceLevel.EXPERIENCED, ActivityLevel.LOW, 5.0,
-        (Species.CAT,), AnimalSize.SMALL, PreferredAgeRange.SENIOR,
+        (Species.CAT,), AnimalSize.SMALL, AgePreference.SENIOR,
         "Retired, home all day, and has nursed two cats through old age.",
         other_animals_description="One elderly cat on thyroid medication",
     ),
     AdopterSpecification(
         "Omer Peretz", "omer@example.com", "Petah Tikva", HomeType.HOUSE,
         ExperienceLevel.SOME, ActivityLevel.HIGH, 4.5,
-        (Species.DOG,), AnimalSize.MEDIUM, PreferredAgeRange.ADULT,
+        (Species.DOG,), AnimalSize.MEDIUM, AgePreference.ADULT,
         "Runs most mornings and wants a dog that can keep up.",
         has_yard=True, yard_size_sqm=80, open_to_proactive_suggestions=False,
     ),
     AdopterSpecification(
         "Rivka Adler", "rivka@example.com", "Ashdod", HomeType.APARTMENT,
         ExperienceLevel.NONE, ActivityLevel.LOW, 2.0,
-        (Species.GUINEA_PIG, Species.RABBIT), AnimalSize.SMALL, PreferredAgeRange.BABY,
+        (Species.GUINEA_PIG, Species.RABBIT), AnimalSize.SMALL, AgePreference.YOUNG,
         "Looking for a first pet for a careful nine-year-old.",
         household_has_children=True, youngest_child_age=9,
     ),
     AdopterSpecification(
         "Gal Rosen", "gal@example.com", "Herzliya", HomeType.HOUSE,
         ExperienceLevel.EXPERIENCED, ActivityLevel.MODERATE, 5.5,
-        (Species.DOG, Species.CAT), AnimalSize.MEDIUM, PreferredAgeRange.ANY,
+        (Species.DOG, Species.CAT), AnimalSize.MEDIUM, AgePreference.ANY,
         "Long-term foster carer with a garden and a very tolerant resident dog.",
         has_yard=True, yard_size_sqm=150,
         other_animals_description="A ten-year-old labrador who likes everybody",
@@ -189,19 +178,19 @@ ADOPTER_SPECIFICATIONS: tuple[AdopterSpecification, ...] = (
     AdopterSpecification(
         "Noam Bar-Lev", "noam@example.com", "Tel Aviv", HomeType.APARTMENT,
         ExperienceLevel.NONE, ActivityLevel.LOW, 1.5,
-        (Species.HAMSTER, Species.GUINEA_PIG), AnimalSize.SMALL, PreferredAgeRange.ANY,
+        (Species.HAMSTER, Species.GUINEA_PIG), AnimalSize.SMALL, AgePreference.ANY,
         "Student in a shared flat. Small, quiet and low-cost is the brief.",
     ),
     AdopterSpecification(
         "Hila Weiss", "hila@example.com", "Netanya", HomeType.APARTMENT,
         ExperienceLevel.SOME, ActivityLevel.LOW, 8.0,
-        (Species.CAT,), AnimalSize.SMALL, PreferredAgeRange.SENIOR,
+        (Species.CAT,), AnimalSize.SMALL, AgePreference.SENIOR,
         "Widowed, at home all day, and specifically asking for an older cat.",
     ),
     AdopterSpecification(
         "Avi Shalev", "avi@example.com", "Modiin", HomeType.FARM,
         ExperienceLevel.EXPERIENCED, ActivityLevel.HIGH, 9.0,
-        (Species.DOG, Species.OTHER), AnimalSize.LARGE, PreferredAgeRange.ANY,
+        (Species.DOG, Species.OTHER), AnimalSize.LARGE, AgePreference.ANY,
         "Keeps chickens and two farm dogs on four dunams outside the city.",
         has_yard=True, yard_size_sqm=4000, household_has_children=True,
         youngest_child_age=14,
@@ -210,7 +199,7 @@ ADOPTER_SPECIFICATIONS: tuple[AdopterSpecification, ...] = (
     AdopterSpecification(
         "Michal Dayan", "michal@example.com", "Rehovot", HomeType.HOUSE,
         ExperienceLevel.SOME, ActivityLevel.MODERATE, 3.0,
-        (Species.DOG, Species.CAT), AnimalSize.MEDIUM, PreferredAgeRange.ADULT,
+        (Species.DOG, Species.CAT), AnimalSize.MEDIUM, AgePreference.ADULT,
         "House with a garden and a two-year-old. Needs an animal proven with toddlers.",
         has_yard=True, yard_size_sqm=80, household_has_children=True,
         youngest_child_age=2,
@@ -218,7 +207,7 @@ ADOPTER_SPECIFICATIONS: tuple[AdopterSpecification, ...] = (
     AdopterSpecification(
         "Ronen Azoulay", "ronen@example.com", "Haifa", HomeType.HOUSE,
         ExperienceLevel.EXPERIENCED, ActivityLevel.MODERATE, 6.0,
-        (Species.CAT, Species.DOG, Species.RABBIT), None, PreferredAgeRange.SENIOR,
+        (Species.CAT, Species.DOG, Species.RABBIT), None, AgePreference.SENIOR,
         "Veterinary nurse who takes the animals nobody else will.",
         has_yard=True, yard_size_sqm=150,
         other_animals_description="Three rescue cats and a senior beagle",
@@ -226,21 +215,21 @@ ADOPTER_SPECIFICATIONS: tuple[AdopterSpecification, ...] = (
     AdopterSpecification(
         "Yael Sabag", "yael@example.com", "Kfar Saba", HomeType.APARTMENT,
         ExperienceLevel.NONE, ActivityLevel.MODERATE, 2.0,
-        (Species.RABBIT,), AnimalSize.SMALL, PreferredAgeRange.BABY,
+        (Species.RABBIT,), AnimalSize.SMALL, AgePreference.YOUNG,
         "Has read three books about rabbits and owned none.",
         open_to_proactive_suggestions=False,
     ),
     AdopterSpecification(
         "Itamar Ohana", "itamar@example.com", "Tel Aviv", HomeType.APARTMENT,
         ExperienceLevel.SOME, ActivityLevel.LOW, 0.5,
-        (Species.CAT,), AnimalSize.SMALL, PreferredAgeRange.SENIOR,
+        (Species.CAT,), AnimalSize.SMALL, AgePreference.SENIOR,
         "Works twelve-hour days. Honest about having very little time.",
         open_to_proactive_suggestions=False,
     ),
     AdopterSpecification(
         "Sivan Elbaz", "sivan@example.com", "Holon", HomeType.HOUSE,
         ExperienceLevel.SOME, ActivityLevel.HIGH, 5.0,
-        (Species.DOG,), AnimalSize.LARGE, PreferredAgeRange.BABY,
+        (Species.DOG,), AnimalSize.LARGE, AgePreference.YOUNG,
         "Two teenagers who have promised to do the walking.",
         has_yard=True, yard_size_sqm=80, household_has_children=True,
         youngest_child_age=15,
@@ -249,21 +238,21 @@ ADOPTER_SPECIFICATIONS: tuple[AdopterSpecification, ...] = (
     AdopterSpecification(
         "Dror Halevi", "dror@example.com", "Jerusalem", HomeType.HOUSE,
         ExperienceLevel.EXPERIENCED, ActivityLevel.MODERATE, 4.0,
-        (Species.BIRD,), AnimalSize.SMALL, PreferredAgeRange.ANY,
+        (Species.BIRD,), AnimalSize.SMALL, AgePreference.ANY,
         "Keeps an aviary and knows exactly how loud a conure is.",
         other_animals_description="A cockatiel and two canaries in a garden aviary",
     ),
     AdopterSpecification(
         "Efrat Nissim", "efrat@example.com", "Raanana", HomeType.APARTMENT,
         ExperienceLevel.EXPERIENCED, ActivityLevel.LOW, 3.0,
-        (Species.OTHER,), AnimalSize.SMALL, PreferredAgeRange.ANY,
+        (Species.OTHER,), AnimalSize.SMALL, AgePreference.ANY,
         "Keeps reptiles, has the equipment already, and has a thirteen-year-old helper.",
         household_has_children=True, youngest_child_age=13,
     ),
     AdopterSpecification(
         "Boaz Kaplan", "boaz@example.com", "Tiberias", HomeType.FARM,
         ExperienceLevel.EXPERIENCED, ActivityLevel.HIGH, 10.0,
-        (Species.OTHER, Species.DOG), AnimalSize.LARGE, PreferredAgeRange.ANY,
+        (Species.OTHER, Species.DOG), AnimalSize.LARGE, AgePreference.ANY,
         "Smallholder with goats, geese and space for more.",
         has_yard=True, yard_size_sqm=12000,
         other_animals_description="Four goats, six geese and a donkey",
@@ -271,27 +260,27 @@ ADOPTER_SPECIFICATIONS: tuple[AdopterSpecification, ...] = (
     AdopterSpecification(
         "Orit Zohar", "orit@example.com", "Ashkelon", HomeType.APARTMENT,
         ExperienceLevel.SOME, ActivityLevel.LOW, 2.5,
-        (Species.CAT, Species.RABBIT), AnimalSize.SMALL, PreferredAgeRange.ADULT,
+        (Species.CAT, Species.RABBIT), AnimalSize.SMALL, AgePreference.ADULT,
         "Quiet flat, quiet life, and a balcony with a lot of plants.",
     ),
     AdopterSpecification(
         "Nadav Shemesh", "nadav@example.com", "Ramat Gan", HomeType.HOUSE,
         ExperienceLevel.SOME, ActivityLevel.HIGH, 4.0,
-        (Species.DOG,), AnimalSize.MEDIUM, PreferredAgeRange.ADULT,
+        (Species.DOG,), AnimalSize.MEDIUM, AgePreference.ADULT,
         "Trail runner looking for a companion who can do fifteen kilometres.",
         has_yard=True, yard_size_sqm=40,
     ),
     AdopterSpecification(
         "Keren Almog", "keren@example.com", "Beer Sheva", HomeType.APARTMENT,
         ExperienceLevel.NONE, ActivityLevel.MODERATE, 3.5,
-        (Species.CAT, Species.GUINEA_PIG), AnimalSize.SMALL, PreferredAgeRange.ADULT,
+        (Species.CAT, Species.GUINEA_PIG), AnimalSize.SMALL, AgePreference.ADULT,
         "Single parent of a five-year-old in a third-floor flat.",
         household_has_children=True, youngest_child_age=5,
     ),
     AdopterSpecification(
         "Uri Ben-Ami", "uri@example.com", "Petah Tikva", HomeType.HOUSE,
         ExperienceLevel.EXPERIENCED, ActivityLevel.HIGH, 7.0,
-        (Species.DOG,), AnimalSize.LARGE, PreferredAgeRange.ADULT,
+        (Species.DOG,), AnimalSize.LARGE, AgePreference.ADULT,
         "Competition obedience trainer. Wants a project, not a pet.",
         has_yard=True, yard_size_sqm=150,
         other_animals_description="A malinois competing in obedience",
@@ -299,7 +288,7 @@ ADOPTER_SPECIFICATIONS: tuple[AdopterSpecification, ...] = (
     AdopterSpecification(
         "Talia Mor", "talia@example.com", "Herzliya", HomeType.HOUSE,
         ExperienceLevel.EXPERIENCED, ActivityLevel.LOW, 6.5,
-        (Species.CAT, Species.DOG), None, PreferredAgeRange.SENIOR,
+        (Species.CAT, Species.DOG), None, AgePreference.SENIOR,
         "Takes terminal and geriatric animals so they do not die in a shelter.",
         has_yard=True, yard_size_sqm=80,
         other_animals_description="Two geriatric cats, both on daily medication",
@@ -307,28 +296,28 @@ ADOPTER_SPECIFICATIONS: tuple[AdopterSpecification, ...] = (
     AdopterSpecification(
         "Guy Ashkenazi", "guy@example.com", "Tel Aviv", HomeType.APARTMENT,
         ExperienceLevel.NONE, ActivityLevel.MODERATE, 2.0,
-        (Species.HAMSTER,), AnimalSize.SMALL, PreferredAgeRange.BABY,
+        (Species.HAMSTER,), AnimalSize.SMALL, AgePreference.YOUNG,
         "Started the form during exam week and never came back to it.",
         open_to_proactive_suggestions=False, is_complete=False,
     ),
     AdopterSpecification(
         "Lior Tzur", "lior@example.com", "Jerusalem", HomeType.APARTMENT,
         ExperienceLevel.SOME, ActivityLevel.LOW, 3.0,
-        (), None, PreferredAgeRange.ANY,
+        (), None, AgePreference.ANY,
         "Registered, chose no species, and has not finished the profile.",
         is_complete=False,
     ),
     AdopterSpecification(
         "Adi Peled", "adi@example.com", "Ashdod", HomeType.HOUSE,
         ExperienceLevel.NONE, ActivityLevel.MODERATE, 4.0,
-        (Species.DOG,), AnimalSize.MEDIUM, PreferredAgeRange.ADULT,
+        (Species.DOG,), AnimalSize.MEDIUM, AgePreference.ADULT,
         "Profile still incomplete: the household questions are unanswered.",
         has_yard=True, is_complete=False,
     ),
     AdopterSpecification(
         "Shai Yarkoni", "shai@example.com", "Modiin", HomeType.HOUSE,
         ExperienceLevel.SOME, ActivityLevel.MODERATE, 4.0,
-        (Species.DOG, Species.RABBIT), AnimalSize.MEDIUM, PreferredAgeRange.ADULT,
+        (Species.DOG, Species.RABBIT), AnimalSize.MEDIUM, AgePreference.ADULT,
         "Garden, trampoline, and an eight-year-old who wants a dog badly.",
         has_yard=True, yard_size_sqm=80, household_has_children=True,
         youngest_child_age=8,
@@ -336,14 +325,14 @@ ADOPTER_SPECIFICATIONS: tuple[AdopterSpecification, ...] = (
     AdopterSpecification(
         "Netta Oren", "netta@example.com", "Rehovot", HomeType.APARTMENT,
         ExperienceLevel.SOME, ActivityLevel.LOW, 3.0,
-        (Species.RABBIT, Species.GUINEA_PIG), AnimalSize.SMALL, PreferredAgeRange.ANY,
+        (Species.RABBIT, Species.GUINEA_PIG), AnimalSize.SMALL, AgePreference.ANY,
         "Already keeps a bonded rabbit pair and understands the commitment.",
         other_animals_description="A bonded pair of house rabbits",
     ),
     AdopterSpecification(
         "Moran Malka", "moran@example.com", "Nazareth", HomeType.FARM,
         ExperienceLevel.EXPERIENCED, ActivityLevel.HIGH, 8.0,
-        (Species.DOG, Species.OTHER), AnimalSize.LARGE, PreferredAgeRange.ANY,
+        (Species.DOG, Species.OTHER), AnimalSize.LARGE, AgePreference.ANY,
         "Family farm with a ten-year-old, three dogs and a paddock.",
         has_yard=True, yard_size_sqm=8000, household_has_children=True,
         youngest_child_age=10,
@@ -352,35 +341,35 @@ ADOPTER_SPECIFICATIONS: tuple[AdopterSpecification, ...] = (
     AdopterSpecification(
         "Eyal Hadad", "eyal@example.com", "Holon", HomeType.APARTMENT,
         ExperienceLevel.SOME, ActivityLevel.HIGH, 3.0,
-        (Species.CAT,), AnimalSize.MEDIUM, PreferredAgeRange.BABY,
+        (Species.CAT,), AnimalSize.MEDIUM, AgePreference.YOUNG,
         "Wants a kitten and is prepared for the consequences.",
         open_to_proactive_suggestions=False,
     ),
     AdopterSpecification(
         "Bat-El Shalom", "batel@example.com", "Akko", HomeType.APARTMENT,
         ExperienceLevel.SOME, ActivityLevel.MODERATE, 4.0,
-        (Species.CAT, Species.BIRD), AnimalSize.SMALL, PreferredAgeRange.ANY,
+        (Species.CAT, Species.BIRD), AnimalSize.SMALL, AgePreference.ANY,
         "Sixteen-year-old in the house who has done all the research.",
         household_has_children=True, youngest_child_age=16,
     ),
     AdopterSpecification(
         "Yonatan Gross", "yonatan@example.com", "Kfar Saba", HomeType.HOUSE,
         ExperienceLevel.NONE, ActivityLevel.MODERATE, 3.0,
-        (Species.DOG, Species.CAT), AnimalSize.MEDIUM, PreferredAgeRange.ADULT,
+        (Species.DOG, Species.CAT), AnimalSize.MEDIUM, AgePreference.ADULT,
         "First-time adopter with a garden and no fixed idea what he wants.",
         has_yard=True, yard_size_sqm=40,
     ),
     AdopterSpecification(
         "Shlomit Bar-On", "shlomit@example.com", "Raanana", HomeType.HOUSE,
         ExperienceLevel.EXPERIENCED, ActivityLevel.LOW, 7.0,
-        (Species.DOG, Species.CAT), AnimalSize.SMALL, PreferredAgeRange.SENIOR,
+        (Species.DOG, Species.CAT), AnimalSize.SMALL, AgePreference.SENIOR,
         "Retired with a walled garden and forty years of dogs behind her.",
         has_yard=True, yard_size_sqm=150,
     ),
     AdopterSpecification(
         "Amir Kadosh", "amir@example.com", "Eilat", HomeType.APARTMENT,
         ExperienceLevel.SOME, ActivityLevel.LOW, 2.0,
-        (Species.CAT,), AnimalSize.SMALL, PreferredAgeRange.SENIOR,
+        (Species.CAT,), AnimalSize.SMALL, AgePreference.SENIOR,
         "One cat already, and room for one more if the two get on.",
         other_animals_description="A ten-year-old tabby, indoors only",
         open_to_proactive_suggestions=False,
@@ -388,7 +377,7 @@ ADOPTER_SPECIFICATIONS: tuple[AdopterSpecification, ...] = (
     AdopterSpecification(
         "Tehila Rubin", "tehila@example.com", "Jerusalem", HomeType.HOUSE,
         ExperienceLevel.NONE, ActivityLevel.MODERATE, 5.0,
-        (Species.GUINEA_PIG, Species.RABBIT), AnimalSize.SMALL, PreferredAgeRange.BABY,
+        (Species.GUINEA_PIG, Species.RABBIT), AnimalSize.SMALL, AgePreference.YOUNG,
         "Garden, a three-year-old, and a hutch already built.",
         has_yard=True, yard_size_sqm=40, household_has_children=True,
         youngest_child_age=3,
@@ -422,10 +411,18 @@ def validate_adopter_specification(
 ) -> tuple[str, ...]:
     """Report everything wrong with one adopter entry.
 
-    Mirrors the rules `app/domain/profile_rules.py` applies to a submitted
-    form, so seeded data cannot be something the application would have
-    rejected: a child's age is required when children are present and
-    forbidden when they are not, and hours must be a real part of a day.
+    Put through `app.domain.profile_rules.validate_profile`, the same
+    validator the profile form goes through, so seeded data cannot be
+    something the application would have rejected. This module used to
+    re-implement those rules from a copy of their bounds, which is two
+    places for one decision and one of them untested against the other.
+
+    What stays here is what the form has no opinion about: the account's name
+    and email and the one-line summary the demo prints, which the form does
+    not carry at all, and a yard size recorded against a household with no
+    yard, which the form silently discards. Discarding is right for a form
+    and wrong for hand-written data - the number was typed on purpose, so
+    something is wrong with the entry.
 
     Args:
         specification: The entry to check.
@@ -433,35 +430,59 @@ def validate_adopter_specification(
     Returns:
         A tuple of problem descriptions, empty when the entry is sound.
     """
+    problems = list(_account_problems(specification))
+    problems.extend(_yard_problems(specification))
+    problems.extend(
+        f"{field}: {message}"
+        for field, message in sorted(validate_profile(_as_submission(specification)).errors.items())
+    )
+    return tuple(problems)
+
+
+def _as_submission(specification: AdopterSpecification) -> ProfileSubmission:
+    """Shape one adopter entry the way the profile form's validator reads it."""
+    return ProfileSubmission(
+        home_type=specification.home_type.value,
+        has_yard=specification.has_yard,
+        yard_size_sqm=(
+            str(specification.yard_size_sqm)
+            if specification.yard_size_sqm is not None
+            else None
+        ),
+        household_has_children=specification.household_has_children,
+        youngest_child_age=(
+            str(specification.youngest_child_age)
+            if specification.youngest_child_age is not None
+            else None
+        ),
+        has_other_animals=specification.has_other_animals,
+        other_animals_description=specification.other_animals_description,
+        experience_level=specification.experience_level.value,
+        activity_level=specification.activity_level.value,
+        daily_hours_available=str(specification.daily_hours_available),
+        city=specification.city,
+        preferred_species=tuple(
+            species.value for species in specification.preferred_species
+        ),
+        preferred_age_range=specification.preferred_age_range.value,
+        preferred_size=(
+            specification.preferred_size.value if specification.preferred_size else None
+        ),
+        open_to_proactive_suggestions=specification.open_to_proactive_suggestions,
+    )
+
+
+def _account_problems(specification: AdopterSpecification) -> tuple[str, ...]:
+    """Check the fields that belong to the account rather than to the profile."""
     problems: list[str] = []
 
     if not specification.full_name.strip():
         problems.append("name is empty")
     if "@" not in specification.email or specification.email != specification.email.lower():
         problems.append(f"'{specification.email}' is not a normalised email address")
-    if not specification.city.strip():
-        problems.append("city is empty")
     if not specification.summary.strip():
         problems.append("summary is empty")
-    if not MINIMUM_DAILY_HOURS <= specification.daily_hours_available <= MAXIMUM_DAILY_HOURS:
-        problems.append(f"{specification.daily_hours_available} is not a plausible daily figure")
-
-    problems.extend(_child_age_problems(specification))
-    problems.extend(_yard_problems(specification))
     return tuple(problems)
-
-
-def _child_age_problems(specification: AdopterSpecification) -> tuple[str, ...]:
-    """Check the children flag against the youngest child's age."""
-    if specification.household_has_children and specification.youngest_child_age is None:
-        return ("children are in the household but no age is given",)
-    if not specification.household_has_children and specification.youngest_child_age is not None:
-        return ("a child's age is given but no children are in the household",)
-
-    age = specification.youngest_child_age
-    if age is not None and not MINIMUM_CHILD_AGE <= age <= MAXIMUM_CHILD_AGE:
-        return (f"a youngest child aged {age} is not plausible",)
-    return ()
 
 
 def _yard_problems(specification: AdopterSpecification) -> tuple[str, ...]:

@@ -36,9 +36,17 @@
 {#- Opts this page into the poller in petmatch.js (docs/UX.md section 3).
     Scoped to this one animal, and staff-only on the server: the endpoint
     refuses the `animal_id` scope to an adopter. Counts and a timestamp
-    only — it names no adopter and reports no score. -#}
+    only — it names no adopter and reports no score.
+
+    Emitted only while something is outstanding, and carrying the counts the
+    server rendered so the poller has a baseline for its first answer. -#}
 {% if ranking.candidates %}
-  <div class="stack" data-analysis-status-url="{{ url_for('matches.analysis_status', animal_id=ranking.animal_id) }}">
+  <div class="stack"
+       {%- if not analysis_status.is_settled %}
+       data-analysis-status-url="{{ url_for('matches.analysis_status', animal_id=ranking.animal_id) }}"
+       data-analysis-pending="{{ analysis_status.pending }}"
+       data-analysis-generation="{{ analysis_status.generation }}"
+       {%- endif %}>
     {% for candidate in ranking.candidates %}
     <article class="card card--padded candidate">
       <div class="candidate__head">
@@ -159,14 +167,14 @@
           <div class="candidate__column">
             <h4 class="panel-title">Heaviest criteria</h4>
             <div class="mini-criteria">
-              {% for name, value in candidate.top_criteria %}
+              {% for item in candidate.top_criteria %}
               <div class="mini-criterion">
-                <span class="mini-criterion__name">{{ name }}</span>
+                <span class="mini-criterion__name">{{ item.name }}</span>
                 <span class="mini-criterion__track">
-                  <span class="mini-criterion__fill {% if value >= 75 %}is-strong{% elif value >= 50 %}is-fair{% else %}is-weak{% endif %}"
-                        style="width: {{ value }}%"></span>
+                  <span class="mini-criterion__fill is-{{ item.band }}"
+                        style="width: {{ item.score }}%"></span>
                 </span>
-                <span class="mini-criterion__value">{{ value }}</span>
+                <span class="mini-criterion__value">{{ item.score }}</span>
               </div>
               {% endfor %}
             </div>
@@ -191,7 +199,7 @@
 
 {% else %}
   <div class="empty">
-    <div class="empty__icon">{{ '🔎' if is_discovery else '📭' }}</div>
+    <div class="empty__icon" aria-hidden="true">{{ '🔎' if is_discovery else '📭' }}</div>
     <h3>{{ 'No eligible adopters found' if is_discovery else 'Nobody has applied yet' }}</h3>
     <p>
       {% if is_discovery %}

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -13,12 +12,8 @@ from app.cqrs.commands.application_commands import RecordNotFoundError
 from app.domain.enums import AggregateType, DomainEventType
 from app.domain.profile_rules import ValidatedProfile
 from app.eventstore.store import EventStore
+from app.infrastructure.clock import utc_now
 from app.infrastructure.models import AdopterProfile, User, new_identifier
-
-
-def _now() -> datetime:
-    """Naive UTC, matching the SQL Server DATETIME columns."""
-    return datetime.now(UTC).replace(tzinfo=None)
 
 
 @dataclass(frozen=True)
@@ -60,7 +55,7 @@ class SaveAdopterProfileHandler(CommandHandler[str]):
         profile = existing or self._create_row(command.user_id, command.profile, session)
 
         self._apply(profile, command.profile)
-        profile.updated_at = _now()
+        profile.updated_at = utc_now()
 
         # Reaching this point means validation passed, so every field the
         # matching engine needs is present. Completeness is derived from that
@@ -105,8 +100,8 @@ class SaveAdopterProfileHandler(CommandHandler[str]):
             city=validated.city,
             open_to_proactive_suggestions=validated.open_to_proactive_suggestions,
             is_complete=False,
-            created_at=_now(),
-            updated_at=_now(),
+            created_at=utc_now(),
+            updated_at=utc_now(),
         )
         session.add(profile)
         session.flush()

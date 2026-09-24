@@ -20,9 +20,14 @@ from app.domain.enums import (
 from app.domain.matching import (
     ADOPTER_TO_ANIMAL_WEIGHTS,
     ANIMAL_TO_ADOPTER_WEIGHTS,
+    RECOMMENDATION_THRESHOLD,
+    STRONG_MATCH_THRESHOLD,
     AdopterFacts,
     AnimalFacts,
     Criterion,
+    MatchScore,
+    ScoreBand,
+    band_for,
     calculate_match_score,
     find_hard_constraint_violation,
     rank_adopters_for_animal,
@@ -362,3 +367,61 @@ class TestRanking:
         """Proves the no-candidates case returns cleanly rather than raising."""
         assert rank_animals_for_adopter(make_adopter(), {}) == []
         assert rank_adopters_for_animal(make_animal(), {}) == []
+
+
+class TestScoreBands:
+    """Where "strong" stops is a product judgement, so it lives in the domain.
+
+    Five templates each held a pasted copy of 75 and 50, which made the
+    thresholds a presentation detail that could drift one screen at a time
+    (spec section 8).
+    """
+
+    @pytest.mark.parametrize(
+        ("score", "expected"),
+        [
+            (100, ScoreBand.STRONG),
+            (STRONG_MATCH_THRESHOLD, ScoreBand.STRONG),
+            (STRONG_MATCH_THRESHOLD - 1, ScoreBand.FAIR),
+            (RECOMMENDATION_THRESHOLD, ScoreBand.FAIR),
+            (RECOMMENDATION_THRESHOLD - 1, ScoreBand.WEAK),
+            (0, ScoreBand.WEAK),
+        ],
+    )
+    def test_each_boundary_falls_on_the_stated_side(
+        self, score: int, expected: ScoreBand
+    ) -> None:
+        """Proves each threshold is inclusive at its lower bound."""
+        assert band_for(score) == expected
+
+    def test_the_band_renders_as_the_css_modifier(self) -> None:
+        """Proves a template can write `score--{{ score.band }}` directly.
+
+        The values are the modifier suffixes the stylesheet already uses, so
+        the mapping needs no table in the template.
+        """
+        assert f"score--{band_for(90)}" == "score--strong"
+        assert f"is-{band_for(60)}" == "is-fair"
+        assert f"is-{band_for(10)}" == "is-weak"
+
+    def test_a_total_and_a_criterion_band_the_same_way(self) -> None:
+        """Proves the two objects a screen renders agree about the bands."""
+        score = calculate_match_score(
+            make_adopter(), make_animal(), MatchDirection.ADOPTER_TO_ANIMAL
+        )
+
+        assert score.band == band_for(score.score)
+        for criterion in score.criterion_scores:
+            assert criterion.band == band_for(criterion.score)
+
+    def test_a_disqualified_pairing_bands_as_weak(self) -> None:
+        """Documents the band of a disqualified score, which screens never show.
+
+        Every screen tests `is_disqualified` first and renders the blocked
+        state instead, so this records the value rather than relying on it.
+        """
+        disqualified = MatchScore.disqualified(
+            MatchDirection.ADOPTER_TO_ANIMAL, "A hard rule was not met."
+        )
+
+        assert disqualified.band is ScoreBand.WEAK

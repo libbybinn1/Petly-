@@ -313,6 +313,37 @@ class TestApprovalCascade:
             assert animal is not None
             assert animal.status == AnimalStatus.ADOPTION_IN_PROGRESS.value
 
+    def test_the_status_event_names_the_animal_it_moved(
+        self, session_factory: sessionmaker[Session], world: dict[str, str]
+    ) -> None:
+        """Proves the cascade's own status event carries `animal_id`.
+
+        Three places append `AnimalStatusChanged` and this one built its
+        payload by hand without the identifier, so the dashboard's activity
+        feed - which reads `payload["animal_id"]` to name the animal - had
+        nothing to render after "changed the status of". All three now use
+        `animal_status_changed_payload`.
+        """
+        approved = submit(session_factory, world, "animal_0")
+
+        with session_factory() as session:
+            ApproveApplicationHandler().handle(
+                ApproveApplicationCommand(approved, world["staff_user_id"]), session
+            )
+            session.commit()
+
+        with session_factory() as session:
+            status_events = [
+                event
+                for event in EventStore(session).read_aggregate_stream(world["animal_0"])
+                if event.event_type is DomainEventType.ANIMAL_STATUS_CHANGED
+            ]
+
+            assert status_events
+            for event in status_events:
+                assert event.payload["animal_id"] == world["animal_0"]
+                assert event.payload["to"] == AnimalStatus.ADOPTION_IN_PROGRESS.value
+
     def test_nothing_is_ever_deleted(
         self, session_factory: sessionmaker[Session], world: dict[str, str]
     ) -> None:

@@ -2,7 +2,7 @@
 {% block title %}Match analysis — {{ analysis.animal_name }}{% endblock %}
 
 {% block content %}
-<p style="margin-bottom: var(--space-4)">
+<p class="u-spaced-below">
   <a href="{{ url_for('matches.find_my_adopter', animal_id=analysis.animal_id) }}">&larr; Back to ranked applicants</a>
 </p>
 
@@ -11,8 +11,8 @@
     <h1>{{ analysis.adopter_name }} &amp; {{ analysis.animal_name }}</h1>
     <p>{{ analysis.direction|humanize }} · generated {{ analysis.generated_at }} by {{ analysis.model_name }}</p>
   </div>
-  <div style="font-size:2.6rem; font-weight:700; color:var(--text-strong); line-height:1">
-    {{ analysis.score }}<span style="font-size:1rem; color:var(--text-muted); font-weight:500">/100</span>
+  <div class="analysis-total">
+    {{ analysis.score }}<span class="analysis-total__scale">/100</span>
   </div>
 </div>
 
@@ -59,11 +59,17 @@
       <h3 class="panel-title">Sources</h3>
       {% if analysis.evidence_sources %}
         <ul class="source-list">
+          {#- Whether a reference may be a link is the view model's decision,
+              not this template's: the string was written by a model, and an
+              href built from one is an injection vector. `safe_reference_url`
+              is an absolute http(s) address or nothing, and a RAG citation -
+              a knowledge-base path - is nothing, so it renders as text. -#}
           {% for source in analysis.evidence_sources %}
             <li>
               <span class="source-kind">{{ source.kind }}</span>
-              {% if source.kind == 'web' %}
-                <a href="{{ source.reference }}" rel="noopener noreferrer" target="_blank">{{ source.reference }}</a>
+              {% if source.safe_reference_url %}
+                <a href="{{ source.safe_reference_url }}" rel="noopener noreferrer"
+                   target="_blank">{{ source.reference }}</a>
               {% else %}
                 {{ source.reference }}
               {% endif %}
@@ -71,7 +77,7 @@
             </li>
           {% endfor %}
         </ul>
-        <p class="pending" style="margin-top: var(--space-3)">
+        <p class="pending u-spaced">
           Web search {{ 'was' if analysis.used_web_search else 'was not' }} used for this assessment.
         </p>
       {% else %}
@@ -99,23 +105,12 @@
     <p class="pending" style="margin-bottom: var(--space-4)">
       Calculated from the recorded criteria. These numbers are arithmetic, not model output.
     </p>
-    <div class="criteria">
-      {% for item in analysis.criterion_scores %}
-      <div class="criterion">
-        <div class="criterion__head">
-          <span class="criterion__name">{{ item.criterion|humanize }}</span>
-          <span class="criterion__score">
-            {{ item.score }}<span class="criterion__weight">· {{ (item.weight * 100)|round|int }}%</span>
-          </span>
-        </div>
-        <div class="criterion__track">
-          <div class="criterion__fill {% if item.score >= 75 %}is-strong{% elif item.score >= 50 %}is-fair{% else %}is-weak{% endif %}"
-               style="width: {{ item.score }}%"></div>
-        </div>
-        <p class="criterion__why">{{ item.explanation }}</p>
-      </div>
-      {% endfor %}
-    </div>
+    {#- The shared partial, which this screen used to duplicate inline. The
+        copy had drifted: it dropped the word "weight", leaving a bare "18%"
+        beside a score of 64 with nothing to say which was which. -#}
+    {% with criteria = analysis.criterion_scores %}
+      {% include "matches/_criteria_bars.html" %}
+    {% endwith %}
   </div>
 </div>
 {% endblock %}

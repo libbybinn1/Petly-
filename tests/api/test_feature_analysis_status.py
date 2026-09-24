@@ -313,3 +313,39 @@ class TestTheGeneration:
             "generation",
             "oldest_pending_at",
         }
+
+
+class TestTimestampsAreReadAsUtc:
+    """The DATETIME2 columns are naive, and both of these read them wrongly.
+
+    A naive value is UTC that lost its label (app.eventstore.store), so
+    `.timestamp()` and `.isoformat()` on one answered as if it were local
+    time: the generation number was out by the machine's UTC offset, and the
+    ISO string carried no offset for the browser to correct by.
+    """
+
+    def test_the_oldest_pending_timestamp_carries_an_offset(self) -> None:
+        """Proves the polled payload states the timezone it means."""
+        from app.cqrs.queries.analysis_status_queries import AnalysisStatus
+
+        status = AnalysisStatus(
+            pending=1,
+            completed=0,
+            failed=0,
+            generation=0,
+            # Naive on purpose: this is exactly what the column hands back,
+            # and the point of the fix is that it is read as UTC.
+            oldest_pending_at=datetime(2026, 9, 24, 8, 30, tzinfo=UTC).replace(tzinfo=None),
+        )
+
+        assert status.as_dictionary()["oldest_pending_at"] == "2026-09-24T08:30:00+00:00"
+
+    def test_an_absent_timestamp_stays_null(self) -> None:
+        """Proves a settled queue answers null rather than a converted epoch."""
+        from app.cqrs.queries.analysis_status_queries import AnalysisStatus
+
+        status = AnalysisStatus(
+            pending=0, completed=3, failed=0, generation=1, oldest_pending_at=None
+        )
+
+        assert status.as_dictionary()["oldest_pending_at"] is None

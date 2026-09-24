@@ -13,15 +13,20 @@ distinguish those from applications closed for other reasons.
 from __future__ import annotations
 
 import json
+import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.domain.enums import AggregateType, DomainEventType
+from app.infrastructure.clock import as_aware_utc, as_naive_utc, aware_utc_now
 from app.infrastructure.models import DomainEvent, new_identifier
+
+logger = logging.getLogger("petmatch.eventstore")
 
 
 @dataclass(frozen=True)
@@ -79,7 +84,7 @@ class EventStore:
             The event as recorded, including its assigned sequence number.
         """
         next_sequence = self._next_sequence_number(aggregate_id)
-        timestamp = occurred_at or datetime.now(UTC)
+        timestamp = occurred_at or aware_utc_now()
         event_payload = payload or {}
 
         row = DomainEvent(
@@ -89,10 +94,13 @@ class EventStore:
             aggregate_id=aggregate_id,
             sequence_number=next_sequence,
             # SQL Server 2014 DATETIME columns are naive; store UTC and treat
-            # every read as UTC. Ruff's DTZ rules keep the inbound value aware.
-            occurred_at=timestamp.replace(tzinfo=None),
+            # every read as UTC. Ruff's DTZ rules keep the inbound value aware,
+            # and `as_naive_utc` converts before it strips - a caller passing
+            # an aware non-UTC `occurred_at` would otherwise store the clock
+            # face rather than the instant.
+            occurred_at=as_naive_utc(timestamp),
             actor_user_id=actor_user_id,
-            payload=json.dumps(event_payload, default=str),
+            payload=_serialise_payload(event_payload),
         )
         self._session.add(row)
         self._session.flush()
@@ -116,14 +124,33 @@ class EventStore:
         )
         return [self._to_recorded_event(row) for row in rows]
 
-    def read_all(self, limit: int | None = None) -> list[RecordedEvent]:
-        """Return the whole log in occurrence order, oldest first.
+    def read_all(
+        self,
+        limit: int | None = None,
+        aggregate_types: Sequence[AggregateType] | None = None,
+    ) -> list[RecordedEvent]:
+        """Return the log in occurrence order, oldest first.
 
-        Used by the projection rebuild and by the dashboard activity feed.
+        Args:
+            limit: At most this many events. None reads every one.
+            aggregate_types: Narrow to these kinds of aggregate. The filter
+                belongs in SQL rather than in the caller: the projection
+                rebuild replays two of the four kinds and used to read the
+                entire log across the network to throw most of it away, and
+                the log is the one table in this schema that only grows.
+
+        Returns:
+            The matching events, oldest first.
         """
         statement = select(DomainEvent).order_by(
             DomainEvent.occurred_at, DomainEvent.sequence_number
         )
+        if aggregate_types is not None:
+            statement = statement.where(
+                DomainEvent.aggregate_type.in_(
+                    [aggregate_type.value for aggregate_type in aggregate_types]
+                )
+            )
         if limit is not None:
             statement = statement.limit(limit)
 
@@ -181,7 +208,62 @@ class EventStore:
             aggregate_type=AggregateType(row.aggregate_type),
             aggregate_id=row.aggregate_id,
             sequence_number=row.sequence_number,
-            occurred_at=row.occurred_at.replace(tzinfo=UTC),
+            occurred_at=as_aware_utc(row.occurred_at),
             actor_user_id=row.actor_user_id,
             payload=json.loads(row.payload) if row.payload else {},
         )
+
+
+# The types `json.dumps` writes without help. Anything else reaches
+# `default=str` and is stored as its `str()`, which is lossy in ways nothing
+# downstream can detect: a Decimal becomes "2.5" and a frozenset becomes
+# "frozenset({...})", and both read back as strings for ever.
+JSON_NATIVE_TYPES = (str, int, float, bool, type(None))
+
+
+def _serialise_payload(payload: dict[str, Any]) -> str:
+    """Serialise one event payload, warning about anything coerced.
+
+    `default=str` is kept: refusing to append an event because one payload
+    value was a Decimal would lose the event, which is worse than storing a
+    slightly lossy copy of it. But a silent coercion is how a payload field
+    quietly becomes a string that a later reader compares against a number
+    and never matches, so each one is named in the log.
+
+    Args:
+        payload: The event-specific data.
+
+    Returns:
+        The JSON string for the NVARCHAR(MAX) column.
+    """
+    for key, value in payload.items():
+        _warn_about_coercion(key, value)
+    return json.dumps(payload, default=str)
+
+
+def _warn_about_coercion(key: str, value: object, depth: int = 0) -> None:
+    """Log a warning for a value `json.dumps` cannot write natively."""
+    if isinstance(value, JSON_NATIVE_TYPES):
+        return
+
+    if isinstance(value, dict) and depth < MAXIMUM_PAYLOAD_DEPTH:
+        for nested_key, nested_value in value.items():
+            _warn_about_coercion(f"{key}.{nested_key}", nested_value, depth + 1)
+        return
+
+    if isinstance(value, list) and depth < MAXIMUM_PAYLOAD_DEPTH:
+        for index, item in enumerate(value):
+            _warn_about_coercion(f"{key}[{index}]", item, depth + 1)
+        return
+
+    logger.warning(
+        "event payload key %r holds a %s, which is stored as its str(); "
+        "it will read back as text",
+        key,
+        type(value).__name__,
+    )
+
+
+# Deep enough for any payload this system writes, and shallow enough that a
+# self-referential structure cannot spin here.
+MAXIMUM_PAYLOAD_DEPTH = 4

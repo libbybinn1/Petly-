@@ -5,29 +5,29 @@ system: staff could search, view and list animals but not add, change or
 retire one. That made three MUST requirements unreachable through the
 application.
 
-Each command returns an identifier or nothing, never a read DTO - a screen
+Each command returns an identifier, a count or nothing, never a read DTO - a screen
 that needs data after a write dispatches a query next (rule R2).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.cqrs.base import Command, CommandHandler
 from app.cqrs.commands.application_commands import RecordNotFoundError
-from app.domain.animal_rules import AnimalFactsDraft, ensure_animal_has_an_image
+from app.domain.animal_rules import (
+    AnimalFactsDraft,
+    animal_status_changed_payload,
+    ensure_animal_has_an_image,
+)
 from app.domain.enums import AggregateType, AnimalStatus, DomainEventType
 from app.eventstore.store import EventStore
+from app.infrastructure.clock import utc_now
 from app.infrastructure.models import Animal, AnimalImage, new_identifier
-
-
-def _now() -> datetime:
-    """Naive UTC, matching how DATETIME2 columns are stored."""
-    return datetime.now(UTC).replace(tzinfo=None)
 
 
 @dataclass(frozen=True)
@@ -56,7 +56,7 @@ class CreateAnimalHandler(CommandHandler[str]):
         ensure_animal_has_an_image(draft.image_urls)
 
         animal_id = new_identifier()
-        created_at = _now()
+        created_at = utc_now()
 
         session.add(
             Animal(
@@ -127,7 +127,7 @@ class UpdateAnimalHandler(CommandHandler[None]):
         draft = command.animal
         ensure_animal_has_an_image(draft.image_urls)
 
-        updated_at = _now()
+        updated_at = utc_now()
         previous_status = animal.status
 
         animal.name = draft.name
@@ -165,11 +165,9 @@ class UpdateAnimalHandler(CommandHandler[None]):
                 DomainEventType.ANIMAL_STATUS_CHANGED,
                 AggregateType.ANIMAL,
                 command.animal_id,
-                payload={
-                    "animal_id": command.animal_id,
-                    "from": previous_status,
-                    "to": draft.status.value,
-                },
+                payload=animal_status_changed_payload(
+                    command.animal_id, previous_status, draft.status.value
+                ),
                 actor_user_id=command.staff_user_id,
             )
 
@@ -207,17 +205,15 @@ class ChangeAnimalStatusHandler(CommandHandler[None]):
 
         previous_status = animal.status
         animal.status = command.new_status.value
-        animal.updated_at = _now()
+        animal.updated_at = utc_now()
 
         EventStore(session).append(
             DomainEventType.ANIMAL_STATUS_CHANGED,
             AggregateType.ANIMAL,
             command.animal_id,
-            payload={
-                "animal_id": command.animal_id,
-                "from": previous_status,
-                "to": command.new_status.value,
-            },
+            payload=animal_status_changed_payload(
+                command.animal_id, previous_status, command.new_status.value
+            ),
             actor_user_id=command.staff_user_id,
         )
 

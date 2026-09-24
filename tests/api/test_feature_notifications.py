@@ -218,6 +218,29 @@ class TestMarkingRead:
 
         assert not response.headers["Location"].startswith("//evil")
 
+    def test_a_backslash_target_is_refused_too(
+        self,
+        adopter_client: FlaskClient,
+        world: dict[str, str],
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        """Proves the spelling this route used to miss is refused.
+
+        The inline check here tested only for a leading "//". Some browsers
+        normalise a backslash to a forward slash, so a slash followed by a
+        backslash and a host was an off-site address that passed. Both routes
+        now share the one guard in app/controllers/helpers.py, which parses
+        the value instead of inspecting its first two characters.
+        """
+        notification_id = add_notification(session_factory, world["adopter_user_id"])
+
+        response = adopter_client.post(
+            f"/my/notifications/{notification_id}/read",
+            data={"target_url": "/\\evil.example.com"},
+        )
+
+        assert "evil.example.com" not in response.headers["Location"]
+
     def test_marking_an_unknown_message_read_is_a_404(
         self, adopter_client: FlaskClient, world: dict[str, str]
     ) -> None:
@@ -236,18 +259,137 @@ class TestTheUnreadCount:
         world: dict[str, str],
         session_factory: sessionmaker[Session],
     ) -> None:
-        """Proves every template can see it, not only the inbox.
+        """Proves the count reaches the layout and is drawn there.
 
-        The badge lives in the shared layout, so a view that forgot to
-        pass the value would render it as zero without failing.
+        It used to reach only as far as the context: the processor ran a
+        query on every authenticated request and no template rendered the
+        answer, so the cost was paid and the badge did not exist.
         """
         add_notification(session_factory, world["adopter_user_id"])
         add_notification(session_factory, world["adopter_user_id"])
 
         response = adopter_client.get("/animals/")
+        body = response.get_data(as_text=True)
 
         assert response.status_code == 200
+        assert 'class="badge"' in body
+        assert ">2<" in body
+
+    def test_a_fully_read_inbox_shows_no_badge(
+        self,
+        adopter_client: FlaskClient,
+        world: dict[str, str],
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        """Proves a zero count draws nothing rather than a badge reading 0.
+
+        Negative half of the pair: a permanent badge would stop meaning
+        "there is something new".
+        """
+        add_notification(session_factory, world["adopter_user_id"], is_read=True)
+
+        body = adopter_client.get("/animals/").get_data(as_text=True)
+
+        assert 'class="badge"' not in body
+
+    def test_both_roles_can_reach_the_inbox_from_the_layout(
+        self, adopter_client: FlaskClient, staff_client: FlaskClient
+    ) -> None:
+        """Proves the inbox is reachable without typing its URL.
+
+        There was no link to it anywhere in the navigation, for either role.
+        """
+        for signed_in in (adopter_client, staff_client):
+            body = signed_in.get("/animals/").get_data(as_text=True)
+            assert "/my/notifications" in body
 
     def test_an_anonymous_visitor_sees_zero(self, client: FlaskClient) -> None:
-        """Proves the processor does not fail for a signed-out visitor."""
-        assert client.get("/").status_code == 200
+        """Proves the processor does not fail for a signed-out visitor.
+
+        And that the new link is inside the authenticated branch: a signed-out
+        visitor has no inbox, so offering one would send them to sign in for
+        a page they did not ask for.
+        """
+        response = client.get("/")
+        body = response.get_data(as_text=True)
+
+        assert response.status_code == 200
+        assert "/my/notifications" not in body
+        assert 'class="badge"' not in body
+
+
+class TestTheInboxGrouping:
+    """The split into "last 24 hours" and "earlier" is the view model's.
+
+    The template used to decide it by searching the relative label for the
+    words "day", "month" and "year". That was a decision taken in a view
+    (rule R2), and it happened to be right only because this module carried
+    its own time vocabulary: the shared formatter says "on 23 Sep 2026" past
+    a week, which contains none of the three words, so a month-old message
+    would have been filed under "last 24 hours".
+    """
+
+    def test_a_message_from_this_hour_is_grouped_as_recent(
+        self,
+        adopter_client: FlaskClient,
+        world: dict[str, str],
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        """Proves a fresh message appears under the last-24-hours heading."""
+        add_notification(session_factory, world["adopter_user_id"], minutes_ago=30)
+
+        body = adopter_client.get("/my/notifications").get_data(as_text=True)
+
+        assert "Last 24 hours" in body
+        assert "Earlier" not in body
+
+    def test_a_month_old_message_is_grouped_as_earlier(
+        self,
+        adopter_client: FlaskClient,
+        world: dict[str, str],
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        """Proves the regression the shared formatter would have introduced.
+
+        Negative half of the pair: this is the case the substring grouping
+        got wrong, and it is grouped from `created_at` now rather than from
+        any wording.
+        """
+        add_notification(
+            session_factory,
+            world["adopter_user_id"],
+            minutes_ago=60 * 24 * 30,
+        )
+
+        body = adopter_client.get("/my/notifications").get_data(as_text=True)
+
+        assert "Earlier" in body
+        assert "Last 24 hours" not in body
+
+    def test_the_inbox_uses_the_shared_relative_wording(
+        self,
+        session_factory: sessionmaker[Session],
+        world: dict[str, str],
+    ) -> None:
+        """Proves the inbox and every other screen phrase a timestamp alike.
+
+        This module had a second implementation with a different vocabulary,
+        so the same age read "2 hours ago" here and elsewhere by coincidence
+        and "1 month ago" against "on 23 Sep 2026" when it did not.
+        """
+        from app.cqrs.queries.formatting import describe_relative_time
+        from app.cqrs.queries.notification_queries import (
+            ListMyNotificationsHandler,
+            ListMyNotificationsQuery,
+        )
+
+        add_notification(session_factory, world["adopter_user_id"], minutes_ago=120)
+
+        with session_factory() as session:
+            items = ListMyNotificationsHandler().handle(
+                ListMyNotificationsQuery(user_id=world["adopter_user_id"]), session
+            )
+
+        assert items
+        for item in items:
+            assert item.relative_label == describe_relative_time(item.created_at)

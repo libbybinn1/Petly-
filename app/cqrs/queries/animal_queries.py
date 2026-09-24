@@ -120,6 +120,11 @@ class AnimalSearchFilters:
     species: str | None = None
     size: str | None = None
     activity_level: str | None = None
+    # A `Temperament` value, or None for no constraint. Interpreted intent
+    # has always parsed one and the describe screen has always shown it as an
+    # understood criterion; without a filter here that tag was a promise the
+    # search did not keep (spec section 6.3).
+    temperament: str | None = None
     city: str | None = None
     # One of AGE_RANGE_BOUNDS' keys, or None for no age constraint. Spec
     # section 6.2 names age among the filters the search must offer.
@@ -137,6 +142,7 @@ class AnimalSearchFilters:
                 self.species,
                 self.size,
                 self.activity_level,
+                self.temperament,
                 self.city,
                 self.age_range,
                 self.good_with_children,
@@ -294,16 +300,7 @@ def apply_search_filters(statement: SelectT, filters: AnimalSearchFilters) -> Se
         The statement with one WHERE clause per supplied criterion.
     """
     statement = _apply_age_band(statement, filters.age_range)
-    if filters.available_only:
-        statement = statement.where(Animal.status == AnimalStatus.AVAILABLE.value)
-    if filters.species:
-        statement = statement.where(Animal.species == filters.species)
-    if filters.size:
-        statement = statement.where(Animal.size == filters.size)
-    if filters.activity_level:
-        statement = statement.where(Animal.activity_level == filters.activity_level)
-    if filters.city:
-        statement = statement.where(Animal.city == filters.city)
+    statement = _apply_exact_matches(statement, filters)
     if filters.good_with_children:
         statement = statement.where(is_true(Animal.good_with_children))
     if filters.good_with_other_animals:
@@ -317,6 +314,35 @@ def apply_search_filters(statement: SelectT, filters: AnimalSearchFilters) -> Se
                 Animal.description.like(pattern, escape=LIKE_ESCAPE),
             )
         )
+    return statement
+
+
+def _apply_exact_matches(statement: SelectT, filters: AnimalSearchFilters) -> SelectT:
+    """Narrow by every criterion that is a plain column equality.
+
+    A table rather than one `if` per column: they all read the same, and the
+    list of them belongs next to `AnimalSearchFilters.is_empty`, which has to
+    name the same set.
+
+    Args:
+        statement: The select to narrow.
+        filters: The criteria to apply. An absent criterion narrows nothing.
+
+    Returns:
+        The statement with one WHERE clause per supplied criterion.
+    """
+    if filters.available_only:
+        statement = statement.where(Animal.status == AnimalStatus.AVAILABLE.value)
+
+    for column, requested in (
+        (Animal.species, filters.species),
+        (Animal.size, filters.size),
+        (Animal.activity_level, filters.activity_level),
+        (Animal.temperament, filters.temperament),
+        (Animal.city, filters.city),
+    ):
+        if requested:
+            statement = statement.where(column == requested)
     return statement
 
 
@@ -372,6 +398,25 @@ def _escape_like(text: str) -> str:
     return escaped
 
 
+def clamp_pagination(page: int, page_size: int) -> tuple[int, int]:
+    """Bring a requested page and size into the range a query can use.
+
+    Both listings paginate and each clamped differently: the staff table
+    floored both at one, while the public search clamped only the computed
+    offset - so `?page=0` rendered page one's rows while the pager beneath
+    them reported page 0, with "previous" enabled and pointing at page -1.
+    One rule, applied by both.
+
+    Args:
+        page: The requested page number, one-based.
+        page_size: The requested rows per page.
+
+    Returns:
+        The page and size to use, each at least one.
+    """
+    return max(1, page), max(1, page_size)
+
+
 class SearchAnimalsHandler(QueryHandler[AnimalSearchResults]):
     """Answers SearchAnimalsQuery."""
 
@@ -387,17 +432,17 @@ class SearchAnimalsHandler(QueryHandler[AnimalSearchResults]):
         )
         total_count = int(session.execute(count_statement).scalar_one())
 
-        offset = max(0, (query.page - 1) * query.page_size)
+        page, page_size = clamp_pagination(query.page, query.page_size)
         page_statement = (
-            filtered.order_by(Animal.name).offset(offset).limit(query.page_size)
+            filtered.order_by(Animal.name).offset((page - 1) * page_size).limit(page_size)
         )
         animals = session.execute(page_statement).scalars().all()
 
         return AnimalSearchResults(
             animals=[to_animal_card(animal) for animal in animals],
             total_count=total_count,
-            page=query.page,
-            page_size=query.page_size,
+            page=page,
+            page_size=page_size,
         )
 
 
@@ -463,8 +508,7 @@ class ListAllAnimalsHandler(QueryHandler[AnimalSearchResults]):
             ).scalar_one()
         )
 
-        page_size = max(1, query.page_size)
-        page = max(1, query.page)
+        page, page_size = clamp_pagination(query.page, query.page_size)
         animals = (
             session.execute(
                 statement.order_by(Animal.name)

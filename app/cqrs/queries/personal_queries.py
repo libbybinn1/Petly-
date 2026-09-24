@@ -19,6 +19,7 @@ from app.cqrs.base import Query, QueryHandler
 from app.cqrs.queries.formatting import DisplayDate, to_display_date
 from app.domain.enums import AggregateType, ApplicationStatus, InvitationStatus
 from app.domain.invitation_rules import has_expired
+from app.infrastructure.clock import aware_utc_now
 from app.infrastructure.models import (
     AdoptionApplication,
     AdoptionInvitation,
@@ -154,7 +155,7 @@ class ListMyInvitationsHandler(QueryHandler[list[InvitationSummary]]):
             .all()
         )
 
-        now = datetime.now(UTC)
+        now = aware_utc_now()
         summaries: list[InvitationSummary] = []
 
         for row in rows:

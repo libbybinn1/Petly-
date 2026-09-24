@@ -188,6 +188,7 @@ def filters_from_intent(intent: SearchIntent) -> AnimalSearchFilters:
         species=intent.species[0].value if len(intent.species) == 1 else None,
         size=intent.size.value if intent.size is not None else None,
         activity_level=intent.activity_level.value if intent.activity_level is not None else None,
+        temperament=intent.temperament.value if intent.temperament is not None else None,
         good_with_children=bool(intent.good_with_children),
         good_with_other_animals=bool(intent.good_with_other_animals),
         available_only=True,

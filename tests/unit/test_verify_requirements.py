@@ -11,6 +11,9 @@ raising an exception that would take the whole CLI run down with it.
 
 from __future__ import annotations
 
+import ast
+import pathlib
+
 import pytest
 from scripts import verify_requirements
 
@@ -60,22 +63,72 @@ def test_doc_reference_scanner_flags_a_fabricated_reference() -> None:
     assert kind == "test"
 
 
-def test_check_documentation_references_reports_every_dead_reference_it_finds() -> None:
-    """Proves the FAIL detail for the docs check names how many dead references exist, by kind.
+def test_the_dead_reference_scanner_always_answers_with_a_list() -> None:
+    """Proves the scanner returns a verdict either way, rather than only when it fails.
+
+    The assertions here used to sit inside `if dead:`, so on a clean run this
+    test asserted nothing at all - and a scanner that had started raising, or
+    returning None, would have passed it.
+    """
+    dead = verify_requirements.find_dead_references()
+
+    assert isinstance(dead, list)
+    for reference in dead:
+        assert reference.document
+        assert reference.kind in ("test", "path", "identifier")
+
+
+def test_check_documentation_references_agrees_with_its_own_scanner() -> None:
+    """Proves the verdict and the detail follow from what the scanner found.
 
     Exercised end to end rather than by re-deriving the count, so a change to
     either `find_dead_references()` or the message format is caught here.
     """
     passed, detail = verify_requirements.check_documentation_references()
     dead = verify_requirements.find_dead_references()
+
+    assert passed is (dead == [])
+    assert detail
     if dead:
-        assert passed is False
+        # The failing detail has to name the size of the problem; the passing
+        # one says what it checked instead, and has no count to carry.
         assert str(len(dead)) in detail
-    else:
-        assert passed is True
 
 
-def test_main_is_guarded_and_does_not_run_on_import() -> None:
-    """Proves importing the module runs no check - main() sits behind `__name__ == "__main__"`."""
+def test_importing_the_module_runs_no_check() -> None:
+    """Proves `main()` sits behind a `__name__ == "__main__"` guard.
+
+    Asserted by parsing the module rather than by comparing `__name__` to
+    "__main__" - which is true of every imported module ever written, so the
+    previous version of this test could not fail. What matters is that the
+    module body contains no top-level call: importing it must not run the
+    checks, because the test suite imports it.
+    """
+    source = pathlib.Path(verify_requirements.__file__).read_text(encoding="utf-8")
+    module = ast.parse(source)
+
+    top_level_calls = [
+        node
+        for node in module.body
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
+    ]
+
     assert callable(verify_requirements.main)
-    assert verify_requirements.__name__ != "__main__"
+    assert top_level_calls == [], [ast.unparse(node) for node in top_level_calls]
+
+
+def test_the_main_guard_rule_would_catch_a_module_that_runs_on_import() -> None:
+    """Proves the check above tests something, using a module that breaks it.
+
+    Negative half of the pair: the rule is spelled out over a synthetic
+    source so it cannot pass merely because the real file is well behaved.
+    """
+    module = ast.parse("def main() -> int:\n    return 0\n\n\nmain()\n")
+
+    top_level_calls = [
+        node
+        for node in module.body
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
+    ]
+
+    assert len(top_level_calls) == 1

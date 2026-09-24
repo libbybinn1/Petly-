@@ -25,7 +25,7 @@ import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 # A model occasionally emits prose around its JSON, or truncates it. Retrying
 # with a firmer instruction usually fixes it; retrying forever would hang the
@@ -128,6 +128,25 @@ class LanguageModel(JsonCompletion, Protocol):
         ...
 
 
+@runtime_checkable
+class ToolConversation(Protocol):
+    """The optional half of a model: being able to hold a tool conversation.
+
+    A runtime-checkable protocol rather than a `getattr` probe, so the
+    capability has a name and a signature the type checker can see. The probe
+    asked only whether *something callable* was there, which a stub with the
+    wrong arity would have satisfied - and the failure then surfaced as a
+    TypeError inside the loop rather than as the graceful degradation this
+    function promises.
+    """
+
+    def complete_with_tools(
+        self, messages: list[ChatMessage], tools: list[ToolSchema]
+    ) -> ModelTurn:
+        """Return the model's next move: a tool call, or its final answer."""
+        ...
+
+
 def next_model_turn(
     language_model: JsonCompletion, messages: list[ChatMessage], tools: list[ToolSchema]
 ) -> ModelTurn:
@@ -151,9 +170,8 @@ def next_model_turn(
         LanguageModelUnavailableError: The model host is unreachable.
         MalformedModelOutputError: No attempt produced valid JSON.
     """
-    tool_conversation = getattr(language_model, "complete_with_tools", None)
-    if callable(tool_conversation):
-        turn = tool_conversation(messages, tools)
+    if isinstance(language_model, ToolConversation):
+        turn = language_model.complete_with_tools(messages, tools)
         if isinstance(turn, ModelTurn):
             return turn
         raise MalformedModelOutputError(

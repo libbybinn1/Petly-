@@ -19,8 +19,10 @@
       </span>
     </div>
     <div class="criterion__track">
-      <div class="criterion__fill {% if item.score >= 75 %}is-strong{% elif item.score >= 50 %}is-fair{% else %}is-weak{% endif %}"
-           style="width: {{ item.score }}%"></div>
+      {#- The band is the domain's (`app/domain/matching.band_for`), because
+          where "strong" stops is a product judgement and not a styling one.
+          Five templates each held a copy of 75 and 50. -#}
+      <div class="criterion__fill is-{{ item.band }}" style="width: {{ item.score }}%"></div>
     </div>
     <p class="criterion__why">{{ item.explanation }}</p>
   </div>

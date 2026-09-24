@@ -18,12 +18,15 @@ The scanner itself lives in `scripts/verify_requirements.py` and is imported
 from here, not reimplemented, so the CLI's dead-reference count and this
 suite's failures are always about the exact same references.
 
-This suite is expected to fail today. The dead-reference list it reports is
-exactly what BG-3 of the requirements audit described: `docs/TESTING.md` and
-`docs/FEATURES.md` cite dozens of test files that were renamed or never
-written, and `PLANNING.md` cites paths from an earlier layout. Fixing them is
-a documentation task for the docs engineer, not a code change - which is why
-this file is a pure reader of `docs/`, `PLANNING.md`, `README.md` and
+This suite was an expected failure when it was written. It reported the 48
+dead references BG-3 of the requirements audit described: `docs/TESTING.md`
+and `docs/FEATURES.md` cited dozens of test files that had been renamed or
+never written, and `PLANNING.md` cited paths from an earlier layout. The
+documentation sweep of 2026-09-24 fixed all of them and removed the marker,
+so the suite now guards the rule rather than recording a breach of it.
+
+Fixing a failure here is a documentation task, not a code change - which is
+why this file is a pure reader of `docs/`, `PLANNING.md`, `README.md` and
 CLAUDE.md and never edits any of them.
 """
 
@@ -35,23 +38,18 @@ from scripts.verify_requirements import _classify_reference, find_dead_reference
 pytestmark = pytest.mark.unit
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "KNOWN GAP, being fixed by the documentation sweep: docs/TESTING.md, PLANNING.md and "
-        "docs/ARCHITECTURE.md still cite tests and paths that do not exist. Remove this marker "
-        "in the same change that fixes the references; strict=True makes the fix flip it red "
-        "until the marker goes."
-    ),
-)
 def test_documents_reference_no_dead_test_path_or_identifier() -> None:
     """Proves every backticked test, path and class name in the docs resolves.
 
-    This is the one test in the new suites that is allowed to fail today: the
-    dead references it reports are real, pre-existing documentation drift
-    (CLAUDE.md R5), not a defect in the scanner. Run this file directly to
-    see the full sorted list; each line is `file:line -> missing <kind>
-    `<reference>``, precise enough to open and fix.
+    This test used to be an expected failure: the requirements audit found 48
+    dead references across docs/TESTING.md, PLANNING.md and
+    docs/ARCHITECTURE.md - tests that were renamed or never written, and
+    paths from an earlier layout. The documentation sweep of 2026-09-24 fixed
+    every one, and the marker went with them, so this now guards CLAUDE.md R5
+    rather than recording a breach of it.
+
+    On failure the message is the full sorted list; each line is
+    `file:line -> missing <kind>`, precise enough to open and fix.
     """
     dead = find_dead_references()
     assert dead == [], "\n" + "\n".join(str(reference) for reference in sorted(dead))

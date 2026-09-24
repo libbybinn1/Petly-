@@ -322,3 +322,27 @@ def _parse_images(raw_urls: tuple[str, ...], errors: dict[str, str]) -> tuple[st
             "Please add at least one photograph. An animal cannot be listed without one."
         )
     return cleaned
+
+
+def animal_status_changed_payload(
+    animal_id: str, from_status: str, to_status: str
+) -> dict[str, str]:
+    """Shape the `AnimalStatusChanged` event payload (architecture section 4).
+
+    One shape, built in one place. Three call sites wrote this dictionary by
+    hand and one of them - the approval cascade in `application_commands` -
+    left `animal_id` out, so the dashboard's activity feed could not name the
+    animal and rendered "changed the status of" with nothing after it. The
+    aggregate identifier is the same value, but a payload is read without the
+    row it hangs off, so it carries its own copy.
+
+    Args:
+        animal_id: The animal whose status moved.
+        from_status: The status it held, as stored.
+        to_status: The status it now holds, as stored.
+
+    Returns:
+        The payload, ready to serialise into the event store's NVARCHAR(MAX)
+        column.
+    """
+    return {"animal_id": animal_id, "from": from_status, "to": to_status}

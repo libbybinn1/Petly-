@@ -4,19 +4,19 @@ Each handler validates against the domain rules, appends the events that
 record what happened, and updates the projection. All three occur inside the
 transaction the bus opened, so a partially-applied cascade can never commit.
 
-Per the CQRS contract, every handler returns an identifier or nothing - never
-read data (blueprint section 9.2).
+Per the CQRS contract, every handler returns an identifier, a count of what
+it affected, or nothing - never read data (blueprint section 9.2).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.cqrs.base import Command, CommandHandler
+from app.domain.animal_rules import animal_status_changed_payload
 from app.domain.application_rules import (
     ApplicationSnapshot,
     animal_status_after_approval,
@@ -38,6 +38,7 @@ from app.domain.enums import (
     NotificationType,
 )
 from app.eventstore.store import EventStore
+from app.infrastructure.clock import utc_now
 from app.infrastructure.models import (
     AdopterProfile,
     AdoptionApplication,
@@ -46,11 +47,6 @@ from app.infrastructure.models import (
     Notification,
     new_identifier,
 )
-
-
-def _now() -> datetime:
-    """Current UTC time, naive to match the SQL Server DATETIME columns."""
-    return datetime.now(UTC).replace(tzinfo=None)
 
 
 class RecordNotFoundError(LookupError):
@@ -111,7 +107,7 @@ class SubmitApplicationHandler(CommandHandler[str]):
         )
 
         application_id = new_identifier()
-        submitted_at = _now()
+        submitted_at = utc_now()
 
         session.add(
             AdoptionApplication(
@@ -194,7 +190,7 @@ class WithdrawApplicationHandler(CommandHandler[None]):
         )
 
         application.status = ApplicationStatus.WITHDRAWN.value
-        application.decided_at = _now()
+        application.decided_at = utc_now()
 
         EventStore(session).append(
             DomainEventType.APPLICATION_WITHDRAWN,
@@ -249,7 +245,7 @@ class RejectApplicationHandler(CommandHandler[None]):
         )
 
         application.status = ApplicationStatus.REJECTED.value
-        application.decided_at = _now()
+        application.decided_at = utc_now()
         application.decided_by_user_id = command.staff_user_id
 
         payload: dict[str, str] = {"animal_id": application.animal_id}
@@ -375,7 +371,7 @@ class ApproveApplicationHandler(CommandHandler[int]):
         )
 
         event_store = EventStore(session)
-        decided_at = _now()
+        decided_at = utc_now()
 
         application.status = ApplicationStatus.APPROVED.value
         application.decided_at = decided_at
@@ -463,13 +459,15 @@ class ApproveApplicationHandler(CommandHandler[int]):
 
         previous_status = animal.status
         animal.status = target_status.value
-        animal.updated_at = _now()
+        animal.updated_at = utc_now()
 
         event_store.append(
             DomainEventType.ANIMAL_STATUS_CHANGED,
             AggregateType.ANIMAL,
             animal_id,
-            payload={"from": previous_status, "to": target_status.value},
+            payload=animal_status_changed_payload(
+                animal_id, previous_status, target_status.value
+            ),
             actor_user_id=actor_user_id,
         )
 
@@ -517,7 +515,7 @@ class ReverseApprovalHandler(CommandHandler[int]):
         event_store = EventStore(session)
 
         approved.status = ApplicationStatus.WITHDRAWN.value
-        approved.decided_at = _now()
+        approved.decided_at = utc_now()
 
         event_store.append(
             DomainEventType.APPLICATION_WITHDRAWN,
@@ -676,6 +674,6 @@ def _notify(
             body=body,
             link_url="/my/applications",
             is_read=False,
-            created_at=_now(),
+            created_at=utc_now(),
         )
     )

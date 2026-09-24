@@ -12,23 +12,20 @@
 
 {#- Split into what arrived in the last day and what did not.
 
-    `created_at` is a naive UTC timestamp and a template has no way to ask
-    what time it is now, so the split is read from `relative_label`, which
-    the view model computed against a correct clock: anything measured in
-    minutes or hours is inside the window, anything measured in days or
-    months is outside it. The headings say "last 24 hours" rather than
-    "today" because that is exactly what this tests, and a calendar-day
-    grouping needs an `is_today` on the view model (see the frontend
-    report's backend requests). -#}
+    The view model answers `is_recent`, computed from `created_at` against a
+    correct clock. This template used to decide it by searching
+    `relative_label` for the words "day", "month" and "year" - a decision
+    taken in a view (rule R2), resting on the wording of a label. The
+    headings say "last 24 hours" rather than "today" because that is what
+    the view model measures: the column is UTC and the reader's calendar day
+    is not. -#}
 {%- set recent_notifications = [] -%}
 {%- set older_notifications = [] -%}
 {%- for notification in notifications -%}
-  {%- if 'day' in notification.relative_label
-         or 'month' in notification.relative_label
-         or 'year' in notification.relative_label -%}
-    {%- set _ = older_notifications.append(notification) -%}
-  {%- else -%}
+  {%- if notification.is_recent -%}
     {%- set _ = recent_notifications.append(notification) -%}
+  {%- else -%}
+    {%- set _ = older_notifications.append(notification) -%}
   {%- endif -%}
 {%- endfor -%}
 

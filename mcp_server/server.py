@@ -25,6 +25,7 @@ import sys
 from typing import Any
 
 from app.config import load_configuration
+from app.domain.facts import split_stored_values
 from app.infrastructure.database import create_database_engine, create_session_factory
 from app.infrastructure.models import AdopterProfile, Animal
 from mcp.server.mcpserver import MCPServer
@@ -182,10 +183,10 @@ def _split_preferences(raw_value: str | None) -> list[str]:
     """Split the stored comma-separated species preferences into a list.
 
     Stored as a delimited string because SQL Server 2014 has no array type.
+    The split lives in `app.domain.facts` so the payload this tool returns is
+    shaped by the same rule the web tier reads the column with.
     """
-    if not raw_value:
-        return []
-    return [item.strip() for item in raw_value.split(",") if item.strip()]
+    return split_stored_values(raw_value)
 
 
 def main() -> None:

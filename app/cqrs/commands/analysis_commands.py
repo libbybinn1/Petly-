@@ -19,12 +19,12 @@ job it created, and never the answer, which does not exist yet
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
 from app.cqrs.base import Command, CommandHandler
 from app.domain.enums import AnalysisJobStatus, AnalysisJobType
+from app.infrastructure.clock import utc_now
 from app.infrastructure.models import AnalysisJob, new_identifier
 
 # Matches the declared width of `analysis_jobs.natural_language_query` with
@@ -33,10 +33,6 @@ from app.infrastructure.models import AnalysisJob, new_identifier
 # model prompt in another process, where its length is directly a cost.
 MAXIMUM_DESCRIPTION_LENGTH = 500
 
-
-def _now() -> datetime:
-    """Current UTC time, naive to match the SQL Server DATETIME columns."""
-    return datetime.now(UTC).replace(tzinfo=None)
 
 
 @dataclass(frozen=True)
@@ -82,7 +78,7 @@ class EnqueueIntentInterpretationHandler(CommandHandler[str]):
                 adopter_profile_id=command.adopter_profile_id,
                 natural_language_query=command.natural_language_query,
                 attempt_count=0,
-                created_at=_now(),
+                created_at=utc_now(),
             )
         )
         return job_id

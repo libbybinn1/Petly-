@@ -15,9 +15,19 @@
     outstanding and reloads once something has changed. The scope carries no
     identifier — the endpoint reads the signed-in adopter's profile from the
     session — so this URL discloses nothing even if it is shared. Without
-    JavaScript the Refresh link in each pending block does the same job. -#}
+    JavaScript the Refresh link in each pending block does the same job.
+
+    Emitted only while something is actually outstanding, and carrying the
+    counts the server rendered, so the poller has a baseline to compare its
+    first answer against. A settled page opts out entirely rather than
+    asking every thirty seconds for as long as the tab stays open. -#}
 {% if matches %}
-  <div class="stack" data-analysis-status-url="{{ url_for('matches.analysis_status', scope='my-matches') }}">
+  <div class="stack"
+       {%- if not analysis_status.is_settled %}
+       data-analysis-status-url="{{ url_for('matches.analysis_status', scope='my-matches') }}"
+       data-analysis-pending="{{ analysis_status.pending }}"
+       data-analysis-generation="{{ analysis_status.generation }}"
+       {%- endif %}>
     {% for match in matches %}
     <article class="card card--padded candidate">
       <div class="candidate__head">
@@ -71,11 +81,13 @@
         <div class="candidate__column">
           <h4 class="panel-title">How this was scored</h4>
           <div class="mini-criteria">
-            {% for item in match.score.criterion_scores[:4] %}
+            {#- The view model chooses which criteria matter and how each one
+                reads; slicing the breakdown here was a view deciding. -#}
+            {% for item in match.top_criteria %}
             <div class="mini-criterion">
-              <span class="mini-criterion__name">{{ item.criterion.value|humanize }}</span>
+              <span class="mini-criterion__name">{{ item.name }}</span>
               <span class="mini-criterion__track">
-                <span class="mini-criterion__fill {% if item.score >= 75 %}is-strong{% elif item.score >= 50 %}is-fair{% else %}is-weak{% endif %}"
+                <span class="mini-criterion__fill is-{{ item.band }}"
                       style="width: {{ item.score }}%"></span>
               </span>
               <span class="mini-criterion__value">{{ item.score }}</span>
@@ -89,7 +101,7 @@
   </div>
 {% else %}
   <div class="empty">
-    <div class="empty__icon">🐾</div>
+    <div class="empty__icon" aria-hidden="true">🐾</div>
     <h3>No matches yet</h3>
     <p>
       {% if not has_complete_profile %}

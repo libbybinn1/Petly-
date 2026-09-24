@@ -362,3 +362,52 @@ class TestTheQueries:
             RegisterAdopterHandler(), RegisterAdopterHandler
         )
         assert application.config["BUS"] is not None
+
+
+class TestOneApplicationDoesNotContaminateAnother:
+    """`create_app` must build a self-contained application every time.
+
+    Flask-Login and Flask-WTF were held as module-level singletons and
+    re-initialised per call. `init_app` rebinds a shared instance to whichever
+    application called last, and the user loader closes over one call's
+    session factory - so the second application in a process silently took
+    over authentication for the first, and everybody signed into the first
+    was rehydrated against the second one's database.
+    """
+
+    def test_a_signed_in_session_survives_a_second_application_being_built(
+        self,
+        adopter_client: FlaskClient,
+        csrf_client: FlaskClient,
+        world: dict[str, str],
+    ) -> None:
+        """Proves the first application still authenticates its own visitors.
+
+        The fixture order is the test: `adopter_client` signs in, then
+        `csrf_client` builds a second application over a different database,
+        and the first client is used afterwards. With a shared login manager
+        the first client's user identifier no longer existed in the database
+        the loader was now pointed at, so this page answered a redirect to
+        sign in.
+        """
+        response = adopter_client.get("/my/applications")
+
+        assert response.status_code == 200
+
+    def test_each_application_carries_its_own_login_manager(
+        self, application: Flask, csrf_application: Flask
+    ) -> None:
+        """Proves the extension objects are not shared between applications.
+
+        Structural rather than behavioural, because the behavioural symptom
+        depends on which application happened to be built last.
+        """
+        # Flask-Login attaches itself to the application object rather than
+        # to `extensions`, and it ships no type information, so the attribute
+        # is read by name.
+        first_login_manager = getattr(application, "login_manager", None)
+        second_login_manager = getattr(csrf_application, "login_manager", None)
+
+        assert first_login_manager is not None
+        assert first_login_manager is not second_login_manager
+        assert application.extensions["csrf"] is not csrf_application.extensions["csrf"]

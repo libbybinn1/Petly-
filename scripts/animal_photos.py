@@ -299,12 +299,42 @@ class PhotoFetcher:
     _dog_urls: dict[str, list[str]] = field(default_factory=dict)
     _cat_urls: dict[str, list[str]] = field(default_factory=dict)
     _commons_urls: dict[str, list[str]] = field(default_factory=dict)
+    # Cache keys whose source came back with nothing. A dry pool is refilled
+    # on demand, which is right when the source is alive and wrong when it is
+    # not: a category that has been renamed, or an API that is down, was
+    # asked again for every remaining animal of that kind - a hundred and
+    # fifty round trips, each timing out, to learn the same thing.
+    _exhausted_sources: set[str] = field(default_factory=set)
     _last_commons_call_at: float = 0.0
 
     def __post_init__(self) -> None:
         """Open the shared HTTP session."""
         self._session = requests.Session()
         self._session.headers.update({"User-Agent": USER_AGENT})
+
+    def close(self) -> None:
+        """Release the HTTP session.
+
+        A seed run opens one session and holds it across a hundred and fifty
+        downloads, which is the point of it - but nothing closed it, so the
+        connection pool was left to the garbage collector and Python warned
+        about an unclosed socket on exit.
+        """
+        self._session.close()
+
+    def _refilled(self, cache_key: str, urls: list[str]) -> list[str]:
+        """Record a refill, remembering a source that answered with nothing.
+
+        Args:
+            cache_key: Which pool was refilled.
+            urls: What the source returned.
+
+        Returns:
+            The same list, so a caller can return it directly.
+        """
+        if not urls:
+            self._exhausted_sources.add(cache_key)
+        return urls
 
     def fetch_into(
         self, species: Species, breed: str | None, destination: Path
@@ -370,8 +400,8 @@ class PhotoFetcher:
         popular breed silently get no photograph at all.
         """
         pool = self._dog_urls.get(cache_key)
-        if pool:
-            return pool
+        if pool or cache_key in self._exhausted_sources:
+            return pool or []
 
         endpoint = (
             DOG_API_BREEDS.format(breed_path=breed_path, count=IMAGES_PER_DOG_CALL)
@@ -382,7 +412,7 @@ class PhotoFetcher:
         urls = (payload or {}).get("message", [])
         refilled = list(urls) if isinstance(urls, list) else []
         self._dog_urls[cache_key] = refilled
-        return refilled
+        return self._refilled(cache_key, refilled)
 
     # ----------------------------------------------------------------------
     # Cats
@@ -408,8 +438,8 @@ class PhotoFetcher:
         pool of ten, which nine cats will exhaust.
         """
         pool = self._cat_urls.get(cache_key)
-        if pool:
-            return pool
+        if pool or cache_key in self._exhausted_sources:
+            return pool or []
 
         parameters: dict[str, str | int] = {"limit": IMAGES_PER_CAT_CALL}
         if breed_id:
@@ -421,7 +451,7 @@ class PhotoFetcher:
             else []
         )
         self._cat_urls[cache_key] = refilled
-        return refilled
+        return self._refilled(cache_key, refilled)
 
     # ----------------------------------------------------------------------
     # Everything else, via Wikimedia Commons
@@ -440,7 +470,11 @@ class PhotoFetcher:
         )
         pool = self._commons_urls.get(cache_key)
         if not pool:
-            pool = self._collect_commons_urls(species, breed_name)
+            if cache_key in self._exhausted_sources:
+                return None
+            pool = self._refilled(
+                cache_key, self._collect_commons_urls(species, breed_name)
+            )
             self._commons_urls[cache_key] = pool
 
         return pool.pop() if pool else None

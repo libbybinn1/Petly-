@@ -12,19 +12,26 @@ server.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.cqrs.base import Query, QueryHandler
+from app.cqrs.queries.formatting import describe_relative_time
 from app.domain.enums import NotificationType
+from app.infrastructure.clock import as_aware_utc, aware_utc_now
 from app.infrastructure.models import Notification
 
 # How many messages the inbox shows at once. Old notifications are history
 # rather than a to-do list, so there is no paginator: the recent ones are
 # the ones anybody acts on.
 INBOX_LIMIT = 50
+
+# The window the inbox calls "last 24 hours". A fixed duration rather than a
+# calendar day: the column is UTC and the reader's day is not, so "today"
+# would mean different things in different timezones.
+RECENT_NOTIFICATION_WINDOW = timedelta(hours=24)
 
 # What each kind of message is called on screen. The enum values are
 # shouted constants; these are what a person reads.
@@ -54,9 +61,28 @@ class NotificationItem:
         """How long ago this arrived, in words.
 
         Computed here rather than in the template, so the view decides
-        nothing and the phrasing is testable.
+        nothing and the phrasing is testable. Shared with every other
+        timestamp on the site (`app.cqrs.queries.formatting`): this module
+        used to carry its own copy, with its own vocabulary, and the inbox
+        was the one screen that said "1 month ago" where the rest said
+        "on 23 Sep 2026".
         """
-        return _relative_time(self.created_at)
+        return describe_relative_time(self.created_at)
+
+    @property
+    def is_recent(self) -> bool:
+        """Whether this arrived inside the last day (docs/UX.md section 3).
+
+        The inbox groups messages into "last 24 hours" and "earlier". That
+        grouping was being derived in the template by looking for the words
+        "day", "month" and "year" inside `relative_label` - which decided
+        something in a view (rule R2), and quietly depended on the phrasing
+        of a label nobody thought of as an interface. It was correct only by
+        accident, and changing the label to the shared formatter would have
+        broken it: past a week that says "on 23 Sep 2026", which contains
+        none of the three words.
+        """
+        return aware_utc_now() - as_aware_utc(self.created_at) < RECENT_NOTIFICATION_WINDOW
 
 
 @dataclass(frozen=True)
@@ -112,40 +138,3 @@ def _to_item(row: Notification) -> NotificationItem:
         is_read=bool(row.is_read),
         created_at=row.created_at,
     )
-
-
-SECONDS_PER_MINUTE = 60
-SECONDS_PER_HOUR = 60 * SECONDS_PER_MINUTE
-SECONDS_PER_DAY = 24 * SECONDS_PER_HOUR
-DAYS_PER_MONTH = 30
-
-
-def _relative_time(moment: datetime) -> str:
-    """Describe how long ago something happened.
-
-    Args:
-        moment: A naive UTC timestamp, as the DATETIME2 columns store.
-
-    Returns:
-        A short phrase such as "2 hours ago".
-    """
-    now = datetime.now(UTC).replace(tzinfo=None)
-    naive_moment = moment.replace(tzinfo=None) if moment.tzinfo else moment
-    seconds = (now - naive_moment).total_seconds()
-
-    if seconds < SECONDS_PER_MINUTE:
-        return "just now"
-    if seconds < SECONDS_PER_HOUR:
-        return _plural(int(seconds // SECONDS_PER_MINUTE), "minute")
-    if seconds < SECONDS_PER_DAY:
-        return _plural(int(seconds // SECONDS_PER_HOUR), "hour")
-
-    days = int(seconds // SECONDS_PER_DAY)
-    if days < DAYS_PER_MONTH:
-        return _plural(days, "day")
-    return _plural(days // DAYS_PER_MONTH, "month")
-
-
-def _plural(count: int, unit: str) -> str:
-    """Format a count of time units as "3 days ago"."""
-    return f"{count} {unit}{'s' if count != 1 else ''} ago"

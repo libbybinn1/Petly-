@@ -26,6 +26,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from app.domain.animal_rules import AnimalSubmission, validate_animal
 from app.domain.enums import (
     ActivityLevel,
     AnimalSize,
@@ -60,8 +61,18 @@ CITIES: tuple[str, ...] = (
     "Eilat",
 )
 
+# Younger than any animal the shelter would list. The *upper* bound is not
+# declared here: `app/domain/animal_rules.MAXIMUM_AGE_YEARS` owns it, and this
+# module used to carry its own 80.0 against the domain's 40.0 - so the roster
+# could have shipped a 60-year-old dog that the animal form would have
+# refused, and nothing would have said so.
 MINIMUM_AGE_YEARS = 0.05
-MAXIMUM_AGE_YEARS = 80.0
+
+# The roster declares no photograph: `scripts/seed.py` downloads one per
+# animal, and FR-4.2 is enforced there. Validation still needs a URL to check,
+# because an animal with no image is not listable - so a stand-in is supplied
+# and the real rule is proved by the seed's own exit code.
+_IMAGE_STANDIN = "/static/uploads/sample.jpg"
 
 
 @dataclass(frozen=True)
@@ -1471,33 +1482,69 @@ def validate_animal_specification(specification: AnimalSpecification) -> tuple[s
     listing rather than as an error. This is what
     `tests/unit/test_seed_data.py` runs over every entry.
 
+    The entry is put through `app.domain.animal_rules.validate_animal`, the
+    same validator a staff member's form goes through, so seeded data cannot
+    be something the application would have rejected. That is where the age
+    ceiling and every column width come from; this module's own checks are
+    only the ones the form does not make - a description is optional on the
+    form and mandatory in a demo, and an `OTHER` animal needs a breed for the
+    interface to have anything to call it.
+
     Args:
         specification: The entry to check.
 
     Returns:
         A tuple of problem descriptions, empty when the entry is sound.
     """
+    problems = list(_roster_only_problems(specification))
+    problems.extend(
+        f"{field}: {message}"
+        for field, message in sorted(validate_animal(_as_submission(specification)).errors.items())
+    )
+    return tuple(problems)
+
+
+def _as_submission(specification: AnimalSpecification) -> AnimalSubmission:
+    """Shape one roster entry the way the animal form's validator reads it.
+
+    The city and the photograph are supplied by the seed rather than declared
+    per animal, so a plausible stand-in is used for each: neither is a
+    property of the roster entry being checked.
+    """
+    return AnimalSubmission(
+        name=specification.name,
+        species=specification.species.value,
+        breed=specification.breed,
+        age_years=str(specification.age_years),
+        size=specification.size.value,
+        temperament=specification.temperament.value,
+        activity_level=specification.activity_level.value,
+        required_space=specification.required_space.value,
+        city=CITIES[0],
+        status=specification.status.value if specification.status else None,
+        description=specification.description,
+        good_with_children=specification.good_with_children,
+        good_with_other_animals=specification.good_with_other_animals,
+        has_special_needs=specification.has_special_needs,
+        special_needs_description=specification.special_needs_description,
+        image_urls=(_IMAGE_STANDIN,),
+    )
+
+
+def _roster_only_problems(specification: AnimalSpecification) -> tuple[str, ...]:
+    """The checks the animal form does not make, but a demo roster needs."""
     problems: list[str] = []
 
-    if not specification.name.strip():
-        problems.append("name is empty")
     if not specification.description.strip():
         problems.append("description is empty")
     if specification.species is Species.OTHER and not (specification.breed or "").strip():
         problems.append("an OTHER animal needs a breed so the interface can name it")
-    if not MINIMUM_AGE_YEARS <= specification.age_years <= MAXIMUM_AGE_YEARS:
-        problems.append(f"age {specification.age_years} is outside the plausible range")
+    if specification.age_years < MINIMUM_AGE_YEARS:
+        problems.append(f"age {specification.age_years} is younger than any listed animal")
 
-    problems.extend(_special_needs_problems(specification))
+    description = (specification.special_needs_description or "").strip()
+    if description and not specification.has_special_needs:
+        # The form drops this silently, which is right for a form and wrong
+        # for hand-written data: the note was written on purpose.
+        problems.append("special needs are described but not flagged")
     return tuple(problems)
-
-
-def _special_needs_problems(specification: AnimalSpecification) -> tuple[str, ...]:
-    """Check that the special-needs flag and its description agree."""
-    has_description = bool((specification.special_needs_description or "").strip())
-
-    if specification.has_special_needs and not has_description:
-        return ("special needs are flagged but not described",)
-    if has_description and not specification.has_special_needs:
-        return ("special needs are described but not flagged",)
-    return ()

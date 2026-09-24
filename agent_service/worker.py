@@ -24,7 +24,7 @@ import logging
 import signal
 import time
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from types import FrameType
 from typing import Any, Protocol
 
@@ -37,6 +37,7 @@ from app.domain.enums import (
     MatchDirection,
 )
 from app.eventstore.store import EventStore
+from app.infrastructure.clock import utc_now
 from app.infrastructure.database import create_database_engine, create_session_factory
 from app.infrastructure.models import (
     AdopterProfile,
@@ -211,7 +212,7 @@ class AgentWorker:
             if candidate_id is None:
                 return None
 
-            claimed_at = _now()
+            claimed_at = utc_now()
             claimed = session.execute(
                 update(AnalysisJob)
                 .where(
@@ -245,7 +246,7 @@ class AgentWorker:
         rows. Sweeping on each poll costs one indexed query and is what makes
         a crash recoverable without an operator.
         """
-        cutoff = _now() - timedelta(minutes=STRANDED_JOB_TIMEOUT_MINUTES)
+        cutoff = utc_now() - timedelta(minutes=STRANDED_JOB_TIMEOUT_MINUTES)
 
         with self._session_factory() as session:
             stranded = (
@@ -274,7 +275,7 @@ class AgentWorker:
         )
         if job.attempt_count >= MAX_JOB_ATTEMPTS:
             job.status = AnalysisJobStatus.FAILED.value
-            job.completed_at = _now()
+            job.completed_at = utc_now()
             self.statistics.failed += 1
             logger.error("job %s stranded and out of attempts; failed", job.analysis_job_id)
             return
@@ -345,9 +346,33 @@ class AgentWorker:
         )
 
     def _skip(self, job: AnalysisJob, reason: str) -> None:
-        """Record a job the worker cannot run, with why."""
-        self._finish_failed(job.analysis_job_id, reason)
+        """Park a job the worker can never run, with why.
+
+        Distinct from a failure, in both directions. It is not retried: an
+        `INTERPRET_INTENT` job with no query, or a ranking job missing one
+        half of its pairing, is as invalid on the third attempt as on the
+        first, and returning it to PENDING - which is what routing this
+        through `_finish_failed` did - put it back at the head of the queue
+        to be claimed, rejected and requeued twice more before it finally
+        stuck. It is also counted once: the same route incremented `failed`
+        as well, so one unrunnable job was reported as two events in the
+        closing summary.
+
+        Args:
+            job: The claimed job.
+            reason: What makes it unrunnable, recorded on the row.
+        """
+        with self._session_factory() as session:
+            stored = session.get(AnalysisJob, job.analysis_job_id)
+            if stored is None:
+                return
+            stored.error_message = reason[:1000]
+            stored.status = AnalysisJobStatus.FAILED.value
+            stored.completed_at = utc_now()
+            session.commit()
+
         self.statistics.skipped += 1
+        logger.error("job %s cannot be run and was parked: %s", job.analysis_job_id, reason)
 
     def _reuse_cached_analysis(self, job: AnalysisJob, direction: MatchDirection) -> bool:
         """Complete the job from a stored analysis when nothing has changed.
@@ -439,7 +464,7 @@ class AgentWorker:
                 return
             job.result_payload = json.dumps(payload)
             job.status = AnalysisJobStatus.COMPLETED.value
-            job.completed_at = _now()
+            job.completed_at = utc_now()
             session.commit()
 
     def _finish_failed(self, job_id: str, message: str) -> None:
@@ -452,7 +477,7 @@ class AgentWorker:
             job.error_message = message[:1000]
             if job.attempt_count >= MAX_JOB_ATTEMPTS:
                 job.status = AnalysisJobStatus.FAILED.value
-                job.completed_at = _now()
+                job.completed_at = utc_now()
                 logger.error("job %s failed permanently: %s", job_id, message)
             else:
                 job.status = AnalysisJobStatus.PENDING.value
@@ -572,7 +597,7 @@ def _analysis_columns(outcome: AnalysisOutcome) -> dict[str, Any]:
         ),
         "used_web_search": outcome.used_web_search,
         "model_name": outcome.model_name,
-        "generated_at": _now(),
+        "generated_at": utc_now(),
     }
 
 
@@ -619,12 +644,7 @@ def _close_job(session: Session, job_id: str) -> None:
     if job is None:
         return
     job.status = AnalysisJobStatus.COMPLETED.value
-    job.completed_at = _now()
-
-
-def _now() -> datetime:
-    """Current UTC time, stored naive to match the SQL Server DATETIME columns."""
-    return datetime.now(UTC).replace(tzinfo=None)
+    job.completed_at = utc_now()
 
 
 # --------------------------------------------------------------------------

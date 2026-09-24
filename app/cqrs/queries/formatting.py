@@ -25,7 +25,9 @@ would say nothing about which is which at the call site.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
+
+from app.infrastructure.clock import as_aware_utc, aware_utc_now
 
 DATE_PATTERN = "%d %b %Y"
 MOMENT_PATTERN = "%d %b %Y, %H:%M"
@@ -104,8 +106,8 @@ def describe_relative_time(moment: datetime, now: datetime | None = None) -> str
     Returns:
         A phrase such as "just now", "4 minutes ago" or "on 23 Sep 2026".
     """
-    aware_moment = _as_utc(moment)
-    comparison_point = _as_utc(now) if now is not None else datetime.now(UTC)
+    aware_moment = as_aware_utc(moment)
+    comparison_point = as_aware_utc(now) if now is not None else aware_utc_now()
     elapsed_seconds = (comparison_point - aware_moment).total_seconds()
 
     if elapsed_seconds < SECONDS_PER_MINUTE:
@@ -128,25 +130,12 @@ def describe_relative_time(moment: datetime, now: datetime | None = None) -> str
 
 def _build(moment: datetime, pattern: str, now: datetime | None) -> DisplayDate:
     """Assemble the three display forms of one timestamp."""
-    aware_moment = _as_utc(moment)
+    aware_moment = as_aware_utc(moment)
     return DisplayDate(
         display=aware_moment.strftime(pattern),
         iso=aware_moment.isoformat(),
         relative_label=describe_relative_time(aware_moment, now),
     )
-
-
-def _as_utc(moment: datetime) -> datetime:
-    """Read a timestamp as UTC, whether or not it carries a timezone.
-
-    SQL Server 2014 DATETIME columns are naive and this application stores
-    UTC in them (see `app.eventstore.store`), so a naive value read back is
-    UTC that has merely lost the label. Attaching it here means arithmetic
-    below never mixes an aware value with a naive one, which raises.
-    """
-    if moment.tzinfo is None:
-        return moment.replace(tzinfo=UTC)
-    return moment.astimezone(UTC)
 
 
 def _count_of(quantity: int, noun: str) -> str:

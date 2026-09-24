@@ -24,6 +24,12 @@ data/chroma/
 # Uploaded / generated media
 app/static/uploads/*
 !app/static/uploads/.gitkeep
+# The one exception: the shared "no photograph yet" placeholder. Spec 24 makes
+# an image mandatory, so an animal whose live photo fetch failed has to borrow
+# something - and a gitignored fallback means a fresh clone has none until a
+# seed has run, which is exactly when the seed needs it. A few kilobytes in
+# the repository is cheaper than a listing with a broken image in it.
+!app/static/uploads/sample.jpg
 
 # Playwright
 test-results/

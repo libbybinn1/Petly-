@@ -21,8 +21,17 @@ from pathlib import Path
 
 import pytest
 from agent_service.intent import SearchIntent, intent_to_payload
-from app.domain.enums import AnalysisJobStatus, AnalysisJobType, Species
-from app.infrastructure.models import AnalysisJob, new_identifier
+from app.domain.enums import (
+    ActivityLevel,
+    AnalysisJobStatus,
+    AnalysisJobType,
+    AnimalSize,
+    AnimalStatus,
+    Species,
+    Temperament,
+)
+from app.infrastructure.models import AnalysisJob, Animal, new_identifier
+from flask import Flask
 from flask.testing import FlaskClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
@@ -463,3 +472,85 @@ def _is_agent_module(module_name: str | None) -> bool:
     return module_name is not None and (
         module_name == "agent_service" or module_name.startswith("agent_service.")
     )
+
+
+class TestTemperamentIsActuallyApplied:
+    """The describe screen showed a criterion the search then ignored.
+
+    `agent_service.intent` has always parsed a temperament, and
+    `matches/describe.html` has always rendered it as an understood criterion
+    beside the others - but `filters_from_intent` never carried it, so an
+    adopter who asked for a calm animal was shown anxious ones under a tag
+    saying their wish had been understood (spec section 6.3).
+    """
+
+    def test_the_interpreted_temperament_reaches_the_filters(self) -> None:
+        """Proves the criterion survives the one point where intent becomes SQL."""
+        from app.cqrs.queries.intent_queries import filters_from_intent
+
+        filters = filters_from_intent(
+            SearchIntent(
+                understood=True,
+                temperament=Temperament.CALM,
+                interpretation="Something calm.",
+            )
+        )
+
+        assert filters.temperament == Temperament.CALM.value
+        assert filters.is_empty is False
+
+    def test_an_uninterpreted_temperament_stays_absent(self) -> None:
+        """Proves an unstated criterion narrows nothing.
+
+        Negative half of the pair: guessing would rule animals out with
+        nothing on screen to explain why.
+        """
+        from app.cqrs.queries.intent_queries import filters_from_intent
+
+        filters = filters_from_intent(UNDERSTOOD_INTENT)
+
+        assert filters.temperament is None
+
+    def test_a_calm_search_excludes_an_energetic_animal(
+        self,
+        application: Flask,
+        world: dict[str, str],
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        """Proves the new filter narrows the real query, not only the dataclass."""
+        from app.cqrs.queries.animal_queries import AnimalSearchFilters, SearchAnimalsQuery
+
+        add_energetic_animal(session_factory)
+
+        results = application.config["BUS"].dispatch_query(
+            SearchAnimalsQuery(filters=AnimalSearchFilters(temperament=Temperament.CALM.value))
+        )
+        names = {card.name for card in results.animals}
+
+        assert "Clover" in names
+        assert "Zip" not in names
+
+
+def add_energetic_animal(session_factory: sessionmaker[Session]) -> None:
+    """Add one available animal whose temperament is not CALM."""
+    with session_factory() as session:
+        session.add(
+            Animal(
+                animal_id=new_identifier(),
+                name="Zip",
+                species=Species.DOG.value,
+                age_years=2.0,
+                size=AnimalSize.MEDIUM.value,
+                temperament=Temperament.ENERGETIC.value,
+                activity_level=ActivityLevel.HIGH.value,
+                good_with_children=True,
+                good_with_other_animals=True,
+                has_special_needs=False,
+                required_space=AnimalSize.MEDIUM.value,
+                city="Haifa",
+                status=AnimalStatus.AVAILABLE.value,
+                created_at=_naive_now(),
+                updated_at=_naive_now(),
+            )
+        )
+        session.commit()

@@ -93,7 +93,14 @@
   /* A region marked `data-shown-by="<checkbox id>"` follows that checkbox.
      Without JavaScript the region is simply always visible, which is the
      behaviour every form on the site has today - never hidden content a
-     visitor cannot reach. */
+     visitor cannot reach.
+
+     A region holding a server-rendered error stays visible whatever the
+     checkbox says. The server is the real validator (NFR-5.2), and a
+     rejected form comes back with the box unticked while the message about
+     the field inside it is already on the page: hiding it left the visitor
+     reading "Enter an age between 0 and 18" in the summary with no field to
+     correct, and no way to reach one. */
   function initDisclosure() {
     document.querySelectorAll("[data-shown-by]").forEach(function (region) {
       var trigger = document.getElementById(region.getAttribute("data-shown-by"));
@@ -101,11 +108,16 @@
         return;
       }
       var sync = function () {
-        region.hidden = !trigger.checked;
+        region.hidden = !trigger.checked && !hasRenderedError(region);
       };
       trigger.addEventListener("change", sync);
       sync();
     });
+  }
+
+  /* Whether a region contains an error the server already rendered. */
+  function hasRenderedError(region) {
+    return region.querySelector(".field__error") !== null;
   }
 
   /* --------------------------------------------- pending analysis polling */
@@ -119,7 +131,22 @@
      visitor guess when to reload, poll the status endpoint and reload once
      something has actually changed. Backs off after two minutes, and stops
      dead on any failure - including the 404 it gets while the endpoint is
-     still being built. */
+     still being built.
+
+     Three things stop it running for ever:
+
+     - The page opts in only when the server rendered it with work
+       outstanding, so a settled page never polls at all.
+     - The counts it starts from are the server-rendered ones, so the first
+       answer is compared against what the visitor is actually looking at
+       rather than against nothing.
+     - A settled answer that changed nothing ends the loop. It used to keep
+       asking every thirty seconds for as long as the tab stayed open,
+       because `lastPending` started null and a page whose work had already
+       finished never satisfied either reload condition.
+
+     A hidden tab is skipped rather than polled: a background tab reloading
+     itself is work nobody asked for, and the visitor is not reading it. */
   function initAnalysisPolling() {
     var marker = document.querySelector("[data-analysis-status-url]");
     if (!marker) {
@@ -128,8 +155,8 @@
 
     var statusUrl = marker.getAttribute("data-analysis-status-url");
     var startedAt = Date.now();
-    var lastGeneration = null;
-    var lastPending = null;
+    var lastGeneration = numberFrom(marker, "data-analysis-generation");
+    var lastPending = numberFrom(marker, "data-analysis-pending");
 
     function schedule() {
       var elapsed = Date.now() - startedAt;
@@ -137,6 +164,11 @@
     }
 
     function poll() {
+      if (document.hidden) {
+        schedule();               /* nobody is reading: ask again later */
+        return;
+      }
+
       window.fetch(statusUrl, {
         headers: { Accept: "application/json" },
         credentials: "same-origin"
@@ -152,6 +184,9 @@
           window.location.reload();
           return;
         }
+        if (status.pending === 0) {
+          return;                 /* settled and unchanged: nothing to wait for */
+        }
         lastGeneration = status.generation;
         lastPending = status.pending;
         schedule();
@@ -161,6 +196,18 @@
     }
 
     schedule();
+  }
+
+  /* Read one numeric data attribute, or null when it is absent or not a
+     number. Null means "no baseline", which the poller treats as "anything
+     the server says is the first thing I know". */
+  function numberFrom(element, attributeName) {
+    var raw = element.getAttribute(attributeName);
+    if (raw === null || raw === "") {
+      return null;
+    }
+    var parsed = Number(raw);
+    return isNaN(parsed) ? null : parsed;
   }
 
   /* ------------------------------------------------- reveal a password */

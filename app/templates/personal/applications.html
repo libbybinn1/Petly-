@@ -13,13 +13,19 @@
 {% if applications %}
 <div class="table-wrap">
   <table class="table">
+    {#- A caption and a label for every column, including the two that show
+        no heading. An empty `<th>` is an unnamed column: a screen reader
+        announces the cell with nothing to say what it is, so the photograph
+        and the row's controls were read as two anonymous columns
+        (docs/UX.md section 8). -#}
+    <caption class="sr-only">Your adoption applications, newest first</caption>
     <thead>
       <tr>
-        <th></th>
+        <th><span class="sr-only">Photograph</span></th>
         <th>Animal</th>
         <th>Submitted</th>
         <th>Status</th>
-        <th></th>
+        <th><span class="sr-only">Actions</span></th>
       </tr>
     </thead>
     <tbody>
@@ -29,14 +35,14 @@
           {% if application.animal_image_url %}
             <img class="table__thumb" src="{{ application.animal_image_url }}" alt="" loading="lazy">
           {% else %}
-            <div class="table__thumb" style="display:grid;place-items:center">🐾</div>
+            <div class="table__thumb table__thumb--empty" aria-hidden="true">🐾</div>
           {% endif %}
         </td>
         <td>
           <a href="{{ url_for('animals.details', animal_id=application.animal_id) }}">
             <strong>{{ application.animal_name }}</strong>
           </a><br>
-          <span style="color:var(--text-muted); font-size:0.85rem">
+          <span class="u-muted u-small">
             {{ application.animal_species|humanize }}
             {% if application.came_from_invitation %} · from an invitation{% endif %}
           </span>
@@ -49,9 +55,9 @@
             </p>
           {% endif %}
         </td>
-        <td style="white-space:nowrap">
+        <td class="u-nowrap">
           <time datetime="{{ application.submitted.iso }}">{{ application.submitted.display }}</time><br>
-          <span style="color:var(--text-muted); font-size:0.85rem">{{ application.submitted.relative_label }}</span>
+          <span class="u-muted u-small">{{ application.submitted.relative_label }}</span>
         </td>
         <td>
           {% if application.status == 'APPROVED' %}
@@ -68,7 +74,7 @@
             <span class="tag tag--brand">Submitted</span>
           {% endif %}
         </td>
-        <td style="white-space:nowrap">
+        <td class="u-nowrap">
           {#- Every row links to its own recorded history, which is how an
               adopter sees *why* a closed application closed and that a
               reopened one was reopened (spec 7.5). The query checks the
@@ -96,7 +102,7 @@
 
 {% else %}
   <div class="empty">
-    <div class="empty__icon">📋</div>
+    <div class="empty__icon" aria-hidden="true">📋</div>
     <h3>You have not applied for anything yet</h3>
     <p>When you find an animal that suits you, apply from its page.</p>
     <a class="btn btn--primary" href="{{ url_for('matches.find_my_pet') }}">See your matches</a>

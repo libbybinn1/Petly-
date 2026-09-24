@@ -12,6 +12,7 @@ table and what the server actually answers.
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime, timedelta
 from typing import ClassVar
 
@@ -495,3 +496,52 @@ class TestUnknownIdentifiers:
     ) -> None:
         """Proves a forged animal identifier in a POST does not create anything."""
         assert adopter_client.post("/my/apply/no-such-animal").status_code == 404
+
+
+class TestTheSignInFormKeepsItsDestination:
+    """`next` has to survive the round trip, not just the redirect into it."""
+
+    def test_the_form_posts_back_to_the_same_destination(
+        self, client: FlaskClient
+    ) -> None:
+        """Proves the rendered form carries `next` in its action.
+
+        The action was a bare `url_for('auth.login')`, so the parameter
+        Flask-Login had just put in the URL was dropped the moment the page
+        rendered - and everybody who was asked to sign in ended up on the
+        home page instead of the page they had asked for.
+        """
+        body = client.get("/login?next=/my/applications").get_data(as_text=True)
+
+        assert 'action="/login?next=/my/applications"' in body
+
+    def test_a_form_with_no_destination_posts_to_the_plain_route(
+        self, client: FlaskClient
+    ) -> None:
+        """Proves an ordinary visit is not given an empty `next` parameter.
+
+        Negative half of the pair: `url_for` with a None value must omit it
+        rather than emit `?next=`, which would then be validated and
+        rejected on every plain sign-in.
+        """
+        body = client.get("/login").get_data(as_text=True)
+
+        assert 'action="/login"' in body
+        assert "next=" not in body
+
+    def test_signing_in_through_the_form_lands_on_the_requested_page(
+        self, client: FlaskClient, world: dict[str, str]
+    ) -> None:
+        """Proves the whole round trip works, not only the markup."""
+        from tests.api.conftest import TEST_PASSWORD
+
+        page = client.get("/login?next=/my/applications").get_data(as_text=True)
+        action = re.search(r'<form method="post"\s+action="([^"]+)"', page)
+        assert action is not None
+
+        response = client.post(
+            action.group(1).replace("&amp;", "&"),
+            data={"email": ADOPTER_EMAIL, "password": TEST_PASSWORD},
+        )
+
+        assert response.headers["Location"] == "/my/applications"

@@ -282,13 +282,37 @@ class TestWebSearchPolicy:
         assert decision is SearchDecision.ALLOWED_KNOWLEDGE_GAP
         assert decision.is_allowed
 
-    def test_external_topics_open_the_gate_even_with_rag_hits(self) -> None:
-        """Proves current or external facts are not answered from a static corpus."""
+    def test_curated_guidance_outranks_an_external_sounding_topic(self) -> None:
+        """Proves "RAG first, web second" is a rule and not a preference.
+
+        The external-topic markers are keyword matches on a phrase the agent
+        composed itself, and they used to be tested before RAG sufficiency:
+        the single word "current" sent a question the knowledge base had
+        already answered to the web, contradicting CLAUDE.md R4, the system
+        prompt and the tool's own description. The decision recorded is now
+        the refusal.
+        """
         decision = decide_whether_to_search(
             "What are the current vaccination schedule requirements?",
             relevant_knowledge_found=True,
             already_searched_this_task=False,
         )
+        assert decision is SearchDecision.REFUSED_RAG_SUFFICIENT
+        assert not decision.is_allowed
+
+    def test_an_external_topic_still_opens_the_gate_when_rag_is_silent(self) -> None:
+        """Proves the external-topic rule survived, under the curated one.
+
+        A current fact the guides do not cover is exactly what the web is
+        for, and the decision says which kind of gap opened the gate so the
+        reasoning trace records the distinction.
+        """
+        decision = decide_whether_to_search(
+            "What are the current vaccination schedule requirements?",
+            relevant_knowledge_found=False,
+            already_searched_this_task=False,
+        )
+        assert decision is SearchDecision.ALLOWED_EXTERNAL_TOPIC
         assert decision.is_allowed
 
     def test_never_searches_for_the_applications_own_records(self) -> None:

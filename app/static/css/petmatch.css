@@ -473,6 +473,10 @@ img { max-width: 100%; display: block; }
    whichever palette is active, so this needs no media query. */
 .navlink--active { background: var(--brand-50); color: var(--brand-700); }
 
+/* The inbox link is an icon and a count rather than a word, so it stays one
+   tap target on a narrow screen where the labelled links shed their asides. */
+.navlink--icon { display: inline-flex; align-items: center; gap: var(--space-2); }
+
 .avatar {
   width: 34px; height: 34px;
   border-radius: var(--radius-pill);
@@ -1838,3 +1842,23 @@ legend.field__label { padding: 0; }
 .u-flush  { margin-bottom: 0; }
 .u-spaced { margin-top: var(--space-3); }
 .u-muted  { color: var(--text-muted); }
+.u-small  { font-size: 0.85rem; }
+.u-spaced-below { margin-bottom: var(--space-4); }
+
+/* The analysis screen's headline number. It was three inline declarations
+   repeating tokens the stylesheet already owns, which is how one screen ends
+   up a shade off every other. */
+.analysis-total {
+  font-size: 2.6rem;
+  font-weight: var(--weight-bold);
+  color: var(--text-strong);
+  line-height: 1;
+}
+.analysis-total__scale {
+  font-size: 1rem;
+  font-weight: var(--weight-medium);
+  color: var(--text-muted);
+}
+
+/* The paw standing in for a missing photograph in a table cell. */
+.table__thumb--empty { display: grid; place-items: center; }

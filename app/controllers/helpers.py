@@ -7,6 +7,7 @@ functions rather than poking at `current_app.config` in every view.
 from __future__ import annotations
 
 from typing import cast
+from urllib.parse import urlparse
 
 from flask import current_app
 from sqlalchemy.orm import Session, sessionmaker
@@ -68,6 +69,37 @@ def parse_positive_integer(raw_value: str | None, default: int) -> int:
     if parsed < 1 or parsed > MAXIMUM_PAGE_NUMBER:
         return default
     return parsed
+
+
+def is_safe_redirect_target(target: str) -> bool:
+    """Whether a submitted destination points inside this application (NFR-4.3).
+
+    Every such value is attacker-controlled. `/login?next=...` is the obvious
+    one, but a notification's `target_url` arrives in a hidden field that the
+    sender can equally well rewrite - and that route had only a leading-slash
+    check, which "//evil.example.com" passes, and so does the same host after
+    a slash and a backslash, which some browsers normalise to "//".
+    Redirecting a signed-in user off-site immediately after they acted on a
+    message from us is a credible phishing step, so one function decides it
+    for both routes rather than two spellings of the same rule drifting apart.
+
+    Parsing decides it rather than character inspection: a URL with any
+    scheme or any host is off-site, whatever spelling was used to smuggle it
+    past, including a backslash that some browsers normalise to "/".
+
+    Args:
+        target: The raw submitted destination.
+
+    Returns:
+        True only for a relative path within this application.
+    """
+    if not target.startswith("/"):
+        return False
+    if target.startswith(("//", "/\\")):
+        return False
+
+    parsed = urlparse(target)
+    return not parsed.scheme and not parsed.netloc
 
 
 def parse_checkbox(raw_value: str | None) -> bool:

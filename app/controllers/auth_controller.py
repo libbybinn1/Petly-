@@ -16,14 +16,12 @@ reads or writes goes through the bus.
 
 from __future__ import annotations
 
-from urllib.parse import urlparse
-
 from flask import Blueprint, flash, redirect, render_template, request, url_for
 from flask_login import current_user, login_user, logout_user
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.wrappers import Response
 
-from app.controllers.helpers import ViewResult, get_bus
+from app.controllers.helpers import ViewResult, get_bus, is_safe_redirect_target
 from app.cqrs.commands.account_commands import (
     EmailAlreadyRegisteredError,
     RegisterAdopterCommand,
@@ -99,7 +97,7 @@ def login() -> ViewResult:
     flash(f"Welcome back, {authenticated.full_name.split()[0]}.", "success")
 
     next_url = request.args.get("next")
-    if next_url is not None and _is_safe_redirect_target(next_url):
+    if next_url is not None and is_safe_redirect_target(next_url):
         return redirect(next_url)
     return redirect(url_for("home.index"))
 
@@ -119,35 +117,6 @@ def _signed_in_user(account: AccountForSignIn) -> AuthenticatedUser:
         adopter_profile_id=account.adopter_profile_id,
         has_complete_profile=account.has_complete_profile,
     )
-
-
-def _is_safe_redirect_target(target: str) -> bool:
-    """Whether a `next` value points inside this application.
-
-    The value is attacker-controlled: anyone can send a victim a link to
-    /login?next=... . A check for a leading "/" is not enough, because
-    "//evil.example.com" also starts with one and is a fully qualified
-    off-site address. That makes the sign-in form redirect a user to an
-    attacker's page immediately after they typed their password on a
-    genuine screen, which is a credible phishing step.
-
-    Parsing decides it rather than character inspection: a URL with any
-    scheme or any host is off-site, whatever spelling was used to smuggle
-    it past, including a backslash that some browsers normalise to "/".
-
-    Args:
-        target: The raw `next` query parameter.
-
-    Returns:
-        True only for a relative path within this application.
-    """
-    if not target.startswith("/"):
-        return False
-    if target.startswith(("//", "/\\")):
-        return False
-
-    parsed = urlparse(target)
-    return not parsed.scheme and not parsed.netloc
 
 
 @auth_blueprint.route("/register", methods=["GET", "POST"])

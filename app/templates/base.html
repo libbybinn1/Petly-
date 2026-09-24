@@ -63,6 +63,27 @@
           {{ navlink('personal.my_profile', url_for('personal.my_profile'), 'Profile') }}
         {% endif %}
 
+        {#- The inbox, outside the role branches because both roles receive
+            messages (spec section 23). `unread_notification_count` is
+            injected into every template by the context processor in
+            app/__init__.py, which was running its query on every
+            authenticated request with nothing rendering the answer.
+
+            The count is text as well as colour, and is named for a screen
+            reader: a tinted circle alone says nothing to anyone who cannot
+            see it (docs/UX.md section 8). -#}
+        {%- set inbox_is_here = request.endpoint == 'personal.my_notifications' -%}
+        <a class="navlink navlink--icon{% if inbox_is_here %} navlink--active{% endif %}"
+           href="{{ url_for('personal.my_notifications') }}"
+           {%- if inbox_is_here %} aria-current="page"{% endif %}>
+          <svg class="icon" aria-hidden="true"><use href="#icon-bell"></use></svg>
+          <span class="sr-only">Notifications</span>
+          {% if unread_notification_count %}
+            <span class="badge">{{ unread_notification_count }}<span class="sr-only">
+              unread</span></span>
+          {% endif %}
+        </a>
+
         <span class="avatar" title="{{ current_user.full_name }}">{{ current_user.initials }}</span>
         {#- Sign-out is a POST so a third-party page cannot sign the user out
             by embedding an image (docs/UX.md section 5). -#}

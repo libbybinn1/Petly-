@@ -15,13 +15,13 @@ and a type it cannot resolve would answer 404 for every account.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.cqrs.base import Command, CommandHandler
 from app.domain.enums import UserRole
+from app.infrastructure.clock import utc_now
 from app.infrastructure.models import User, new_identifier
 
 
@@ -69,7 +69,7 @@ class RegisterAdopterHandler(CommandHandler[str]):
                 full_name=command.full_name,
                 role=UserRole.ADOPTER.value,
                 is_active=True,
-                created_at=datetime.now(UTC).replace(tzinfo=None),
+                created_at=utc_now(),
             )
         )
 

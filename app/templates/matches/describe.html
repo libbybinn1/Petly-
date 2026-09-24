@@ -133,7 +133,7 @@
     </div>
   {% else %}
     <div class="empty">
-      <div class="empty__icon">🔍</div>
+      <div class="empty__icon" aria-hidden="true">🔍</div>
       <h3>Nothing available matches that for your household right now</h3>
       <p>Our roster changes often. Browsing everything may turn up something close.</p>
       <a class="btn btn--primary" href="{{ url_for('animals.search') }}">Browse all animals</a>
@@ -155,7 +155,7 @@
     </div>
   {% else %}
     <div class="empty">
-      <div class="empty__icon">🔍</div>
+      <div class="empty__icon" aria-hidden="true">🔍</div>
       <h3>Nothing available matches that right now</h3>
       <p>Our roster changes often. Browsing everything may turn up something close.</p>
       <a class="btn btn--primary" href="{{ url_for('animals.search') }}">Browse all animals</a>

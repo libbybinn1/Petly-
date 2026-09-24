@@ -18,6 +18,8 @@ not running it, which is exactly the state a visitor sees in practice.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -44,6 +46,7 @@ from app.infrastructure.models import (
     new_identifier,
 )
 from flask.testing import FlaskClient
+from sqlalchemy import event
 from sqlalchemy.orm import Session, sessionmaker
 from werkzeug.security import generate_password_hash
 
@@ -195,19 +198,65 @@ def add_analysis_with_trace(
 
 
 class TestThePollerIsWiredUp:
-    """Both ranking screens opt into the status endpoint (docs/UX.md 3)."""
+    """Both ranking screens opt into the status endpoint (docs/UX.md 3).
+
+    Opting in is now conditional: a page with nothing outstanding emits no
+    poll URL at all. The poller used to start on any results page and, with
+    no baseline to compare its first answer against, asked again every thirty
+    seconds for as long as the tab stayed open.
+    """
 
     def test_find_my_pet_polls_its_own_scope(
-        self, adopter_client: FlaskClient, world: dict[str, str]
+        self,
+        adopter_client: FlaskClient,
+        world: dict[str, str],
+        session_factory: sessionmaker[Session],
     ) -> None:
         """Proves the adopter's page asks about the adopter's own matches.
 
         The scope carries no identifier: the endpoint reads the profile from
         the session, so this URL cannot be edited into somebody else's.
         """
+        queue_job(
+            session_factory,
+            adopter_profile_id=world["adopter_profile_id"],
+            animal_id=world["available_animal_id"],
+        )
+
         body = adopter_client.get("/my/matches").get_data(as_text=True)
 
         assert 'data-analysis-status-url="/api/analysis-status?scope=my-matches"' in body
+
+    def test_the_page_carries_the_counts_it_was_rendered_with(
+        self,
+        adopter_client: FlaskClient,
+        world: dict[str, str],
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        """Proves the poller is given a baseline rather than starting blind."""
+        queue_job(
+            session_factory,
+            adopter_profile_id=world["adopter_profile_id"],
+            animal_id=world["available_animal_id"],
+        )
+
+        body = adopter_client.get("/my/matches").get_data(as_text=True)
+
+        assert 'data-analysis-pending="1"' in body
+        assert "data-analysis-generation=" in body
+
+    def test_a_settled_page_does_not_poll_at_all(
+        self, adopter_client: FlaskClient, world: dict[str, str]
+    ) -> None:
+        """Proves the opt-in is conditional, which is what stops the loop.
+
+        Negative half of the pair: with nothing queued there is nothing to
+        wait for, so the page should carry no poll URL for the script to
+        find.
+        """
+        body = adopter_client.get("/my/matches").get_data(as_text=True)
+
+        assert "data-analysis-status-url" not in body
 
     def test_the_applicant_ranking_polls_for_one_animal(
         self,
@@ -225,6 +274,11 @@ class TestThePollerIsWiredUp:
             world["adopter_profile_id"],
             world["available_animal_id"],
         )
+        queue_job(
+            session_factory,
+            adopter_profile_id=world["adopter_profile_id"],
+            animal_id=world["available_animal_id"],
+        )
 
         body = staff_client.get(
             f"/animals/{world['available_animal_id']}/adopters"
@@ -232,6 +286,25 @@ class TestThePollerIsWiredUp:
 
         assert "data-analysis-status-url=" in body
         assert f"animal_id={world['available_animal_id']}" in body
+
+    def test_a_settled_applicant_ranking_does_not_poll(
+        self,
+        staff_client: FlaskClient,
+        world: dict[str, str],
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        """Proves the staff screen opts out once the queue is empty too."""
+        apply_for(
+            session_factory,
+            world["adopter_profile_id"],
+            world["available_animal_id"],
+        )
+
+        body = staff_client.get(
+            f"/animals/{world['available_animal_id']}/adopters"
+        ).get_data(as_text=True)
+
+        assert "data-analysis-status-url" not in body
 
 
 class TestThePendingBlock:
@@ -412,3 +485,212 @@ class TestTheAnalysisDetailPage:
         body = staff_client.get(f"/analyses/{analysis_id}").get_data(as_text=True)
 
         assert "How the agent reasoned" not in body
+
+
+def add_applicant(session_factory: sessionmaker[Session], animal_id: str, index: int) -> None:
+    """Add one more opted-in adopter who has applied for an animal."""
+    with session_factory() as session:
+        user = User(
+            user_id=new_identifier(), email=f"queue{index}@petmatch.test",
+            password_hash=generate_password_hash("x"), full_name=f"Applicant {index}",
+            role="ADOPTER", is_active=True, created_at=_naive_now(),
+        )
+        profile = AdopterProfile(
+            adopter_profile_id=new_identifier(), user_id=user.user_id,
+            home_type=HomeType.HOUSE.value, has_yard=True,
+            household_has_children=False, has_other_animals=False,
+            experience_level=ExperienceLevel.SOME.value,
+            activity_level=ActivityLevel.MODERATE.value,
+            daily_hours_available=4.0, city="Haifa",
+            open_to_proactive_suggestions=True, is_complete=True,
+            created_at=_naive_now(), updated_at=_naive_now(),
+        )
+        session.add_all([user, profile])
+        session.add(
+            AdoptionApplication(
+                application_id=new_identifier(),
+                adopter_profile_id=profile.adopter_profile_id,
+                animal_id=animal_id,
+                status=ApplicationStatus.SUBMITTED.value,
+                submitted_at=_naive_now(),
+            )
+        )
+        session.commit()
+
+
+@contextmanager
+def counted_statements(
+    session_factory: sessionmaker[Session],
+) -> Iterator[list[str]]:
+    """Record every statement the application sends while the block runs."""
+    engine = session_factory.kw["bind"]
+    statements: list[str] = []
+
+    def record(connection, cursor, statement, parameters, context, executemany):  # noqa: ANN001, ANN202
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        yield statements
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+
+
+class TestRankingDoesNotQueryPerCandidate:
+    """Ranking cost must not grow with the number of people being ranked.
+
+    The candidate rows were assembled with `session.get(User, ...)` inside
+    the loop, so ranking twenty applicants issued twenty-five round trips to
+    a database that is a shared free-tier server on the far side of the
+    internet - and discovery paid that for every eligible adopter before
+    slicing the list down to ten.
+    """
+
+    def test_ranking_applicants_costs_the_same_for_three_as_for_eight(
+        self,
+        staff_client: FlaskClient,
+        world: dict[str, str],
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        """Proves the applicant ranking screen issues a fixed number of queries."""
+        animal_id = world["available_animal_id"]
+        apply_for(session_factory, world["adopter_profile_id"], animal_id)
+        apply_for(session_factory, world["other_profile_id"], animal_id)
+        add_applicant(session_factory, animal_id, 0)
+
+        # Warm up first: the expiry sweep and Flask's own first-request work
+        # would otherwise be counted against the smaller list only.
+        staff_client.get(f"/animals/{animal_id}/adopters")
+
+        with counted_statements(session_factory) as few:
+            staff_client.get(f"/animals/{animal_id}/adopters")
+
+        for index in range(1, 6):
+            add_applicant(session_factory, animal_id, index)
+
+        with counted_statements(session_factory) as many:
+            response = staff_client.get(f"/animals/{animal_id}/adopters")
+
+        assert response.status_code == 200
+        assert few and len(many) == len(few)
+
+    def test_discovering_adopters_costs_the_same_as_the_roster_grows(
+        self,
+        staff_client: FlaskClient,
+        world: dict[str, str],
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        """Proves discovery does not pay per candidate before its limit slice.
+
+        Negative half of the pair: the cost is measured against a roster that
+        grew, so a per-candidate query would show up as a larger count rather
+        than as a slower page nobody notices in a test.
+        """
+        animal_id = add_demanding_animal(session_factory)
+        staff_client.get(f"/animals/{animal_id}/discover")
+
+        with counted_statements(session_factory) as few:
+            staff_client.get(f"/animals/{animal_id}/discover")
+
+        for index in range(10, 18):
+            add_applicant(session_factory, world["available_animal_id"], index)
+
+        with counted_statements(session_factory) as many:
+            response = staff_client.get(f"/animals/{animal_id}/discover")
+
+        assert response.status_code == 200
+        assert few and len(many) == len(few)
+
+
+class TestSourceReferencesAreNotBlindlyLinked:
+    """The reference is a string an agent wrote, so it is not a trusted URL.
+
+    The analysis screen rendered `<a href="{{ source.reference }}">` for
+    anything whose kind was "web". A model that wrote "javascript:..." into
+    its own citation would have had it rendered as a live link inside the
+    staff review screen, which is the one place the record is inspected.
+    """
+
+    @staticmethod
+    def _store_sources(
+        session_factory: sessionmaker[Session],
+        world: dict[str, str],
+        sources: list[dict[str, object]],
+    ) -> str:
+        """Store one analysis carrying the given evidence sources."""
+        analysis_id = new_identifier()
+        with session_factory() as session:
+            session.add(
+                MatchAnalysis(
+                    match_analysis_id=analysis_id,
+                    direction=MatchDirection.ANIMAL_TO_ADOPTER.value,
+                    adopter_profile_id=world["adopter_profile_id"],
+                    animal_id=world["available_animal_id"],
+                    score=70,
+                    is_disqualified=False,
+                    criterion_scores="[]",
+                    reasons="[]",
+                    concerns="[]",
+                    missing_information="[]",
+                    evidence_sources=json.dumps(sources),
+                    reasoning_trace="[]",
+                    used_web_search=True,
+                    model_name="qwen2.5:3b-instruct",
+                    generated_at=_naive_now(),
+                )
+            )
+            session.commit()
+        return analysis_id
+
+    def test_an_https_source_is_still_a_link(
+        self,
+        staff_client: FlaskClient,
+        world: dict[str, str],
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        """Proves the feature survived: a real web result is still clickable."""
+        analysis_id = self._store_sources(
+            session_factory,
+            world,
+            [{"kind": "web", "reference": "https://example.test/guide", "cited": True}],
+        )
+
+        body = staff_client.get(f"/analyses/{analysis_id}").get_data(as_text=True)
+
+        assert 'href="https://example.test/guide"' in body
+
+    def test_a_script_scheme_is_rendered_as_text(
+        self,
+        staff_client: FlaskClient,
+        world: dict[str, str],
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        """Proves a reference that is not an http address never becomes an href."""
+        analysis_id = self._store_sources(
+            session_factory,
+            world,
+            [{"kind": "web", "reference": "javascript:alert(1)", "cited": True}],
+        )
+
+        body = staff_client.get(f"/analyses/{analysis_id}").get_data(as_text=True)
+
+        assert 'href="javascript:' not in body
+        assert "javascript:alert(1)" in body
+
+    def test_a_knowledge_base_citation_is_rendered_as_text(
+        self,
+        staff_client: FlaskClient,
+        world: dict[str, str],
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        """Proves a RAG reference is shown as the reference it is, not a link."""
+        analysis_id = self._store_sources(
+            session_factory,
+            world,
+            [{"kind": "rag", "reference": "space-and-housing.md#apartments", "cited": True}],
+        )
+
+        body = staff_client.get(f"/analyses/{analysis_id}").get_data(as_text=True)
+
+        assert 'href="space-and-housing.md' not in body
+        assert "space-and-housing.md#apartments" in body

@@ -13,21 +13,42 @@ the validators are tested against deliberately malformed input too.
 
 from __future__ import annotations
 
+import random
 from collections import Counter
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import cast
 
 import pytest
-from app.domain.enums import ActivityLevel, AnimalSize, Species, Temperament
+from app.domain.animal_rules import MAXIMUM_AGE_YEARS
+from app.domain.enums import (
+    ActivityLevel,
+    AnimalSize,
+    InvitationStatus,
+    Species,
+    Temperament,
+)
+from app.domain.matching import YOUNG_CHILD_AGE_LIMIT, AgePreference
+from app.eventstore.store import EventStore
+from app.infrastructure.clock import utc_now
 from app.infrastructure.database import Base
-from app.infrastructure.models import AdopterProfile, Animal, User
+from app.infrastructure.models import AdopterProfile, Animal, User, new_identifier
+from scripts.animal_photos import ANY_BREED_KEY, PhotoFetcher
+from scripts.seed import (
+    COMMITTED_PLACEHOLDER,
+    FALLBACK_PHOTOGRAPH_NAME,
+    AnimalRoster,
+    _attach_images,
+    _ensure_fallback_photograph,
+)
+from scripts.seed_history import SeedContext, _invitation_timeline
 from scripts.seed_people import (
     ADOPTER_SPECIFICATIONS,
     DEMO_ADOPTER_EMAIL,
     DEMO_STAFF_EMAIL,
     STAFF_SPECIFICATIONS,
     AdopterSpecification,
-    PreferredAgeRange,
     validate_adopter_specification,
 )
 from scripts.seed_roster import (
@@ -39,6 +60,7 @@ from scripts.seed_roster import (
     validate_animal_specification,
 )
 from sqlalchemy import Table
+from sqlalchemy.orm import Session
 
 pytestmark = pytest.mark.unit
 
@@ -76,7 +98,7 @@ def sound_adopter() -> AdopterSpecification:
         3.0,
         (Species.CAT,),
         AnimalSize.SMALL,
-        PreferredAgeRange.ANY,
+        AgePreference.ANY,
         "Invented for a test.",
     )
 
@@ -344,7 +366,7 @@ def test_every_adopter_states_a_size_or_age_preference_and_a_known_city():
     agent has less to reason about than the schema promises.
     """
     for specification in ADOPTER_SPECIFICATIONS:
-        assert specification.preferred_age_range in set(PreferredAgeRange)
+        assert specification.preferred_age_range in set(AgePreference)
         assert specification.city in CITIES, specification.city
 
 
@@ -359,7 +381,7 @@ def test_adopter_households_cover_the_hard_constraints():
     with_young_children = [
         specification
         for specification in ADOPTER_SPECIFICATIONS
-        if (specification.youngest_child_age or 99) < 12
+        if (specification.youngest_child_age or 99) < YOUNG_CHILD_AGE_LIMIT
     ]
     with_resident_pets = [
         specification for specification in ADOPTER_SPECIFICATIONS if specification.has_other_animals
@@ -498,9 +520,14 @@ def test_an_exotic_animal_with_no_breed_is_rejected():
 
 
 def test_special_needs_flagged_without_a_description_is_rejected():
-    """Proves a special-needs badge with nothing behind it is caught."""
+    """Proves a special-needs badge with nothing behind it is caught.
+
+    Reported by the real animal validator now, so the assertion names the
+    field it keys the message on rather than the wording of the message -
+    which belongs to the person filling the form in, not to this test.
+    """
     problems = validate_animal_specification(replace(sound_animal(), has_special_needs=True))
-    assert any("not described" in problem for problem in problems)
+    assert any(problem.startswith("special_needs_description") for problem in problems)
 
 
 def test_a_special_needs_description_without_the_flag_is_rejected():
@@ -531,13 +558,13 @@ def test_an_adopter_with_children_but_no_age_is_rejected():
     problems = validate_adopter_specification(
         replace(sound_adopter(), household_has_children=True)
     )
-    assert any("no age" in problem for problem in problems)
+    assert any(problem.startswith("youngest_child_age") for problem in problems)
 
 
 def test_an_adopter_with_a_child_age_but_no_children_is_rejected():
     """Proves contradictory household answers are caught."""
     problems = validate_adopter_specification(replace(sound_adopter(), youngest_child_age=6))
-    assert any("no children" in problem for problem in problems)
+    assert any(problem.startswith("youngest_child_age") for problem in problems)
 
 
 def test_a_yard_size_without_a_yard_is_rejected():
@@ -560,3 +587,239 @@ def test_a_malformed_email_is_rejected():
     """Proves an address that would never receive a sign-in is caught."""
     problems = validate_adopter_specification(replace(sound_adopter(), email="Not An Address"))
     assert any("email" in problem for problem in problems)
+
+
+def test_the_roster_is_checked_against_the_real_animal_validator():
+    """Proves a roster entry the animal form would refuse is refused here too.
+
+    This module carried its own age ceiling of 80 against the domain's 40, so
+    a 60-year-old dog would have seeded cleanly and then been un-editable:
+    the first staff member to open its form could not save it back.
+    """
+    too_old = replace(sound_animal(), age_years=MAXIMUM_AGE_YEARS + 1)
+
+    assert any(problem.startswith("age_years") for problem in
+               validate_animal_specification(too_old))
+
+
+def test_an_oversized_roster_string_is_refused():
+    """Proves the column widths are checked by validation, not only by a test.
+
+    The roster validator had no width checks at all: a name longer than
+    `animals.name` seeded happily under SQLite and failed against SQL Server
+    2014 with "String or binary data would be truncated".
+    """
+    problems = validate_animal_specification(replace(sound_animal(), name="x" * 300))
+
+    assert any(problem.startswith("name") for problem in problems)
+
+
+# --------------------------------------------------------------------------
+# Every seeded animal ends up with a photograph (FR-4.2, spec section 24)
+# --------------------------------------------------------------------------
+
+MAXIMUM_PLACEHOLDER_BYTES = 10_000
+
+
+def test_the_placeholder_photograph_is_committed_and_small():
+    """Proves the shared fallback exists in the repository and is a real JPEG.
+
+    `app/static/uploads/` is gitignored, so a fresh clone had no `sample.jpg`
+    and an offline seed had nothing to fall back to. The file is un-ignored
+    by one negation line; it has to stay small enough that committing it is
+    obviously the right trade.
+    """
+    placeholder = COMMITTED_PLACEHOLDER
+
+    assert placeholder.exists(), f"{placeholder} is missing"
+    assert placeholder.stat().st_size < MAXIMUM_PLACEHOLDER_BYTES
+    # JPEG start-of-image marker, so a renamed PNG cannot pass.
+    assert placeholder.read_bytes()[:2] == b"\xff\xd8"
+
+
+def test_an_offline_run_can_still_supply_a_fallback(tmp_path: Path) -> None:
+    """Proves a seed with no successful download still finds a picture.
+
+    This is the offline case: no download to copy, so the committed
+    placeholder is what makes the run produce a usable demo.
+    """
+    assert _ensure_fallback_photograph(tmp_path, {}) is True
+    assert (tmp_path / FALLBACK_PHOTOGRAPH_NAME).exists()
+
+
+def test_every_animal_gets_an_image_row_when_a_fallback_exists():
+    """Proves a failed download costs a photograph, not an image row."""
+    roster = AnimalRoster(animals=[_animal_row("Rex"), _animal_row("Milo")])
+    names: dict[str, str | None] = {animal.animal_id: None for animal in roster.animals}
+
+    _attach_images(roster, names, has_fallback=True, now=_naive_now())
+
+    assert len(roster.images) == len(roster.animals)
+    assert roster.animals_without_a_photograph == []
+
+
+def test_an_animal_with_no_image_is_recorded_rather_than_skipped():
+    """Proves the seed notices the state FR-4.2 forbids.
+
+    The negative case: `_attach_images` used to `continue` past an animal
+    with nothing to show, so the run wrote a roster of broken listings and
+    exited 0. It now records the animal, and `run_seed` refuses to write.
+    """
+    roster = AnimalRoster(animals=[_animal_row("Rex")])
+    names: dict[str, str | None] = {animal.animal_id: None for animal in roster.animals}
+
+    _attach_images(roster, names, has_fallback=False, now=_naive_now())
+
+    assert roster.images == []
+    assert roster.animals_without_a_photograph == ["Rex"]
+
+
+def _animal_row(name: str) -> Animal:
+    """One detached animal row, enough for the image helpers to work on."""
+    return Animal(
+        animal_id=new_identifier(),
+        name=name,
+        species=Species.DOG.value,
+        age_years=3.0,
+        size=AnimalSize.MEDIUM.value,
+        temperament=Temperament.BALANCED.value,
+        activity_level=ActivityLevel.MODERATE.value,
+        good_with_children=True,
+        good_with_other_animals=True,
+        has_special_needs=False,
+        required_space=AnimalSize.MEDIUM.value,
+        city="Haifa",
+        status="AVAILABLE",
+        created_at=_naive_now(),
+        updated_at=_naive_now(),
+    )
+
+
+def _naive_now() -> datetime:
+    """Naive UTC, as the DATETIME2 columns store."""
+    return utc_now()
+
+
+# --------------------------------------------------------------------------
+# Seeded history cannot describe the future (item 27)
+# --------------------------------------------------------------------------
+
+
+def _timeline_context(**overrides: object) -> SeedContext:
+    """A SeedContext with no database, enough for the timeline helpers.
+
+    The session and the event store are never touched by the functions under
+    test, which is the point of them being pure enough to unit-test.
+    """
+    values: dict[str, object] = {
+        "session": cast("Session", None),
+        "event_store": cast("EventStore", None),
+        "randomizer": random.Random(1),
+        "now": datetime(2026, 9, 24, 12, 0, tzinfo=UTC).replace(tzinfo=None),
+    }
+    values.update(overrides)
+    return SeedContext(**values)  # type: ignore[arg-type]
+
+
+def test_an_invitation_response_is_never_in_the_future():
+    """Proves a freshly sent invitation cannot have been answered already.
+
+    The open-invitation ages go down to one hour and a response was recorded
+    two hours after sending, so the newest invitations carried replies that
+    had not happened yet. Nothing reads such a row as impossible.
+    """
+    context = _timeline_context()
+
+    for status in (InvitationStatus.ACCEPTED, InvitationStatus.DECLINED):
+        for _ in range(20):
+            timeline = _invitation_timeline(context, status)
+            assert timeline.responded_at is not None
+            assert timeline.responded_at <= context.now
+            assert timeline.viewed_at is not None
+            assert timeline.viewed_at <= context.now
+
+
+def test_an_expired_invitation_is_older_than_the_configured_window():
+    """Proves the seeded window is the configured one, not a second copy of 72.
+
+    The module held its own `INVITATION_EXPIRY_HOURS = 72`, which would have
+    gone on saying 72 while the application ran on something else - and the
+    dashboard expiry figure would then have disagreed with the rows it
+    counted.
+    """
+    context = _timeline_context(invitation_expiry_hours=100)
+
+    timeline = _invitation_timeline(context, InvitationStatus.EXPIRED)
+
+    assert timeline.expires_at == timeline.sent_at + timedelta(hours=100)
+    assert timeline.expires_at < context.now
+
+
+def test_the_clamp_leaves_an_ordinary_moment_alone():
+    """Proves the clamp is a ceiling and not a flattening.
+
+    Negative half of the pair: a timestamp already in the past must survive
+    untouched, or every seeded history would collapse onto the same instant.
+    """
+    context = _timeline_context()
+    past = context.now - timedelta(days=3)
+
+    assert context.at_or_before_now(past) == past
+    assert context.at_or_before_now(context.now + timedelta(hours=5)) == context.now
+
+
+# --------------------------------------------------------------------------
+# A dead photo source is asked once, not once per animal (item 35)
+# --------------------------------------------------------------------------
+
+
+class _CountingFetcher(PhotoFetcher):
+    """A fetcher whose network calls are counted rather than made."""
+
+    def __init__(self) -> None:
+        """Start with no calls recorded and no session opened."""
+        super().__init__(randomizer=random.Random(1))
+        self.calls: list[str] = []
+
+    def _get_json(self, url: str, params: object = None) -> object | None:
+        """Answer as a dead source does: reachable, and with nothing in it."""
+        self.calls.append(url)
+        return {"message": []}
+
+
+def test_a_source_that_returns_nothing_is_asked_only_once():
+    """Proves an empty pool is not refetched for every remaining animal.
+
+    A dry pool is refilled on demand, which is right while the source is
+    alive. When it is not - a renamed category, an API that is down - the
+    same request was made again for every animal of that kind: a hundred and
+    fifty round trips, each one timing out, to learn the same thing.
+    """
+    fetcher = _CountingFetcher()
+
+    for _ in range(5):
+        assert fetcher._next_dog_url("Mixed Breed") is None
+
+    # Two pools are consulted for a recognised breed - the breed's own and
+    # the any-dog fallback - and each is asked exactly once however many
+    # animals follow.
+    assert len(fetcher.calls) == 2
+    fetcher.close()
+
+
+def test_a_live_source_is_still_refilled_when_it_runs_dry():
+    """Proves the memory is of emptiness, not of having asked.
+
+    Negative half of the pair: several animals draw from one pool and each
+    may burn a candidate on a dead link, so a pool that returned URLs must
+    still be refillable.
+    """
+    fetcher = _CountingFetcher()
+    fetcher._dog_urls[ANY_BREED_KEY] = ["https://example.test/dog.jpg"]
+
+    assert fetcher._next_dog_url(None) == "https://example.test/dog.jpg"
+    assert fetcher.calls == []
+
+    assert fetcher._next_dog_url(None) is None
+    assert len(fetcher.calls) == 1
+    fetcher.close()

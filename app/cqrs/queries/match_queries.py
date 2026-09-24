@@ -16,9 +16,10 @@ fills in the prose as it arrives.
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any, TypeVar
+from typing import Any
+from urllib.parse import urlparse
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -34,22 +35,19 @@ from app.cqrs.queries.animal_queries import (
 from app.cqrs.queries.formatting import describe_relative_time, to_display_moment
 from app.domain.application_rules import ALLOWED_APPLICATION_TRANSITIONS
 from app.domain.enums import (
-    ActivityLevel,
     AnalysisJobStatus,
-    AnimalSize,
     AnimalStatus,
     ApplicationStatus,
-    ExperienceLevel,
-    HomeType,
     MatchDirection,
     Species,
-    Temperament,
 )
+from app.domain.facts import adopter_facts_from_row, animal_facts_from_row
 from app.domain.matching import (
     AdopterFacts,
-    AgePreference,
     AnimalFacts,
     MatchScore,
+    ScoreBand,
+    band_for,
     calculate_match_score,
 )
 from app.infrastructure.models import (
@@ -65,6 +63,131 @@ from app.infrastructure.sql_helpers import is_true
 DEFAULT_DISCOVERY_LIMIT = 10
 
 
+# Schemes a stored reference may be linked with. An agent-written string is
+# not a trusted URL: rendering "javascript:..." or "data:text/html,..." as an
+# href would make the record's own evidence an injection vector, and a
+# relative-looking value would point at this application instead of at the
+# source it names.
+LINKABLE_SCHEMES = ("http", "https")
+
+
+@dataclass(frozen=True)
+class EvidenceSource:
+    """One source the agent recorded, shaped for display (rule R4).
+
+    A view model rather than the raw dictionary, because the screen needs a
+    decision made about the reference - whether it may be a link - and a
+    template must not make it.
+    """
+
+    kind: str
+    reference: str
+    cited: bool
+
+    @property
+    def safe_reference_url(self) -> str | None:
+        """The reference as a link, or None when it must be shown as text.
+
+        Only an absolute http or https URL is linkable. A RAG citation is a
+        knowledge-base path such as "space-and-housing.md#apartments", which
+        is a reference and not an address, so it renders as text.
+        """
+        parsed = urlparse(self.reference)
+        if parsed.scheme not in LINKABLE_SCHEMES or not parsed.netloc:
+            return None
+        return self.reference
+
+
+def _to_evidence_sources(rows: list[Any]) -> list[EvidenceSource]:
+    """Convert the stored JSON list into evidence view models.
+
+    A row that is not a dictionary is dropped: the column is NVARCHAR(MAX)
+    and what comes back has been through another process, so it is untrusted
+    shape as much as untrusted content.
+    """
+    return [
+        EvidenceSource(
+            kind=str(row.get("kind", "")),
+            reference=str(row.get("reference", "")),
+            cited=bool(row.get("cited")),
+        )
+        for row in rows
+        if isinstance(row, dict)
+    ]
+
+
+# How many criteria each compact card shows. The staff card is narrower
+# than the adopter's, which is the whole reason the two differ.
+TOP_CRITERIA_ON_A_CANDIDATE = 3
+TOP_CRITERIA_ON_AN_ANIMAL_CARD = 4
+
+
+@dataclass(frozen=True)
+class CriterionSummary:
+    """One criterion on a compact card: its name, its score and its band."""
+
+    name: str
+    score: int
+
+    @property
+    def band(self) -> ScoreBand:
+        """How this criterion reads at a glance (spec section 8)."""
+        return band_for(self.score)
+
+
+def _heaviest_criteria(score: MatchScore, count: int) -> list[CriterionSummary]:
+    """The `count` heaviest criteria of a score, for a compact summary.
+
+    Args:
+        score: The computed score, with its full breakdown.
+        count: How many to return.
+
+    Returns:
+        Criterion summaries, heaviest weight first.
+    """
+    heaviest_first = sorted(score.criterion_scores, key=lambda item: -item.weight)
+    return [
+        CriterionSummary(
+            name=item.criterion.value.replace("_", " ").title(), score=item.score
+        )
+        for item in heaviest_first[:count]
+    ]
+
+
+@dataclass(frozen=True)
+class StoredCriterion:
+    """One criterion row as the agent stored it, shaped for the shared partial.
+
+    The live scorer hands the same screens a `CriterionScore`; this is the
+    replayed equivalent, and it answers `band` the same way so one partial
+    can render either (spec section 8).
+    """
+
+    criterion: str
+    score: int
+    weight: float
+    explanation: str
+
+    @property
+    def band(self) -> ScoreBand:
+        """How this criterion's score reads at a glance."""
+        return band_for(self.score)
+
+
+def _to_stored_criteria(rows: list[Any]) -> list[StoredCriterion]:
+    """Convert the stored JSON breakdown into criterion view models."""
+    return [
+        StoredCriterion(
+            criterion=str(row.get("criterion", "")),
+            score=int(row.get("score", 0)),
+            weight=float(row.get("weight", 0.0)),
+            explanation=str(row.get("explanation", "")),
+        )
+        for row in rows
+        if isinstance(row, dict)
+    ]
+
+
 @dataclass(frozen=True)
 class StoredAnalysis:
     """An analysis the agent has already produced."""
@@ -73,11 +196,7 @@ class StoredAnalysis:
     reasons: list[str]
     concerns: list[str]
     missing_information: list[str]
-    # Passed through as whatever the agent stored. The values are not all
-    # strings - each source carries a boolean saying whether a reason
-    # actually cited it - and rebuilding these dicts key by key would drop
-    # any field the agent adds later.
-    evidence_sources: list[dict[str, Any]]
+    evidence_sources: list[EvidenceSource]
     used_web_search: bool
     model_name: str
     # The ordered steps the agent took, each a dict of step, action and
@@ -91,14 +210,14 @@ class StoredAnalysis:
         return self.model_name != "deterministic-fallback"
 
     @property
-    def cited_sources(self) -> list[dict[str, Any]]:
+    def cited_sources(self) -> list[EvidenceSource]:
         """The sources a reason actually referred to.
 
         Rule R4 requires every claim to trace to something retrieved. An
         uncited source was fetched and not used, which is worth keeping in
         the record but is not evidence for anything on screen.
         """
-        return [source for source in self.evidence_sources if source.get("cited")]
+        return [source for source in self.evidence_sources if source.cited]
 
 
 @dataclass(frozen=True)
@@ -188,13 +307,9 @@ class RankedCandidate:
         return status.value.replace("_", " ").capitalize()
 
     @property
-    def top_criteria(self) -> list[tuple[str, int]]:
-        """The three heaviest criteria and their scores, for a compact summary."""
-        ranked = sorted(self.score.criterion_scores, key=lambda item: -item.weight)
-        return [
-            (item.criterion.value.replace("_", " ").title(), item.score)
-            for item in ranked[:3]
-        ]
+    def top_criteria(self) -> list[CriterionSummary]:
+        """The three heaviest criteria, for the compact summary on the card."""
+        return _heaviest_criteria(self.score, TOP_CRITERIA_ON_A_CANDIDATE)
 
 
 @dataclass(frozen=True)
@@ -240,6 +355,17 @@ class RankedAnimal:
     def analysis_is_pending(self) -> bool:
         """Whether the agent has not yet written an explanation."""
         return self.analysis is None
+
+    @property
+    def top_criteria(self) -> list[CriterionSummary]:
+        """The four heaviest criteria, for the compact summary on the card.
+
+        Exposed here rather than left to the template, which used to slice
+        `score.criterion_scores[:4]` itself - a view deciding which part of
+        the model matters (rule R2), and one that only worked because the
+        weights happen to be declared heaviest first.
+        """
+        return _heaviest_criteria(self.score, TOP_CRITERIA_ON_AN_ANIMAL_CARD)
 
 
 # --------------------------------------------------------------------------
@@ -358,11 +484,15 @@ class RankApplicantsHandler(QueryHandler[RankingResult | None]):
         )
         queued_labels = _queued_labels_for_animal(session, query.animal_id)
 
+        applicant_ids = [application.adopter_profile_id for application in applications]
+        profiles = _profiles_by_id(session, applicant_ids)
+        identities = _identities_by_profile(session, applicant_ids)
+
         candidates: list[RankedCandidate] = []
         excluded = 0
 
         for application in applications:
-            profile = session.get(AdopterProfile, application.adopter_profile_id)
+            profile = profiles.get(application.adopter_profile_id)
             if profile is None:
                 continue
 
@@ -376,10 +506,10 @@ class RankApplicantsHandler(QueryHandler[RankingResult | None]):
 
             candidates.append(
                 _build_candidate(
-                    session,
                     profile,
                     score,
                     analyses.get(profile.adopter_profile_id),
+                    identities.get(profile.adopter_profile_id, UNKNOWN_ADOPTER),
                     application,
                     queued_labels.get(profile.adopter_profile_id),
                 )
@@ -433,10 +563,15 @@ class FindMoreAdoptersHandler(QueryHandler[RankingResult | None]):
         )
         queued_labels = _queued_labels_for_animal(session, query.animal_id)
 
+        identities = _identities_by_profile(
+            session, [profile.adopter_profile_id for profile in eligible_profiles]
+        )
+
         candidates: list[RankedCandidate] = []
         excluded: list[ExcludedCandidate] = []
 
         for profile in eligible_profiles:
+            identity = identities.get(profile.adopter_profile_id, UNKNOWN_ADOPTER)
             score = calculate_match_score(
                 _adopter_facts(profile), animal_facts, MatchDirection.ANIMAL_TO_ADOPTER
             )
@@ -446,15 +581,15 @@ class FindMoreAdoptersHandler(QueryHandler[RankingResult | None]):
                 # disqualified suggestion would be noise in the ranking. The
                 # reason is still recorded, so the screen can show what was
                 # ruled out and why rather than only a count.
-                excluded.append(_to_excluded_candidate(session, profile, score))
+                excluded.append(_to_excluded_candidate(profile, score, identity))
                 continue
 
             candidates.append(
                 _build_candidate(
-                    session,
                     profile,
                     score,
                     analyses.get(profile.adopter_profile_id),
+                    identity,
                     None,
                     queued_labels.get(profile.adopter_profile_id),
                 )
@@ -575,14 +710,11 @@ class MatchAnalysisDetail:
     direction: str
     score: int
     is_disqualified: bool
-    criterion_scores: list[dict[str, object]]
+    criterion_scores: list[StoredCriterion]
     reasons: list[str]
     concerns: list[str]
     missing_information: list[str]
-    # Passed through as the agent stored them. Not `dict[str, str]`: each
-    # source carries a `cited` boolean saying whether a reason actually
-    # referred to it, and the template shows that marker (rule R4).
-    evidence_sources: list[dict[str, Any]]
+    evidence_sources: list[EvidenceSource]
     used_web_search: bool
     model_name: str
     generated_at: str
@@ -591,14 +723,14 @@ class MatchAnalysisDetail:
     reasoning_trace: list[dict[str, Any]] = field(default_factory=list)
 
     @property
-    def cited_sources(self) -> list[dict[str, Any]]:
+    def cited_sources(self) -> list[EvidenceSource]:
         """The sources a reason actually referred to.
 
         Matches `StoredAnalysis.cited_sources`: an uncited source was
         fetched and not used, which belongs in the record but is not
         evidence for anything on screen.
         """
-        return [source for source in self.evidence_sources if source.get("cited")]
+        return [source for source in self.evidence_sources if source.cited]
 
 
 class GetMatchAnalysisHandler(QueryHandler[MatchAnalysisDetail | None]):
@@ -624,11 +756,11 @@ class GetMatchAnalysisHandler(QueryHandler[MatchAnalysisDetail | None]):
             direction=analysis.direction,
             score=analysis.score,
             is_disqualified=bool(analysis.is_disqualified),
-            criterion_scores=_decode_list(analysis.criterion_scores),
+            criterion_scores=_to_stored_criteria(_decode_list(analysis.criterion_scores)),
             reasons=_decode_list(analysis.reasons),
             concerns=_decode_list(analysis.concerns),
             missing_information=_decode_list(analysis.missing_information),
-            evidence_sources=_decode_list(analysis.evidence_sources),
+            evidence_sources=_to_evidence_sources(_decode_list(analysis.evidence_sources)),
             used_web_search=bool(analysis.used_web_search),
             model_name=analysis.model_name,
             generated_at=to_display_moment(analysis.generated_at).display,
@@ -693,13 +825,12 @@ def _score_available_animals(
 
 
 def _to_excluded_candidate(
-    session: Session, profile: AdopterProfile, score: MatchScore
+    profile: AdopterProfile, score: MatchScore, identity: AdopterIdentity
 ) -> ExcludedCandidate:
     """Record one adopter discovery ruled out, with the rule that ruled them out."""
-    user = session.get(User, profile.user_id)
     return ExcludedCandidate(
         adopter_profile_id=profile.adopter_profile_id,
-        full_name=user.full_name if user else "Unknown",
+        full_name=identity.full_name,
         disqualification_reason=(
             score.disqualification_reason or "A hard eligibility rule was not met."
         ),
@@ -768,20 +899,94 @@ _OUTSTANDING_JOB_STATUSES = (
 )
 
 
+@dataclass(frozen=True)
+class AdopterIdentity:
+    """The name and email one ranked row displays.
+
+    Fetched for the whole screen in one query rather than per candidate. The
+    row lookups used to be `session.get(User, ...)` inside the loop, which
+    cost 25 SELECTs to rank 20 adopters against a shared cloud database, and
+    the discovery screen paid for every candidate before slicing the list
+    down to ten.
+    """
+
+    full_name: str
+    email: str
+
+
+# What a ranked row shows when the account behind a profile has vanished. The
+# profile is still scorable, so dropping the candidate would hide a real
+# applicant over a missing display name.
+UNKNOWN_ADOPTER = AdopterIdentity(full_name="Unknown", email="")
+
+
+def _identities_by_profile(
+    session: Session, adopter_profile_ids: Sequence[str]
+) -> dict[str, AdopterIdentity]:
+    """Fetch every candidate's name and email in one query.
+
+    Args:
+        session: A read-only session.
+        adopter_profile_ids: Whose names are needed.
+
+    Returns:
+        The identity of each profile whose account still exists, keyed by
+        adopter profile identifier.
+    """
+    if not adopter_profile_ids:
+        return {}
+
+    rows = session.execute(
+        select(AdopterProfile.adopter_profile_id, User.full_name, User.email)
+        .join(User, User.user_id == AdopterProfile.user_id)
+        .where(AdopterProfile.adopter_profile_id.in_(adopter_profile_ids))
+    ).tuples().all()
+    return {
+        adopter_profile_id: AdopterIdentity(full_name=full_name, email=email)
+        for adopter_profile_id, full_name, email in rows
+    }
+
+
+def _profiles_by_id(
+    session: Session, adopter_profile_ids: Sequence[str]
+) -> dict[str, AdopterProfile]:
+    """Fetch several adopter profiles in one query, keyed by identifier.
+
+    Args:
+        session: A read-only session.
+        adopter_profile_ids: Which profiles to load.
+
+    Returns:
+        The profiles that exist, keyed by identifier.
+    """
+    if not adopter_profile_ids:
+        return {}
+
+    rows = (
+        session.execute(
+            select(AdopterProfile).where(
+                AdopterProfile.adopter_profile_id.in_(adopter_profile_ids)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return {row.adopter_profile_id: row for row in rows}
+
+
 def _build_candidate(
-    session: Session,
     profile: AdopterProfile,
     score: MatchScore,
     analysis: StoredAnalysis | None,
+    identity: AdopterIdentity,
     application: AdoptionApplication | None = None,
     queued_at_label: str | None = None,
 ) -> RankedCandidate:
     """Assemble one ranked candidate row."""
-    user = session.get(User, profile.user_id)
     return RankedCandidate(
         adopter_profile_id=profile.adopter_profile_id,
-        full_name=user.full_name if user else "Unknown",
-        email=user.email if user else "",
+        full_name=identity.full_name,
+        email=identity.email,
         city=profile.city,
         home_type=profile.home_type,
         experience_level=profile.experience_level,
@@ -869,7 +1074,7 @@ def _to_stored_analysis(row: MatchAnalysis) -> StoredAnalysis:
         reasons=_decode_list(row.reasons),
         concerns=_decode_list(row.concerns),
         missing_information=_decode_list(row.missing_information),
-        evidence_sources=_decode_list(row.evidence_sources),
+        evidence_sources=_to_evidence_sources(_decode_list(row.evidence_sources)),
         used_web_search=bool(row.used_web_search),
         model_name=row.model_name,
         reasoning_trace=_decode_list(row.reasoning_trace),
@@ -892,109 +1097,16 @@ def _decode_list(raw_json: str | None) -> list[Any]:
 
 
 def _adopter_facts(profile: AdopterProfile) -> AdopterFacts:
-    """Convert a stored profile into the domain value object."""
-    return AdopterFacts(
-        home_type=_enum_or(HomeType, profile.home_type, HomeType.APARTMENT),
-        has_yard=bool(profile.has_yard),
-        household_has_children=bool(profile.household_has_children),
-        youngest_child_age=profile.youngest_child_age,
-        has_other_animals=bool(profile.has_other_animals),
-        experience_level=_enum_or(
-            ExperienceLevel, profile.experience_level, ExperienceLevel.NONE
-        ),
-        activity_level=_enum_or(
-            ActivityLevel, profile.activity_level, ActivityLevel.MODERATE
-        ),
-        daily_hours_available=float(profile.daily_hours_available or 0),
-        city=profile.city or "",
-        preferred_species=_stored_species(profile.preferred_species),
-        preferred_age_range=_stored_enum(AgePreference, profile.preferred_age_range),
-        preferred_size=_stored_enum(AnimalSize, profile.preferred_size),
-        open_to_proactive_suggestions=bool(profile.open_to_proactive_suggestions),
-        is_complete=bool(profile.is_complete),
-    )
+    """Convert a stored profile into the domain value object (spec section 8).
 
-
-def _stored_enum(enum_class: type[EnumT], raw_value: str | None) -> EnumT | None:
-    """Read one optional stored preference, dropping anything unrecognised.
-
-    Same reasoning as `_stored_species`: a value the enum no longer
-    defines is unknown, not a preference, and inventing one from it would
-    quietly narrow somebody's matches.
+    Thin by design. The conversion rules live in `app.domain.facts`, which the
+    agent and the seed scripts call too: three private copies of this mapping
+    once drifted far enough that the agent recomputed 95 where this tier had
+    shown 91, because two of them never read the adopter's age preference.
     """
-    if not raw_value:
-        return None
-    try:
-        return enum_class(raw_value.strip())
-    except ValueError:
-        return None
-
-
-def _stored_species(raw_column: str | None) -> frozenset[Species]:
-    """Read a stored species preference list, dropping anything unrecognised.
-
-    An unrecognised value must not become `Species.OTHER`. OTHER is a real
-    preference, not a marker for "unknown", and species preference carries
-    the heaviest weight when ranking animals for an adopter - so a typo or
-    a retired value in this column would have recorded the adopter as
-    actively wanting animals of no listed species, and scored every such
-    animal 100 on that criterion. Dropping the value records what is
-    actually known about it, which is nothing.
-
-    Args:
-        raw_column: The comma-separated column, which may be null.
-
-    Returns:
-        The species that parsed. An unparseable one is left out.
-    """
-    parsed: list[Species] = []
-    for value in (raw_column or "").split(","):
-        if not value.strip():
-            continue
-        try:
-            parsed.append(Species(value.strip()))
-        except ValueError:
-            continue
-    return frozenset(parsed)
+    return adopter_facts_from_row(profile)
 
 
 def _animal_facts(animal: Animal) -> AnimalFacts:
-    """Convert a stored animal into the domain value object."""
-    return AnimalFacts(
-        species=_enum_or(Species, animal.species, Species.OTHER),
-        age_years=float(animal.age_years or 0),
-        size=_enum_or(AnimalSize, animal.size, AnimalSize.MEDIUM),
-        temperament=_enum_or(Temperament, animal.temperament, Temperament.BALANCED),
-        activity_level=_enum_or(
-            ActivityLevel, animal.activity_level, ActivityLevel.MODERATE
-        ),
-        good_with_children=bool(animal.good_with_children),
-        good_with_other_animals=bool(animal.good_with_other_animals),
-        has_special_needs=bool(animal.has_special_needs),
-        required_space=_enum_or(AnimalSize, animal.required_space, AnimalSize.MEDIUM),
-        city=animal.city or "",
-    )
-
-
-EnumT = TypeVar("EnumT", bound=Enum)
-
-
-def _enum_or(enum_class: type[EnumT], raw_value: object, default: EnumT) -> EnumT:
-    """Convert a stored string to an enum member, falling back on a bad value.
-
-    Generic over the enum so a decoded `home_type` is typed as a `HomeType`
-    and not as a bare object - which is what lets the type checker verify
-    that the fact objects below are assembled from the right enums.
-
-    Args:
-        enum_class: The enum the stored string should name.
-        raw_value: The stored value.
-        default: Used when the stored value names no member.
-
-    Returns:
-        The matching member, or the default.
-    """
-    try:
-        return enum_class(str(raw_value))
-    except ValueError:
-        return default
+    """Convert a stored animal into the domain value object (spec section 8)."""
+    return animal_facts_from_row(animal)

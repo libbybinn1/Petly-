@@ -24,9 +24,11 @@ Usage:
 from __future__ import annotations
 
 import ast
+import atexit
 import builtins
 import dataclasses
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -343,7 +345,7 @@ def _return_annotation_is_allowed(annotation: ast.expr | None) -> bool:
 def command_return_violations(label: str, source: str) -> list[Violation]:
     """Report a command handler annotated to return read data (CLAUDE.md R2).
 
-    A command returns an identifier or nothing; if a screen needs data after
+    A command returns an identifier, a count or nothing; if a screen needs data after
     a write, the controller dispatches a query next.
     """
     tree = parse_source(label, source)
@@ -686,7 +688,12 @@ def application_under_verification() -> Flask:
     from app.infrastructure.database import Base
     from sqlalchemy import create_engine
 
+    # Removed when the process exits. `mkdtemp` does not clean up after
+    # itself, so every run used to leave a directory holding a SQLite file
+    # and an uploads folder behind in the system temporary directory.
     scratch_directory = Path(tempfile.mkdtemp(prefix="petmatch-verify-"))
+    atexit.register(shutil.rmtree, scratch_directory, ignore_errors=True)
+
     database_url = f"sqlite:///{(scratch_directory / 'verify.db').as_posix()}"
     os.environ["LOCAL_DATABASE_URL"] = database_url
 
@@ -1090,7 +1097,7 @@ def check_agent_process() -> tuple[bool, str]:
         problems.append("agent_service/loop.py has no loop around the model turns")
     if not _model_is_offered_tools():
         problems.append("agent_service/llm_client.py never passes tools= to the model")
-    if "def build_tool_manifest" not in _read("agent_service/loop.py"):
+    if not _defines_the_tool_manifest_builder():
         problems.append("no tool manifest builder")
 
     return _verdict(
@@ -1098,6 +1105,19 @@ def check_agent_process() -> tuple[bool, str]:
         "runs as `python -m agent_service`; imports no module above "
         "app.domain/config/infrastructure/eventstore; loop.py drives the "
         "model from a while loop and llm_client.py offers it a tool manifest",
+    )
+
+
+def _defines_the_tool_manifest_builder() -> bool:
+    """Whether `agent_service/loop.py` really defines `build_tool_manifest`.
+
+    Parsed rather than grepped: the substring this used to look for also
+    appears in a comment, in a docstring and in the middle of a longer name,
+    so the check could pass on a file that defines nothing.
+    """
+    tree = parse_source("agent_service/loop.py", _read("agent_service/loop.py"))
+    return any(
+        function.name == "build_tool_manifest" for function in functions_in(tree)
     )
 
 
@@ -1542,15 +1562,104 @@ def _compares_status_code_to_client_error(node: ast.AST) -> bool:
 def _is_negative_test(function: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     """Whether a test proves a failure rather than a happy path.
 
-    Either it expects an exception or it asserts a 4xx status code; merely
-    reading `response.status_code` for a 200 does not count.
+    Three shapes count, and the third was missing: expecting an exception,
+    asserting a 4xx status code, and asserting that a domain validator
+    refused its input. The domain layer reports a rejection by returning
+    `is_valid is False` or a populated `errors` map rather than by raising,
+    so every one of those tests - which is most of what proves the
+    validation rules - was being counted as a happy path.
+
+    Merely reading `response.status_code` for a 200 still does not count.
     """
     for node in ast.walk(function):
         if isinstance(node, ast.Call) and dotted_name(node.func) == "pytest.raises":
             return True
         if _compares_status_code_to_client_error(node):
             return True
+        if _asserts_a_rejected_submission(node):
+            return True
+        if _asserts_an_absence(node):
+            return True
     return False
+
+
+# Attribute names a domain validator exposes to say it refused something.
+REJECTION_ATTRIBUTES = ("is_valid", "errors", "problems")
+
+
+def _asserts_a_rejected_submission(node: ast.AST) -> bool:
+    """Whether a node asserts that a validator refused its input.
+
+    Matches `result.is_valid is False`, `assert not result.is_valid`, and a
+    truthiness assertion on `errors` or `problems` - which is how the
+    validators in `app/domain` report a rejection.
+    """
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        return _names_a_rejection_attribute(node.operand)
+
+    if isinstance(node, ast.Compare):
+        falsy = any(
+            isinstance(comparator, ast.Constant) and comparator.value is False
+            for comparator in node.comparators
+        )
+        return falsy and _names_a_rejection_attribute(node.left)
+
+    return isinstance(node, ast.Assert) and _names_a_rejection_attribute(node.test)
+
+
+def _names_a_rejection_attribute(node: ast.expr) -> bool:
+    """Whether an expression reads one of the rejection attributes."""
+    if isinstance(node, ast.Attribute):
+        return node.attr in REJECTION_ATTRIBUTES
+    if isinstance(node, ast.Name):
+        return node.id in REJECTION_ATTRIBUTES
+    if isinstance(node, ast.Call):
+        return any(_names_a_rejection_attribute(argument) for argument in node.args)
+    return False
+
+
+# Values an assertion compares against to say "the system did not do this".
+EMPTY_RESULTS: tuple[object, ...] = (None, False, 0, "", [], (), {}, set())
+
+
+def _asserts_an_absence(node: ast.AST) -> bool:
+    """Whether an assertion proves the system did *not* do something.
+
+    The third shape a refusal takes in this codebase, after an exception and
+    a 4xx: the thing is simply not there. A page that offers no link, a
+    parser that returns None for a value it does not recognise, a filter
+    that excludes a record, a queue that stays empty. Counting only
+    exceptions and status codes classified most of these as happy paths,
+    which made the per-module requirement below unsatisfiable for a module
+    whose whole subject is what the system declines to do.
+
+    Args:
+        node: Any node inside a test function.
+
+    Returns:
+        True when the node is an `assert` proving an absence.
+    """
+    if not isinstance(node, ast.Assert):
+        return False
+
+    test = node.test
+    if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+        return True
+
+    if not isinstance(test, ast.Compare):
+        return False
+
+    if any(isinstance(operator, ast.NotIn) for operator in test.ops):
+        return True
+
+    return any(
+        isinstance(comparator, ast.Constant) and comparator.value in EMPTY_RESULTS
+        for comparator in test.comparators
+    ) or any(
+        isinstance(comparator, ast.List | ast.Tuple | ast.Dict | ast.Set)
+        and not getattr(comparator, "elts", getattr(comparator, "keys", []))
+        for comparator in test.comparators
+    )
 
 
 def check_test_suites() -> tuple[bool, str]:
@@ -1572,6 +1681,10 @@ def check_test_suites() -> tuple[bool, str]:
     ]
     if negative < MINIMUM_NEGATIVE_TESTS:
         problems.append(f"{negative} negative tests, fewer than {MINIMUM_NEGATIVE_TESTS}")
+    problems.extend(
+        f"{module} proves no failure scenario"
+        for module in _feature_modules_without_a_negative_test()
+    )
 
     summary = ", ".join(f"{suite} {len(functions)}" for suite, functions in counts.items())
     total = sum(len(functions) for functions in counts.values())
@@ -1581,61 +1694,117 @@ def check_test_suites() -> tuple[bool, str]:
     )
 
 
+def _feature_modules_without_a_negative_test() -> list[str]:
+    """Feature test modules that prove no failure scenario.
+
+    Blueprint 17 asks for failure scenarios per feature, not in total: a
+    project-wide count can be satisfied entirely by one thorough module
+    while a whole feature is tested only on its happy path.
+
+    Returns:
+        The paths of every `test_feature_*.py` module with no negative test,
+        sorted.
+    """
+    lacking: list[str] = []
+    for suite in TEST_SUITES:
+        for module in sorted(Path("tests", suite).glob("test_feature_*.py")):
+            tree = parse_source(str(module), module.read_text(encoding="utf-8"))
+            functions = [
+                function
+                for function in functions_in(tree)
+                if function.name.startswith("test_")
+            ]
+            if functions and not any(_is_negative_test(one) for one in functions):
+                lacking.append(module.as_posix())
+    return sorted(lacking)
+
+
+# One pairing, pinned. Written as records rather than as fact objects so the
+# check exercises `app.domain.facts` - the conversion in front of the scorer -
+# as well as the arithmetic behind it. A rabbit adopter in the same city who
+# stated no age preference: every criterion scores full marks except the
+# living environment (90, an apartment exactly fits a small animal) and the
+# age preference (the neutral 60 an unstated preference earns).
+GOLDEN_ADOPTER_RECORD: dict[str, object] = {
+    "home_type": "APARTMENT",
+    "has_yard": False,
+    "household_has_children": False,
+    "youngest_child_age": None,
+    "has_other_animals": False,
+    "experience_level": "SOME",
+    "activity_level": "LOW",
+    "daily_hours_available": 3.0,
+    "city": "Haifa",
+    "preferred_species": "RABBIT",
+}
+GOLDEN_ANIMAL_RECORD: dict[str, object] = {
+    "species": "RABBIT",
+    "age_years": 2.0,
+    "size": "SMALL",
+    "temperament": "CALM",
+    "activity_level": "LOW",
+    "good_with_children": True,
+    "good_with_other_animals": True,
+    "has_special_needs": False,
+    "required_space": "SMALL",
+    "city": "Haifa",
+}
+GOLDEN_SCORE = 95
+GOLDEN_CRITERION_ORDER: tuple[str, ...] = (
+    "species_preference",
+    "living_environment",
+    "daily_availability",
+    "size_and_space",
+    "temperament_compatibility",
+    "age_preference",
+    "experience_level",
+    "children_compatibility",
+    "other_animals_compatibility",
+    "special_care_capacity",
+    "location",
+)
+
+
 def check_deterministic_scoring() -> tuple[bool, str]:
     """Spec 8 and CLAUDE.md R3: the scorer is deterministic and model-free.
 
     The matching module may import stdlib and other domain modules only, and
     identical input must score identically both times.
     """
-    from app.domain.enums import (
-        ActivityLevel,
-        AnimalSize,
-        ExperienceLevel,
-        HomeType,
-        MatchDirection,
-        Species,
-        Temperament,
-    )
-    from app.domain.matching import AdopterFacts, AnimalFacts, calculate_match_score
+    from app.domain.enums import MatchDirection
+    from app.domain.facts import adopter_facts_from, animal_facts_from
+    from app.domain.matching import calculate_match_score
 
     problems = [
         str(violation)
         for violation in apply_rule(domain_boundary_violations, "app/domain/matching.py")
     ]
 
-    adopter = AdopterFacts(
-        home_type=HomeType.APARTMENT,
-        has_yard=False,
-        household_has_children=False,
-        youngest_child_age=None,
-        has_other_animals=False,
-        experience_level=ExperienceLevel.SOME,
-        activity_level=ActivityLevel.LOW,
-        daily_hours_available=3.0,
-        city="Haifa",
-        preferred_species=frozenset({Species.RABBIT}),
-    )
-    animal = AnimalFacts(
-        species=Species.RABBIT,
-        age_years=2.0,
-        size=AnimalSize.SMALL,
-        temperament=Temperament.CALM,
-        activity_level=ActivityLevel.LOW,
-        good_with_children=True,
-        good_with_other_animals=True,
-        has_special_needs=False,
-        required_space=AnimalSize.SMALL,
-        city="Haifa",
-    )
+    adopter = adopter_facts_from(GOLDEN_ADOPTER_RECORD)
+    animal = animal_facts_from(GOLDEN_ANIMAL_RECORD)
     first = calculate_match_score(adopter, animal, MatchDirection.ADOPTER_TO_ANIMAL)
     second = calculate_match_score(adopter, animal, MatchDirection.ADOPTER_TO_ANIMAL)
+
     if first != second:
         problems.append(f"the same input scored {first.score} then {second.score}")
+    if first.score != GOLDEN_SCORE:
+        problems.append(
+            f"the pinned pairing scored {first.score}, not {GOLDEN_SCORE}; the "
+            f"weights or a criterion changed"
+        )
+
+    criteria = [item.criterion.value for item in first.criterion_scores]
+    if criteria != list(GOLDEN_CRITERION_ORDER):
+        problems.append(
+            f"the criterion breakdown came back as {criteria}, not in the "
+            f"pinned weight order"
+        )
 
     return _verdict(
         problems,
-        f"app/domain/matching.py imports only stdlib and app.domain; the same "
-        f"input scored {first.score} twice with no model involved",
+        f"app/domain/matching.py imports only stdlib and app.domain; the "
+        f"pinned pairing scored {GOLDEN_SCORE} twice, over "
+        f"{len(criteria)} criteria in the declared order, with no model involved",
     )
 
 

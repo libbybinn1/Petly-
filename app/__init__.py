@@ -19,14 +19,10 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.config import Configuration, load_configuration
 from app.cqrs.base import MessageBus
 from app.cqrs.queries.personal_queries import CountUnreadNotificationsQuery
+from app.infrastructure.clock import aware_utc_now
 from app.infrastructure.database import create_database_engine, create_session_factory
 from app.infrastructure.models import AdopterProfile, User
 from app.security.authorization import AuthenticatedUser
-
-login_manager = LoginManager()
-
-
-csrf_protection = CSRFProtect()
 
 
 def _harden_the_session_cookie(application: Flask) -> None:
@@ -68,7 +64,14 @@ def create_app(configuration: Configuration | None = None) -> Flask:
     application.config["SECRET_KEY"] = settings.secret_key
     application.config["PETMATCH"] = settings
     _harden_the_session_cookie(application)
-    csrf_protection.init_app(application)
+
+    # Both extensions are built per application rather than held as module
+    # singletons. `init_app` on a shared instance rebinds it to whichever
+    # application called last, and the user loader below closes over *this*
+    # call's session factory - so a second application (the CSRF-enabled one
+    # in the API suite, or a second instance in a test session) would
+    # silently authenticate its visitors against the first one's database.
+    CSRFProtect(application)
 
     engine = create_database_engine(settings)
     session_factory = create_session_factory(engine)
@@ -78,6 +81,7 @@ def create_app(configuration: Configuration | None = None) -> Flask:
     _register_handlers(bus, settings)
     application.config["BUS"] = bus
 
+    login_manager = LoginManager()
     login_manager.init_app(application)
     login_manager.login_view = "auth.login"
     login_manager.login_message = "Please sign in to continue."
@@ -354,7 +358,7 @@ def _register_expiry_sweep(application: Flask, bus: MessageBus) -> None:
         if request.endpoint == "static":
             return
 
-        now = datetime.now(UTC)
+        now = aware_utc_now()
         if now - state["last_run"] < EXPIRY_SWEEP_INTERVAL:
             return
 

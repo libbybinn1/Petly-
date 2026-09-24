@@ -23,13 +23,16 @@ from app.domain.enums import (
 )
 from app.domain.matching import (
     ADOPTER_TO_ANIMAL_WEIGHTS,
+    AGE_DISTANCE_SCORES,
     ANIMAL_TO_ADOPTER_WEIGHTS,
+    FAR_OUTSIDE_AGE_BAND_SCORE,
     NEUTRAL_SCORE,
     PERFECT_SCORE,
     AdopterFacts,
     AgePreference,
     AnimalFacts,
     Criterion,
+    _score_from_age_distance,
     calculate_match_score,
     score_age_preference,
 )
@@ -258,3 +261,55 @@ class TestTheExplanation:
         )
 
         assert "month" in result.explanation
+
+
+class TestTheDistanceBandBoundaries:
+    """`AGE_DISTANCE_SCORES` grades the miss; each band edge is a decision.
+
+    An animal a year older than the adopter asked for and one a decade older
+    are both outside the band, and scoring them the same would make the
+    criterion a cliff edge. The thresholds are inclusive at the top, which is
+    only visible at the boundary.
+    """
+
+    @pytest.mark.parametrize(
+        ("years_outside", "expected"),
+        [
+            (0.5, 75),
+            (1.0, 75),
+            (1.01, 55),
+            (3.0, 55),
+            (3.01, 35),
+            (6.0, 35),
+            (6.01, FAR_OUTSIDE_AGE_BAND_SCORE),
+            (40.0, FAR_OUTSIDE_AGE_BAND_SCORE),
+        ],
+    )
+    def test_each_band_edge_falls_on_the_stated_side(
+        self, years_outside: float, expected: int
+    ) -> None:
+        """Proves every threshold in the table is inclusive at its upper bound."""
+        assert _score_from_age_distance(years_outside) == expected
+
+    def test_the_table_is_ordered_nearest_first(self) -> None:
+        """Proves the lookup can stop at the first band a distance fits.
+
+        `_score_from_age_distance` returns on the first match, so an
+        unordered table would silently score a near miss as a far one.
+        """
+        limits = [limit for limit, _ in AGE_DISTANCE_SCORES]
+        scores = [score for _, score in AGE_DISTANCE_SCORES]
+
+        assert limits == sorted(limits)
+        assert scores == sorted(scores, reverse=True)
+        assert scores[-1] > FAR_OUTSIDE_AGE_BAND_SCORE
+
+    def test_a_miss_never_scores_as_well_as_a_hit(self) -> None:
+        """Proves the graded miss is still a miss.
+
+        Negative half of the pair: the point of grading is to rank misses
+        against each other, not to make one indistinguishable from an animal
+        inside the requested band.
+        """
+        for _, score in AGE_DISTANCE_SCORES:
+            assert score < PERFECT_SCORE

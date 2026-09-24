@@ -78,7 +78,7 @@
         <article class="card card--padded attention attention--{{ item.severity }}">
           <div class="attention__body">
             <h3 style="font-size:1rem; margin-bottom:4px">{{ item.headline }}</h3>
-            <p style="margin:0; color:var(--text-muted); font-size:0.9rem">{{ item.detail }}</p>
+            <p class="u-flush u-muted u-small">{{ item.detail }}</p>
           </div>
           <a class="btn btn--secondary btn--small" href="{{ item.action_url }}">{{ item.action_label }}</a>
         </article>
@@ -86,7 +86,7 @@
       </div>
     {% else %}
       <div class="card card--padded" style="text-align:center; padding: var(--space-6)">
-        <div style="font-size:2rem; margin-bottom: var(--space-2)">✅</div>
+        <div class="empty__icon" aria-hidden="true">✅</div>
         <h3 style="font-size:1rem">Nothing needs attention</h3>
         <p class="pending" style="margin:0">
           No stale applications, no expired invitations, and every available animal

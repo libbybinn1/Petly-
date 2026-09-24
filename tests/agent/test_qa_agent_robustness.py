@@ -42,6 +42,7 @@ from app.domain.enums import (
 )
 from app.domain.matching import MatchScore
 from app.eventstore.store import EventStore
+from app.infrastructure.clock import utc_now
 from app.infrastructure.database import Base
 from app.infrastructure.models import AnalysisJob, MatchAnalysis, new_identifier
 from sqlalchemy import create_engine, select
@@ -496,7 +497,13 @@ class TestJobFailureHandling:
         worker.run_once()
 
         assert worker.statistics.skipped == 1
-        assert job_status(queue, job_id) == AnalysisJobStatus.PENDING.value
+        # Parked, not requeued. A job missing half its pairing is as invalid
+        # on the third attempt as on the first, and routing it through the
+        # ordinary failure path sent it back to PENDING to be claimed,
+        # rejected and requeued twice more - counting a `failed` each time on
+        # top of the `skipped`.
+        assert job_status(queue, job_id) == AnalysisJobStatus.FAILED.value
+        assert worker.statistics.failed == 0
 
     def test_an_empty_queue_reports_nothing_to_do(
         self, queue: sessionmaker[Session]
@@ -528,16 +535,18 @@ class TestJobClaiming:
     ) -> None:
         """Proves a job is claimed by exactly one worker even when claims interleave.
 
-        The interleaving is forced through the real code path: `_now()` is
-        called inside the claim transaction, between the SELECT and the COMMIT,
-        so patching it is a way to run the second worker's claim inside that
-        window rather than simulating it.
+        The interleaving is forced through the real code path:
+        `utc_now()` is called inside the claim transaction, between the
+        SELECT and the COMMIT, so patching it is a way to run the second
+        worker's claim inside that window rather than simulating it. It is
+        patched where the worker looks it up - the module now imports it from
+        `app.infrastructure.clock` rather than declaring its own.
         """
         enqueue(queue)
         first = AgentWorker(make_configuration(), queue, StubAgent(make_outcome()))
         second = AgentWorker(make_configuration(), queue, StubAgent(make_outcome()))
         claimed_by_second: list[AnalysisJob | None] = []
-        real_now = _now
+        real_now = utc_now
 
         def interleaving_now() -> datetime:
             """Let the second worker claim while the first has not committed."""
@@ -545,7 +554,7 @@ class TestJobClaiming:
             claimed_by_second.append(second._claim_next_job())
             return real_now()
 
-        monkeypatch.setattr("agent_service.worker._now", interleaving_now)
+        monkeypatch.setattr("agent_service.worker.utc_now", interleaving_now)
         claimed_by_first = first._claim_next_job()
 
         both = [job for job in (claimed_by_first, *claimed_by_second) if job is not None]

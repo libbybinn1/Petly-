@@ -19,7 +19,7 @@ from flask import Blueprint, abort, flash, redirect, render_template, request, u
 from flask_login import current_user
 from werkzeug.wrappers import Response
 
-from app.controllers.helpers import ViewResult, get_bus
+from app.controllers.helpers import ViewResult, get_bus, is_safe_redirect_target
 from app.cqrs.commands.application_commands import (
     NotYourRecordError,
     RecordNotFoundError,
@@ -254,7 +254,7 @@ def mark_notification_read(notification_id: str) -> Response:
         abort(403)
 
     target = request.form.get("target_url")
-    if target and target.startswith("/") and not target.startswith("//"):
+    if target and is_safe_redirect_target(target):
         return redirect(target)
     return redirect(url_for("personal.my_notifications"))
 

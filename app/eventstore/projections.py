@@ -383,7 +383,9 @@ def _streams_by_aggregate(
 
     One pass over the log rather than a query per aggregate: this runs
     against a shared free-tier database, where several hundred round trips
-    would be the slowest thing in the test suite.
+    would be the slowest thing in the test suite. The two kinds this module
+    can rebuild are selected in SQL rather than filtered here, so the animal
+    and profile events - which outnumber them - are never fetched at all.
 
     Args:
         session: A session to read the log through.
@@ -392,9 +394,7 @@ def _streams_by_aggregate(
         Events per aggregate, each list in sequence order.
     """
     streams: dict[tuple[AggregateType, str], list[RecordedEvent]] = {}
-    for event in EventStore(session).read_all():
-        if event.aggregate_type not in REBUILDABLE_AGGREGATES:
-            continue
+    for event in EventStore(session).read_all(aggregate_types=REBUILDABLE_AGGREGATES):
         streams.setdefault((event.aggregate_type, event.aggregate_id), []).append(event)
 
     for stream in streams.values():

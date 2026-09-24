@@ -226,6 +226,31 @@ class TestToolSelectionIsTheModels:
         assert len([call for call in mcp_client.calls if "get_animal_profile" in call]) == 2
         assert MCP_ANIMAL_TOOL in actions_in(outcome.reasoning_trace)
 
+    def test_a_record_lookup_reads_the_named_argument_not_the_first_one(self) -> None:
+        """Proves an extra argument cannot be fetched as if it were the identifier.
+
+        The loop took `next(iter(arguments.values()))`, which is whichever
+        key the model happened to put first. A model that added a reason
+        alongside the identifier had the reason looked up, and the tool
+        answered that no animal existed with that identifier - so the agent
+        lost the record it had asked for and blamed the data.
+        """
+        mcp_client = ManifestAwareMcpClient()
+        model = StubLanguageModel(
+            scripted_turns=[
+                ModelTurn.calling(
+                    MCP_ANIMAL_TOOL,
+                    {"reason": "checking the yard", "animal_id": "animal-1"},
+                ),
+                ModelTurn.answering({"reasons": ["A reason."]}),
+            ]
+        )
+
+        outcome = run(build_agent(language_model=model, mcp_client=mcp_client))
+
+        assert any("animal-1" in step.detail for step in outcome.reasoning_trace)
+        assert not any("checking the yard" in step.detail for step in outcome.reasoning_trace)
+
     def test_an_invented_tool_name_is_reported_back_rather_than_raised(self) -> None:
         """Proves a hallucinated tool leaves the loop able to re-plan.
 
@@ -373,6 +398,13 @@ class TestTheWebSearchGateIsLoadBearing:
 
         The audit found the gate was always told no search had run, so rule 3
         of spec 13 could never fire. One task gets one search.
+
+        The knowledge base is empty here because curated sufficiency now
+        outranks the topic (CLAUDE.md R4): with any retrieved guidance at all
+        every web search is refused for that reason instead, and the
+        already-searched rule would never be the one under test. The task's
+        one search is therefore spent by the opening retrieval gap, and both
+        of the model's own attempts are refused.
         """
         search_provider = StubSearchProvider(
             [SearchResult(title="T", url="https://example.test/a", snippet="S")]
@@ -385,7 +417,13 @@ class TestTheWebSearchGateIsLoadBearing:
             ]
         )
 
-        outcome = run(build_agent(language_model=model, search_provider=search_provider))
+        outcome = run(
+            build_agent(
+                language_model=model,
+                knowledge_base=FakeKnowledgeBase([]),
+                search_provider=search_provider,
+            )
+        )
 
         assert len(search_provider.queries) == 1
         assert any(
@@ -393,6 +431,32 @@ class TestTheWebSearchGateIsLoadBearing:
             for step in outcome.reasoning_trace
         )
         assert outcome.used_web_search is True
+
+    def test_curated_guidance_closes_the_web_for_the_whole_task(self) -> None:
+        """Proves the model cannot talk its way past "RAG first, web second".
+
+        Negative half of the pair above: the knowledge base answered, so the
+        model asking for a current-sounding external fact is refused with the
+        curated-sufficiency reason and the provider is never called.
+        """
+        search_provider = StubSearchProvider(
+            [SearchResult(title="T", url="https://example.test/a", snippet="S")]
+        )
+        model = StubLanguageModel(
+            scripted_turns=[
+                ModelTurn.calling(TOOL_WEB_SEARCH, {"query": EXTERNAL_QUESTION}),
+                ModelTurn.answering({"reasons": ["A reason."]}),
+            ]
+        )
+
+        outcome = run(build_agent(language_model=model, search_provider=search_provider))
+
+        assert search_provider.queries == []
+        assert outcome.used_web_search is False
+        assert any(
+            SearchDecision.REFUSED_RAG_SUFFICIENT.value in step.detail
+            for step in outcome.reasoning_trace
+        )
 
 
 class TestToolFailuresDegrade:

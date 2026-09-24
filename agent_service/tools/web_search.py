@@ -1,9 +1,16 @@
 """Web search, behind an explicit policy gate.
 
 Spec section 13 requires web search to be deliberate rather than automatic:
-RAG first for the curated knowledge the project maintains, the web only when
-information is external, current, missing from the knowledge base or needs
-verification, and never for the application's own adopter and animal records.
+RAG first for the curated knowledge the project maintains, the web only for
+what the curated guides cannot answer - which in practice is information that
+is external, current or simply absent - and never for the application's own
+adopter and animal records.
+
+The ordering of the rules below carries that meaning and is not incidental.
+Curated sufficiency is decided before the question's topic: an external-
+sounding question the knowledge base has already answered is answered, and
+reaching for the web anyway would make "RAG first" a preference rather than
+a rule (CLAUDE.md R4).
 
 The policy is implemented as a separate, pure function rather than as
 scattered `if` statements inside the agent loop. That makes the interesting
@@ -32,7 +39,9 @@ OWN_RECORD_MARKERS = (
 )
 
 # Questions about current or external facts that a curated, slowly-changing
-# knowledge base cannot answer well.
+# knowledge base is unlikely to cover. Consulted only once the knowledge base
+# has come back with nothing: these are keyword matches, and a keyword is not
+# evidence that the curated answer was inadequate.
 EXTERNAL_INFORMATION_MARKERS = (
     "current",
     "recent",
@@ -118,12 +127,22 @@ def decide_whether_to_search(
     if already_searched_this_task:
         return SearchDecision.REFUSED_ALREADY_SEARCHED
 
-    if _needs_external_information(question):
-        return SearchDecision.ALLOWED_EXTERNAL_TOPIC
-
-    # Rule 1: RAG is the default source for stable domain knowledge.
+    # Rule 1, and it outranks the external-topic rule below. "RAG first, web
+    # second" (CLAUDE.md R4) means the web answers what the curated guides
+    # *cannot*, so a question the guides did answer never reaches it - however
+    # current-sounding its wording. The external-topic markers are keyword
+    # matches on a phrase the agent composed, and they used to be tested
+    # first: one occurrence of "current" in a query the knowledge base had
+    # already answered was enough to open the gate, which contradicted this
+    # rule, the system prompt and the tool's own description.
     if relevant_knowledge_found:
         return SearchDecision.REFUSED_RAG_SUFFICIENT
+
+    # Nothing curated covers this. An external or current topic is the clearer
+    # half of that gap, and is reported separately so the trace says which
+    # kind of gap opened the gate.
+    if _needs_external_information(question):
+        return SearchDecision.ALLOWED_EXTERNAL_TOPIC
 
     return SearchDecision.ALLOWED_KNOWLEDGE_GAP
 

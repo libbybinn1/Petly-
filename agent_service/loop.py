@@ -36,20 +36,18 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from app.domain.enums import (
-    ActivityLevel,
-    AnimalSize,
-    ExperienceLevel,
-    HomeType,
-    MatchDirection,
-    Species,
-    Temperament,
+from app.domain.enums import MatchDirection
+from app.domain.facts import (
+    adopter_facts_from,
+    animal_facts_from,
+    parse_optional_whole_number,
 )
 from app.domain.matching import AdopterFacts, AnimalFacts, MatchScore, calculate_match_score
+from app.infrastructure.clock import aware_utc_now
 
 from agent_service.explanation import (
     DETERMINISTIC_FALLBACK_MODEL,
@@ -71,7 +69,7 @@ from agent_service.llm_client import (
 )
 from agent_service.rag.knowledge_base import KnowledgeRetriever
 from agent_service.reasoning_session import ReasoningSession, ReasoningStep
-from agent_service.tools.mcp_tools import ProfileLookup, ToolDefinition
+from agent_service.tools.mcp_tools import ProfileLookup, ToolAdvertiser, ToolDefinition
 from agent_service.tools.web_search import WebSearchProvider, decide_whether_to_search
 
 PROMPT_DIRECTORY = Path(__file__).resolve().parent / "prompts"
@@ -89,6 +87,11 @@ TOOL_RAG_SEARCH = "rag_search"
 TOOL_WEB_SEARCH = "web_search"
 MCP_ADOPTER_TOOL = "get_adopter_profile"
 MCP_ANIMAL_TOOL = "get_animal_profile"
+
+# The argument names those two tools declare in their manifests, which is
+# what a well-behaved call uses.
+MCP_ADOPTER_ARGUMENT = "adopter_profile_id"
+MCP_ANIMAL_ARGUMENT = "animal_id"
 
 # The two tools the agent owns itself. The MCP tools are deliberately absent:
 # their descriptions are read from the server at runtime, because docs/MCP.md
@@ -121,13 +124,14 @@ LOCAL_TOOL_DEFINITIONS: tuple[ToolDefinition, ...] = (
         name=TOOL_WEB_SEARCH,
         description=(
             "Search the public web. Policy-gated and a last resort: it runs "
-            "only when the curated knowledge base cannot answer, or when the "
-            "question is about current or external facts such as "
-            "regulations, disease outbreaks, recalls or prices. Never use it "
-            "for PetMatch's own adopter or animal records - those come from "
-            "the profile tools. At most one web search per task. If the "
-            "policy refuses your query you are told which rule refused it; "
-            "re-plan rather than repeating the query."
+            "only for what the curated knowledge base cannot answer - which "
+            "is usually a current or external fact such as a regulation, a "
+            "disease outbreak, a recall or a price. If the guides already "
+            "answered the question, this is refused however current the "
+            "wording. Never use it for PetMatch's own adopter or animal "
+            "records - those come from the profile tools. At most one web "
+            "search per task. If the policy refuses your query you are told "
+            "which rule refused it; re-plan rather than repeating the query."
         ),
         input_schema={
             "type": "object",
@@ -156,7 +160,7 @@ class AnalysisOutcome:
     model_name: str
     reasoning_trace: list[ReasoningStep] = field(default_factory=list)
     citations: list[str] = field(default_factory=list)
-    generated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    generated_at: datetime = field(default_factory=aware_utc_now)
 
     @property
     def explanation_is_generated(self) -> bool:
@@ -407,7 +411,7 @@ class MatchAnalysisAgent:
         Returns:
             The observation to feed back to the model.
         """
-        identifier = str(next(iter(arguments.values()), "") or "")
+        identifier = _identifier_argument(arguments)
         try:
             payload = self._call_profile_tool(tool_name, identifier)
         except Exception as error:  # - a tool failure must not end the loop
@@ -616,12 +620,11 @@ def build_tool_manifest(mcp_client: ProfileLookup) -> tuple[list[ToolDefinition]
 
 def _advertised_mcp_tools(mcp_client: ProfileLookup) -> tuple[list[ToolDefinition], str | None]:
     """Read the MCP server's advertised tools, degrading to none on failure."""
-    lister = getattr(mcp_client, "list_tool_definitions", None)
-    if not callable(lister):
+    if not isinstance(mcp_client, ToolAdvertiser):
         return [], "this client does not advertise tool definitions"
 
     try:
-        advertised = lister()
+        advertised = mcp_client.list_tool_definitions()
     except Exception as error:  # - a dead tool server must not end the loop
         return [], f"{type(error).__name__}: {error}"
 
@@ -638,6 +641,37 @@ def _as_model_tool(definition: ToolDefinition) -> ToolSchema:
             "parameters": definition.input_schema,
         },
     }
+
+
+def _identifier_argument(arguments: dict[str, Any]) -> str:
+    """Read the record identifier an MCP tool call was made with.
+
+    The declared names are tried first. Taking whatever happened to come out
+    of the dictionary first was fine while a call carried one argument and
+    wrong as soon as it carried two: a model that helpfully added
+    `{"reason": "checking the yard", "animal_id": "..."}` had the reason
+    fetched as an identifier, and the tool answered "no animal exists with
+    identifier checking the yard".
+
+    Falling back to the first string value is still better than refusing:
+    a small model that names the argument something else plainly meant to
+    fetch a record.
+
+    Args:
+        arguments: The arguments the model chose.
+
+    Returns:
+        The identifier, or an empty string when the call carried no text.
+    """
+    for name in (MCP_ADOPTER_ARGUMENT, MCP_ANIMAL_ARGUMENT):
+        named = arguments.get(name)
+        if isinstance(named, str) and named.strip():
+            return named.strip()
+
+    for value in arguments.values():
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
 
 
 def _query_argument(tool_call: ToolCallRequest) -> str:
@@ -718,108 +752,36 @@ def _build_outcome(
 
 
 def build_adopter_facts(payload: dict[str, Any]) -> AdopterFacts:
-    """Convert an MCP adopter payload into domain facts.
+    """Convert an MCP adopter payload into domain facts (spec section 8).
 
-    Unknown enum values fall back to a safe default rather than raising: a
-    single unexpected string in one record should not stop the queue.
+    A wrapper over `app.domain.facts`, which the web tier calls too. The
+    agent used to own a second copy of this mapping, and it fell behind: it
+    never read `preferred_age_range`, so the agent recomputed a score the web
+    tier disagreed with and explained it with "the adopter expressed no age
+    preference" about an adopter who had expressed one - a claim traceable to
+    nothing, which rule R4 forbids.
+
+    Args:
+        payload: The record as the MCP tool returned it.
+
+    Returns:
+        The adopter's facts. Unknown enum values fall back to a safe default
+        rather than raising: one unexpected string in one record must not
+        stop the queue.
     """
-    return AdopterFacts(
-        home_type=_to_enum(HomeType, payload.get("home_type"), HomeType.APARTMENT),
-        has_yard=bool(payload.get("has_yard")),
-        household_has_children=bool(payload.get("household_has_children")),
-        youngest_child_age=_to_optional_int(payload.get("youngest_child_age")),
-        has_other_animals=bool(payload.get("has_other_animals")),
-        experience_level=_to_enum(
-            ExperienceLevel, payload.get("experience_level"), ExperienceLevel.NONE
-        ),
-        activity_level=_to_enum(
-            ActivityLevel, payload.get("activity_level"), ActivityLevel.MODERATE
-        ),
-        daily_hours_available=float(payload.get("daily_hours_available") or 0.0),
-        city=str(payload.get("city") or ""),
-        preferred_species=_payload_species(payload.get("preferred_species")),
-        open_to_proactive_suggestions=bool(payload.get("open_to_proactive_suggestions")),
-        is_complete=bool(payload.get("is_complete")),
-    )
+    return adopter_facts_from(payload)
 
 
 def build_animal_facts(payload: dict[str, Any]) -> AnimalFacts:
-    """Convert an MCP animal payload into domain facts."""
-    return AnimalFacts(
-        species=_to_enum(Species, payload.get("species"), Species.OTHER),
-        age_years=float(payload.get("age_years") or 0.0),
-        size=_to_enum(AnimalSize, payload.get("size"), AnimalSize.MEDIUM),
-        temperament=_to_enum(Temperament, payload.get("temperament"), Temperament.BALANCED),
-        activity_level=_to_enum(
-            ActivityLevel, payload.get("activity_level"), ActivityLevel.MODERATE
-        ),
-        good_with_children=bool(payload.get("good_with_children")),
-        good_with_other_animals=bool(payload.get("good_with_other_animals")),
-        has_special_needs=bool(payload.get("has_special_needs")),
-        required_space=_to_enum(
-            AnimalSize, payload.get("required_space"), AnimalSize.MEDIUM
-        ),
-        city=str(payload.get("city") or ""),
-    )
-
-
-def _payload_species(raw_values: object) -> frozenset[Species]:
-    """Read species preferences from an MCP payload, dropping unrecognised ones.
-
-    The same rule as the web tier's `_stored_species`, and for the same
-    reason: `Species.OTHER` is a preference an adopter can hold, not a
-    stand-in for a value that failed to parse. Translating one into the
-    other would hand the heaviest criterion a preference nobody expressed.
+    """Convert an MCP animal payload into domain facts (spec section 8).
 
     Args:
-        raw_values: Whatever the payload held, which may not be a list.
+        payload: The record as the MCP tool returned it.
 
     Returns:
-        The species that parsed, empty if the field was absent or malformed.
+        The animal's facts, mapped by the same rules the web tier uses.
     """
-    if not isinstance(raw_values, list):
-        return frozenset()
-
-    parsed: list[Species] = []
-    for value in raw_values:
-        try:
-            parsed.append(Species(str(value).strip()))
-        except ValueError:
-            continue
-    return frozenset(parsed)
-
-
-def _to_optional_int(raw_value: object) -> int | None:
-    """Coerce a payload value to a whole number, or None when unusable.
-
-    Every other numeric field in the payload is coerced; this one was
-    passed through untouched, so a JSON string age reached the scorer and
-    was compared against an int - raising TypeError from inside the child
-    safety rule and failing the whole analysis job. A field the agent
-    cannot read should degrade to "not stated", not crash the queue.
-
-    Args:
-        raw_value: The payload value, of whatever type arrived.
-
-    Returns:
-        The value as an int, or None if absent or not numeric.
-    """
-    if raw_value is None:
-        return None
-    try:
-        return int(float(str(raw_value)))
-    except (TypeError, ValueError):
-        return None
-
-
-def _to_enum(enum_class: type, raw_value: object, default: Any) -> Any:  # noqa: ANN401
-    """Convert a string to an enum member, falling back to a default."""
-    if raw_value is None:
-        return default
-    try:
-        return enum_class(str(raw_value))
-    except ValueError:
-        return default
+    return animal_facts_from(payload)
 
 
 def _note_payload_gaps(
@@ -837,7 +799,7 @@ def _note_payload_gaps(
         session: The task state, which receives the gaps.
     """
     children_present = bool(adopter_payload.get("household_has_children"))
-    youngest_age = _to_optional_int(adopter_payload.get("youngest_child_age"))
+    youngest_age = parse_optional_whole_number(adopter_payload.get("youngest_child_age"))
     if children_present and youngest_age is None:
         session.note_gap(
             "Children live in the household but the youngest child's age is not "

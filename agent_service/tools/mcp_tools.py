@@ -19,7 +19,7 @@ import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -53,6 +53,20 @@ class ToolDefinition:
     name: str
     description: str
     input_schema: dict[str, Any]
+
+
+@runtime_checkable
+class ToolAdvertiser(Protocol):
+    """The optional half of an MCP client: advertising what it offers.
+
+    Runtime-checkable rather than probed with `getattr`, so "this client can
+    list its tools" is a named capability with a signature instead of a
+    string looked up at the call site.
+    """
+
+    def list_tool_definitions(self) -> list[ToolDefinition]:
+        """Return the tools the server advertises."""
+        ...
 
 
 class ProfileLookup(Protocol):
