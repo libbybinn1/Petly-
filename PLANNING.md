@@ -1,6 +1,6 @@
 # PetMatch — Master Implementation Plan
 
-**Status:** All blocking questions in §2 are resolved — see the answers recorded there. Build in progress; current position is in §0.
+**Status:** Complete. All blocking questions in §2 are resolved — see the answers recorded there — and every phase in §0 is done, including the hardening sprint in §0.1.
 
 **Method:** Specification-Driven Agentic Development (SDAD). Document first, then implement, then test, then verify against the spec. No feature starts before its spec section is written.
 
@@ -29,13 +29,42 @@ Updated as phases complete, per rule R5.
 | 12 Autonomous agent process | Done |
 | 13 AI-facing screens | Done |
 | 14 Dashboard | Done |
-| 15 E2E, hardening, demo | Done - API and E2E suites written; `scripts/verify_requirements.py` checks all 25 mandatory items |
+| 15 E2E, hardening, demo | Done - API and E2E suites written; `scripts/verify_requirements.py` inspects 23 mandatory items |
+| 16 Hardening sprint, 2026-09-23/24 | Done - see below |
 
-All sixteen phases complete. `scripts/verify_requirements.py` reports 25/25.
+All sixteen phases complete. `scripts/verify_requirements.py` reports 23/23.
+It verifies by *inspecting behaviour* - building the Flask app, parsing the
+code with `ast`, calling pure functions - rather than by grepping for
+strings, which is why its earlier "25/25" was worth less than today's 23.
 
-Known operational note: the end-to-end suite runs a real browser against the
-real Somee database, whose free tier throttles under load. Run it on its own
-rather than alongside the API suite, which competes for the same connections.
+Known operational note: the end-to-end suite runs a real browser against a
+real server, but against a **seeded local SQLite file**, not the cloud
+database. Somee's free tier throttles under a browser page's request
+fan-out, and a suite that timed out on rate limits was testing the hosting
+tier rather than the journeys. `tests/e2e/conftest.py` says so in its own
+docstring.
+
+---
+
+## 0.1 Hardening sprint — 2026-09-23/24
+
+A full requirements audit against the course blueprint and the product spec
+found thirteen blocking gaps. All of them were closed in a two-day sprint by
+a team of agents working in parallel. What changed:
+
+| Work | Outcome |
+|---|---|
+| **Requirements audit** | Every blueprint 20 checklist item and every spec section re-verified by inspection; the findings drove everything below. |
+| **Seed data** | `scripts/seed_roster.py`, `scripts/seed_people.py`, `scripts/seed_history.py`: 157 animals across eleven kinds, 40 adopters (3 deliberately incomplete), 3 staff, 81 applications, 32 invitations covering every status, 48 notifications, 40 match analyses, 263 domain events. Every dashboard tile is non-zero. |
+| **Agent reason-act loop** | `agent_service/loop.py` now drives a real `while` loop with a tool manifest built from the live MCP server; the model chooses the tool. `reasoning_session.py`, `explanation.py` and the grounding check are new. |
+| **Staff decision route** | `POST /applications/<id>/decide` with APPROVE, REJECT, REVIEW and REVERSE. The spec 7.5 cascade was previously reachable only from a test. |
+| **Animal lifecycle** | `GET/POST /animals/new`, `GET/POST /animals/<id>/edit`, `POST /animals/<id>/status`, `app/domain/animal_rules.py`, and the mandatory-image rule enforced on both write paths. |
+| **CSRF** | `CSRFProtect` on every POST form, `SESSION_COOKIE_SAMESITE=Lax`, `HttpOnly`, and a friendly 400 page for an expired form. |
+| **Notification inbox** | `GET /my/notifications` plus mark-read routes; notifications were written but unreadable. |
+| **Event replay** | `app/eventstore/projections.py`: `replay_application`, `replay_invitation`, `rebuild_projections`. FR-13.3 went from claimed to proven. |
+| **Asynchronous intent** | `POST /search/describe` enqueues an `INTERPRET_INTENT` job and redirects; the synchronous model call that sat in a request path is gone (NFR-3.1). |
+| **Design system** | One token set, contrast fixed, dark mode completed, shared partials for the score ring, criterion bars and the pending block. |
+| **Verification** | `scripts/verify_requirements.py` rewritten to inspect behaviour, `tests/unit/test_architecture_guard.py` enforces CLAUDE.md R2 mechanically, and `tests/unit/test_docs_reference_real_artifacts.py` fails the build on a documentation claim that names something that does not exist. |
 
 ---
 
@@ -46,29 +75,29 @@ Every mandatory checklist item from course blueprint §20, mapped to where it ge
 | # | Mandatory Requirement | Built In | Proven By |
 |---|---|---|---|
 | 1 | Defined topic, not the HR example | Whole system — animal adoption | `docs/PRD.md` |
-| 2 | Authentication | `app/controllers/auth_controller.py` | `tests/integration/test_auth.py` |
-| 3 | Two+ roles (Adopter, Staff) | `app/domain/user.py`, `app/security/` | `tests/api/test_authorization.py` |
-| 4.1 | Search | Structured search done; natural-language outstanding (F-14) | E2E |
-| 4.2 | Details view | Animal details screen | E2E `test_adopter_journey.py` |
-| 4.3 | Tabular display | Staff animal + application tables | E2E `test_staff_journey.py` |
-| 4.4 | Dashboard | Staff operational dashboard (spec §22) | `tests/integration/test_dashboard_queries.py` |
-| 4.5 | Data entry | 7 business forms (spec §21) | `tests/api/test_forms_validation.py` |
-| 5 | AI Agent as independent process | `agent_service/` — separate OS process | `tests/agent/`, demo script |
-| 6 | Web Search integrated | `agent_service/tools/web_search.py` | `tests/agent/test_web_search_policy.py` |
+| 2 | Authentication | `app/controllers/auth_controller.py`, `app/cqrs/queries/auth_queries.py` | `tests/api/test_authorization.py`, `tests/api/test_feature_auth_boundary.py` |
+| 3 | Two+ roles (Adopter, Staff) | `app/domain/enums.py` (`UserRole`), `app/security/authorization.py` | `tests/api/test_qa_authorization.py` |
+| 4.1 | Search | Structured filters plus asynchronous natural-language search | `tests/api/test_forms_and_validation.py`, `tests/api/test_feature_natural_language_search.py`, `tests/api/test_feature_age_filter.py` |
+| 4.2 | Details view | Animal details screen | `tests/e2e/test_journeys.py` |
+| 4.3 | Tabular display | `app/templates/animals/manage.html` | `tests/e2e/test_accessibility.py`, `tests/e2e/test_journeys.py` |
+| 4.4 | Dashboard | Staff operational dashboard (spec §22) | `tests/api/test_feature_dashboard_and_history.py` |
+| 4.5 | Data entry | 7 business forms (spec §21) | `tests/api/test_forms_and_validation.py`, `tests/api/test_feature_animal_lifecycle.py`, `tests/api/test_feature_staff_decision.py` |
+| 5 | AI Agent as independent process | `agent_service/` — separate OS process | `tests/agent/test_reasoning_loop.py`, `tests/agent/test_worker_jobs.py` |
+| 6 | Web Search integrated | `agent_service/tools/web_search.py` | `tests/agent/test_agent_loop.py`, `tests/agent/test_reasoning_loop.py` |
 | 7 | Vector DB + RAG | `agent_service/rag/` + ChromaDB | `tests/agent/test_rag_retrieval.py` |
-| 8 | Two+ local MCP tools over stdio | `mcp_server/petmatch_tools.py` | `tests/agent/test_mcp_stdio.py` |
-| 9 | Flask | `app/` | all integration tests |
-| 10 | MVC | `controllers/` / `views/` / `domain/` separation | `docs/ARCHITECTURE.md` + arch test |
-| 11 | CQRS | `app/cqrs/commands/` vs `app/cqrs/queries/` | `tests/unit/test_cqrs_separation.py` |
-| 12 | Event Sourcing | `app/eventstore/` append-only + projections | `tests/integration/test_event_sourcing.py` |
+| 8 | Two+ local MCP tools over stdio | `mcp_server/server.py` | `tests/agent/test_mcp_stdio.py` |
+| 9 | Flask | `app/` | `tests/api/` |
+| 10 | MVC | `controllers/` / `templates/` / `domain/` separation | `tests/unit/test_architecture_guard.py` |
+| 11 | CQRS | `app/cqrs/commands/` vs `app/cqrs/queries/` | `tests/unit/test_architecture_guard.py` |
+| 12 | Event Sourcing | `app/eventstore/store.py` append-only + `app/eventstore/projections.py` | `tests/integration/test_event_sourcing.py`, `tests/integration/test_qa_event_store.py` |
 | 13 | Cloud database | Somee.com **SQL Server 2014** — see §2 Q2 | `scripts/check_environment.py` |
-| 14 | External skill (sh.skills) | `mcp-builder`, `webapp-testing` | `.claude/skills/` |
-| 15 | Self-defined skill | Clean Code, DB Mgmt, Testing skills | `.claude/skills/` |
-| 16 | One+ Rule | `CLAUDE.md` — five rules, R1–R5 | `docs/SKILLS_AND_RULES.md` |
-| 17 | Organized MD docs | `docs/` — 11 files | `docs/` |
+| 14 | External skill (sh.skills) | `.claude/skills/mcp-builder`, `.claude/skills/webapp-testing` | `scripts/verify_requirements.py` |
+| 15 | Self-defined skill | `.claude/skills/clean-code`, `.claude/skills/db-management`, `.claude/skills/testing` | `scripts/verify_requirements.py` |
+| 16 | One+ Rule | `CLAUDE.md` — five rules, R1–R5 | `docs/SKILLS_AND_RULES.md`, `tests/unit/test_architecture_guard.py` |
+| 17 | Organized MD docs | `docs/` — 11 files | `tests/unit/test_docs_reference_real_artifacts.py` |
 | 18 | GitHub | repo + clear commits | git history |
-| 19 | Unit/Integration/E2E/Agent tests | `tests/` | pytest + Playwright reports |
-| 20 | Professional UI/UX | Jinja2 + design system | E2E screenshots |
+| 19 | Unit/Integration/E2E/Agent tests | `tests/` | 910 collected tests; see `docs/TESTING.md` §3 |
+| 20 | Professional UI/UX | Jinja2 + one token set | `tests/e2e/test_accessibility.py` |
 
 ---
 
@@ -85,7 +114,7 @@ architecture substantially.
 | Q3 | Web search | Tavily. Needed `truststore` to work behind the corporate TLS proxy. |
 | Q4 | Embeddings | `nomic-embed-text` via Ollama — one runtime, no PyTorch. |
 | Q5 | sh.skills | `mcp-builder` and `webapp-testing`, installed from the ecosystem's GitHub source while skills.sh itself was returning 503. |
-| Q6 | GitHub | Local repository; remote push pending the user's sign-in. |
+| Q6 | GitHub | A remote is configured on the local repository. The push itself is still pending the user's sign-in, so the history exists but is not yet on GitHub. |
 
 The original questions follow, kept because they record *why* each decision
 was open rather than assumed.
@@ -114,7 +143,7 @@ Blueprint §19 mandates GitHub. Local `git init` only, or also create and push a
 - **UI language:** English, LTR.
 - **Frontend:** Flask + Jinja2, server-rendered. No Node is installed here, and server-rendered views map cleanly onto the MVC "View" layer the blueprint demands.
 - **E2E:** Playwright for **Python** (`pytest-playwright`) — works without Node.
-- **Animal images:** local `static/uploads/` with the URL in Postgres, seeded with public-domain photos. Spec §24 leaves storage as an implementation decision.
+- **Animal images:** local `app/static/uploads/` with only the URL stored in SQL Server, seeded with freely licensed photographs. Spec §24 leaves storage as an implementation decision, and the free tier's size cap settles it.
 - **MCP tools:** exactly the two the spec names — `get_adopter_profile`, `get_animal_profile`. A third only if a real need appears (spec §14 warns against padding the count).
 - **Seed scale:** 157 animals across eleven kinds (dogs, cats, rabbits, guinea pigs, hamsters, birds, reptiles, amphibians, exotic mammals, farm animals, poultry), 40 adopters — three of them deliberately incomplete — 3 staff, ~79 applications including one approval with its §7.5 cascade, 32 invitations covering every status, and a set of deterministic match analyses. Sized so every dashboard tile is non-zero rather than merely so the pages are not empty. The roster lives in `scripts/seed_roster.py` and the people in `scripts/seed_people.py`; `knowledge/` holds 17 curated guides.
 - **Agent↔app channel:** DB-backed job queue (`analysis_jobs` table) polled by the separate agent process. This keeps the agent genuinely independent rather than an in-process import.
@@ -129,24 +158,26 @@ Browser
   v
 Flask App (app/)
   |- controllers/   Blueprints. HTTP only: parse, authorize, dispatch, render. No business logic.
-  |- views/         Jinja2 templates + view models.
+  |- templates/     Jinja2 views. View models live beside their query.
   |- domain/        Entities, value objects, business rules. No Flask, no SQLAlchemy imports.
   |- cqrs/
-  |    |- commands/ State-changing. Emits events, never returns read data.
-  |    |- queries/  Read-only. Never mutates. Reads projections.
-  |    |- bus.py    Dispatcher; enforces the separation.
-  |- eventstore/    Append-only domain_events table + projectors.
-  |- repositories/  Data access. The only layer touching SQLAlchemy sessions.
+  |    |- base.py    Command, Query, MessageBus. Commands commit; queries roll back.
+  |    |- commands/  State-changing. Emits events, returns an id, a count or nothing.
+  |    |- queries/   Read-only. Never mutates. Reads projections. Holds the view models.
+  |- eventstore/    store.py (append-only domain_events) + projections.py (replay).
+  |- infrastructure/ SQLAlchemy models, engine and session factory.
   |- security/      Auth + role enforcement at server level, not hidden buttons.
        |
        v
-  Cloud PostgreSQL  -- source of truth for all business data
+  Somee.com SQL Server 2014  -- source of truth for all business data
 
 Agent Service (agent_service/)  -- SEPARATE OS PROCESS
+  |- worker.py      The process: claim a job, dispatch it, persist, cache.
   |- loop.py        Reason -> Act -> Observe -> Re-plan. Not a single LLM call.
   |- rag/           ChromaDB: ingestion, chunking, embedding, semantic retrieval.
-  |- tools/         web_search (policy-gated), mcp_client (stdio).
-  |- scoring/       Deterministic weighted criteria. Math scores; the LLM explains.
+  |- tools/         web_search (policy-gated), mcp_tools (stdio client).
+                    Scoring is NOT here: it is app/domain/matching.py, shared
+                    with the web tier so one arithmetic serves both.
        | stdio (MCP protocol)
        v
 MCP Server (mcp_server/)  -- SEPARATE PROCESS
@@ -170,7 +201,7 @@ Each phase ends with green tests and a commit. No phase starts before the previo
 - 0.1 Resolve the §2 blocking questions.
 - 0.2 `git init`, `.gitignore`, `README.md`.
 - 0.3 `.claude/skills/` — Clean Code, DB Management, Testing skills, defined *before* coding per your directive #5.
-- 0.4 `CLAUDE.md` + `.claude/rules/` — architecture, testing and style rules for the coding agent.
+- 0.4 `CLAUDE.md` — architecture, testing, documentation, agent and ambiguity rules for the coding agent. They live in one file the agent reads automatically; a separate rules directory under `.claude/` was planned and never needed.
 - 0.5 venv, `requirements.txt`, `pyproject.toml`, ruff + mypy strict.
 
 **Done when:** `ruff check` and `mypy` run clean on the skeleton.
@@ -182,11 +213,11 @@ All 11 files mandated by blueprint §14, before any app code: `PRD.md`, `REQUIRE
 
 ### Phase 2 — Data Layer and Cloud DB
 - 2.1 SQLAlchemy models: User, AdopterProfile, Animal, AnimalImage, Application, Invitation, MatchAnalysis, Notification, DomainEvent, AnalysisJob.
-- 2.2 Alembic migrations; constraints, FKs, indexes, enums.
-- 2.3 Cloud connection verified; local Docker Postgres for dev.
+- 2.2 Constraints, foreign keys, indexes and CHECK-enforced enums declared on the metadata. **Alembic was dropped:** the schema is created with `Base.metadata.create_all` through `scripts/db.py`. One developer, one database and a `fresh` command that rebuilds it in a minute makes a migration history a cost with no payer. `requirements.txt` still pins Alembic; that pin is vestigial.
+- 2.3 Cloud connection verified by `scripts/check_environment.py`; `LOCAL_DATABASE_URL` points at SQLite for offline work.
 - 2.4 Seed script with images.
 
-**Done when:** the `db-management` skill can drop, migrate and seed in one command against both local and cloud.
+**Done when:** `scripts/db.py fresh` can drop, create and seed in one command against both local and cloud.
 
 ### Phase 3 — Event Store
 - 3.1 Append-only `domain_events`: id, type, aggregate_id, aggregate_type, occurred_at, actor_id, payload, version.
@@ -200,7 +231,7 @@ All 11 files mandated by blueprint §14, before any app code: `PRD.md`, `REQUIRE
 - 4.1 `Command`/`Query` base types, handler registry, bus.
 - 4.2 Architectural test: no query handler opens a write transaction; no command handler returns read DTOs.
 
-**Done when:** `test_cqrs_separation.py` passes.
+**Done when:** the architectural test passes. It was planned as a file called `test_cqrs_separation.py` and shipped, in the hardening sprint, as `tests/unit/test_architecture_guard.py` — wider than planned, because it enforces every row of CLAUDE.md R2 rather than the CQRS split alone, and because each rule also has a test proving the rule itself catches a synthetic violation.
 
 ### Phase 5 — Auth and Authorization
 - 5.1 Registration, login, logout, password hashing, sessions.
@@ -244,7 +275,7 @@ All 11 files mandated by blueprint §14, before any app code: `PRD.md`, `REQUIRE
 **Done when:** `test_mcp_stdio.py` spawns the real server over stdio and round-trips both tools.
 
 ### Phase 11 — RAG Pipeline
-- 11.1 Author ~12 curated knowledge documents: species care, space and activity needs, child compatibility, multi-pet households, senior and special-needs animals, organization adoption policy.
+- 11.1 Author the curated knowledge documents: species care, space and activity needs, child compatibility, multi-pet households, senior and special-needs animals, organization adoption policy. **17 guides shipped**, producing 104 chunks.
 - 11.2 Ingest → chunk → embed → ChromaDB → semantic retrieval.
 - 11.3 Prove semantic, not keyword, retrieval.
 
@@ -252,10 +283,10 @@ All 11 files mandated by blueprint §14, before any app code: `PRD.md`, `REQUIRE
 
 ### Phase 12 — Autonomous Agent Process
 - 12.1 Independent process polling `analysis_jobs`.
-- 12.2 Reason → Act → Observe → Re-plan loop with genuine tool selection.
+- 12.2 Reason → Act → Observe → Re-plan loop with genuine tool selection. Delivered in the hardening sprint (§0.1): `agent_service/loop.py` sends a tool manifest built from the live MCP server on every turn and dispatches whichever tool the model names.
 - 12.3 Web-search policy gate per spec §13: RAG first; web only when genuinely needed; never for the app's own records; never overriding authoritative data.
 - 12.4 Structured JSON output: score, reasons, concerns, missing information, evidence and sources.
-- 12.5 Natural-language intent parsing (spec §6.3) and Profile+Intent fusion (spec §6.4).
+- 12.5 Natural-language intent parsing (spec §6.3) and Profile+Intent fusion (spec §6.4). Both delivered in the hardening sprint: the interpretation runs as an `INTERPRET_INTENT` job, and `FindMyPetWithIntentQuery` scores the animals the intent narrowed against the adopter's stored profile.
 - 12.6 Persist `MatchAnalysis`, emit `AIAnalysisCompleted`.
 
 **Done when:** agent tests cover structured output, tool selection, RAG use, web-search gating, and failure paths — LLM down, tool error, malformed JSON.
@@ -273,7 +304,7 @@ Available animals, pending applications, applications needing attention, open in
 
 ### Phase 15 — E2E, Hardening, Demo
 - 15.1 Playwright suites: adopter journey, staff journey.
-- 15.2 All nine demo scenarios from spec §28 scripted and passing.
+- 15.2 All nine demo scenarios from spec §28 walkable by hand; `docs/DEMO.md` is the runbook. The E2E suite covers the browsable subset (public browsing, the adopter journey, the staff journey, authorization and interface quality); the approval cascade and the agent loop are proven by `tests/integration/test_event_sourcing.py` and `tests/agent/`, which do not need a browser.
 - 15.3 Coverage report, negative-path sweep, UI/UX polish.
 - 15.4 Final doc/code consistency audit against §1 and blueprint §20.
 
@@ -288,13 +319,13 @@ Per your directive #5. Defined in Phase 0, before application code.
 | `clean-code` | SRP, descriptive names without abbreviations, early returns, no deep nesting, extracted helpers, strict typing, comprehensive docstrings. Applied to every file written. |
 | `db-management` | One command to connect, migrate, reset, seed, and switch local ↔ cloud. |
 | `testing` | Trigger specific pytest and Playwright suites with output formatted for fast debugging. |
-| `feature-spec` | Enforce the blueprint §16 feature template before any feature is coded. |
-| `arch-guard` | Verify MVC and CQRS boundaries are not violated by a change. |
+| ~~`feature-spec`~~ | **Never built.** The blueprint §16 template is enforced by review against `docs/FEATURES.md` instead. |
+| ~~`arch-guard`~~ | **Never built as a skill.** The idea was better served as a test: `tests/unit/test_architecture_guard.py` enforces every row of CLAUDE.md R2 mechanically, and `scripts/verify_requirements.py` repeats the checks from the command line. |
 
 ## 6. Rules To Define
 
 - **R1 Ambiguity Rule** — do not begin implementation while a major requirement is ambiguous; stop and ask. Blueprint §15 names this explicitly as a recommended rule.
-- **R2 Architecture Rule** — controllers hold no business logic; domain imports no framework; only repositories touch the session; commands never return read data.
+- **R2 Architecture Rule** — controllers hold no business logic and never touch a session; the domain imports no framework; commands never return read data; queries never write; the agent never imports the web tier. The session is held by the CQRS handlers, through the bus.
 - **R3 Testing Rule** — no feature is done without unit and integration coverage plus at least one negative test.
 - **R4 Agent Rule** — the agent never makes the final adoption decision, never invents facts absent from its sources, and always records which sources it used.
 - **R5 Documentation Rule** — code and `docs/` may never contradict; a feature change updates both in the same commit.

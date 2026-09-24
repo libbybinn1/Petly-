@@ -152,7 +152,11 @@ The point of a design system is that a thing is defined once.
 - **The pending state** is one partial and one sentence. There used to be
   three different sentences for it across two screens, none of which
   answered what a visitor wanted to know: whether the score was trustworthy,
-  and whether waiting would help.
+  and whether waiting would help. `matches/_pending_analysis.html` is now
+  included by **four** screens — Find My Pet, the applicant ranking,
+  discovery and the describe result — and each passes a `queued_at_label`,
+  so the block says how long this particular job has been waiting. A wait with
+  a number on it is the difference between slow and stuck.
 
 ### The score ring
 
@@ -166,8 +170,13 @@ own value: if the animation never runs — reduced motion, or an engine without
 It carries `role="img"` and an explicit label (`"87 out of 100 match"`),
 because "87" and "match" read out as two unrelated strings are not a
 sentence. Colour bands are the same three the flat badge used, so nobody
-re-learns a colour: green ≥ 75, amber ≥ 50, muted below. A disqualified
-pairing shows no ring at all — it failed a rule rather than scoring badly.
+re-learns a colour: strong, fair, weak. **No template contains a threshold.**
+`MatchScore` and `CriterionScore` expose a `band` property that reads the
+domain's own constants, and the templates switch on the name — so the
+interface and the scorer cannot come to disagree about what a good match is,
+which is exactly what happened when five templates each held their own copy of
+the numbers. A disqualified pairing shows no ring at all: it failed a rule
+rather than scoring badly.
 
 ### Icons, not emoji
 
@@ -192,9 +201,16 @@ one attribute:
 | `[data-analysis-status-url]` | Poll for finished explanations and reload | The pending block's Refresh link |
 
 Polling asks every 8 seconds, backs off to 30 after two minutes, reloads when
-the reported `generation` changes or `pending` drops to zero, and stops dead
-on any non-200 — including the 404 it receives while the endpoint does not yet
-exist.
+the reported `generation` changes, **stops entirely once nothing is pending**,
+pauses while the tab is hidden, and stops dead on any non-200. A page left open
+overnight must not keep a request every few seconds against a throttled
+free-tier database.
+
+**The describe result page uses none of that.** While its interpretation job
+is still running it carries a `<meta http-equiv="refresh" content="4">` and
+reloads itself — chosen over the poller because that page can be reached by a
+signed-out visitor, has nothing on it but the one job, and should come back by
+itself even with scripting blocked entirely.
 
 ## 4. Screens and permissions
 
@@ -219,11 +235,11 @@ direct POST as much as on a page load.
 | Browse animals | `/animals/` | yes | yes | yes |
 | Animal details | `/animals/<id>` | yes | yes | yes + applicant count |
 | Describe what you want | `/search/describe` | yes | yes | yes |
-| Describe result | `/search/describe/<job_id>` | yes | yes | yes |
+| Describe result | `/search/describe/<job_id>` | unbound: yes | unbound: yes · own if bound | yes, either |
 | Animal management | `/animals/manage` | → sign in | **403** | yes |
 | List a new animal | `/animals/new` | → sign in | **403** | yes |
 | Edit an animal | `/animals/<id>/edit` | → sign in | **403** | yes |
-| Change availability | `POST /animals/<id>/status` | → sign in | **403** | yes |
+| Change availability (POST) | `/animals/<id>/status` | → sign in | **403** | yes |
 | Adopter profile | `/my/profile` | → sign in | own only | **403** |
 | My applications | `/my/applications` | → sign in | own only | **403** |
 | My invitations | `/my/invitations` | → sign in | own only | **403** |
@@ -231,14 +247,14 @@ direct POST as much as on a page load.
 | Find My Pet | `/my/matches` | → sign in | yes | **403** |
 | Find My Adopter | `/animals/<id>/adopters` | → sign in | **403** | yes |
 | Find More Adopters | `/animals/<id>/discover` | → sign in | **403** | yes |
-| Send an invitation | `POST /animals/<id>/invite` | → sign in | **403** | yes |
-| Decide an application | `POST /applications/<id>/decide` | → sign in | **403** | yes |
+| Send an invitation (POST) | `/animals/<id>/invite` | → sign in | **403** | yes |
+| Decide an application (POST) | `/applications/<id>/decide` | → sign in | **403** | yes |
 | Full match analysis | `/analyses/<id>` | → sign in | **403** | yes |
 | Event history | `/history/<type>/<id>` | → sign in | own records only | yes |
 | Analysis status (JSON) | `/api/analysis-status` | → sign in | `?scope=my-matches` | either scope |
 | Staff dashboard | `/dashboard` | → sign in | **403** | yes |
 
-Three rows are worth spelling out, because the rule is not "staff see more":
+Four rows are worth spelling out, because the rule is not "staff see more":
 
 - **The inbox is not adopter-only.** Staff receive messages too, and an inbox
   one of the two audiences cannot read is worse than no inbox.
@@ -251,6 +267,12 @@ Three rows are worth spelling out, because the rule is not "staff see more":
   adopter scope has no parameter that would let one adopter ask about another;
   the `animal_id` scope is staff-only and answers with counts, never names or
   scores.
+- **A described search is public until it is personal.** `POST /search/describe`
+  is open to anyone, signed in or not, and the result page is readable by
+  whoever holds the job's identifier — that is what makes the redirect work
+  for a signed-out visitor. But a search where the adopter ticked *use my
+  profile* is **bound to that profile**: another adopter asking for it gets
+  403, and only its owner or staff may open it.
 
 An adopter can only ever see **their own** profile, applications, invitations
 and inbox. Ownership is checked in the query handler, not only in the URL.
@@ -262,8 +284,9 @@ navigation, the account, and the light/dark/system control.
 
 - **Anonymous** — Browse animals · Sign in · **Join**
 - **Adopter** — Browse animals · My matches · Applications · Invitations ·
-  Profile · avatar · Sign out
-- **Staff** — Browse animals · Dashboard · Manage · avatar · Sign out
+  Notifications · Profile · avatar · Sign out
+- **Staff** — Browse animals · Dashboard · Manage · Notifications ·
+  avatar · Sign out
 
 One `navlink()` macro renders every link, so `aria-current="page"` cannot be
 forgotten on one of them, and the word "animals" in "Browse animals" is the
@@ -273,12 +296,12 @@ The avatar shows initials derived from the user's name. Sign-out is a POST
 form, not a link, so a third-party page cannot sign the user out by embedding
 an image.
 
-**The inbox has no bell yet.** `/my/notifications` is reachable by URL and
-from the links inside the messages themselves, and `unread_notification_count`
-is already injected into every template by a context processor — but the top
-bar does not yet render a bell with that count, so an unread message is only
-discovered by going to look for it. The badge component (`.badge`) exists and
-is in use on the invitations screen; the bar is one line of markup away.
+**Notifications is in the bar for both roles**, carrying the unread count as
+a `.badge`. It has to be: staff receive messages too, and spec §23 makes the
+inbox the only channel there is — an invitation nobody notices is an
+invitation that expires. The count comes from a context processor, so every
+template can see it and no view can forget to pass it; an anonymous visitor,
+and a database error, both read zero rather than failing the page.
 
 ## 6. Key screens
 
@@ -376,6 +399,22 @@ countdown tag rather than one sentence at the top of the page that applies to
 all of them and to none in particular. Declining is a `.btn--danger-ghost`
 with a confirmation, because it cannot be undone.
 
+### Describe what you want (spec §6.3, §6.4)
+A textarea with a 500-character cap, an example of the kind of sentence that
+works, and — for a signed-in adopter with a complete profile — a *use my
+profile* checkbox. Submitting redirects to the job's own page, which shows the
+shared pending block until the agent answers and then shows results: plain
+cards for an intent-only search, cards carrying a score when the profile was
+fused in. The interpretation is printed above the results in the adopter's
+terms, so a reading that missed the point is visible rather than mysterious.
+
+### Event history (blueprint §10)
+A vertical timeline, oldest first, one entry per recorded event: what happened,
+who did it, and when, in words and in a machine-readable `<time>`. The back
+button is role-aware — staff return to the roster, an adopter to their own
+applications — because the same screen serves both and sending an adopter to a
+staff page they cannot open would be worse than no button.
+
 ### Notification inbox (spec §23)
 Messages newest first, grouped into the last 24 hours and earlier, each with an
 icon for its kind, its type, its age in words, and a small ghost button to open
@@ -383,8 +422,29 @@ it or mark it read. An unread row carries a left border and a heavier title as
 well as a tint, and says "(unread)" in text for anyone who gets none of those.
 
 ### Staff dashboard (blueprint 4.4)
-Stat tiles plus a **Needs Attention** section that links each figure to the
-action it implies, per spec §22.
+Six stat tiles, a **Needs Attention** section that links each figure to the
+action it implies (spec §22), an agent-queue strip, and a recent-activity feed
+read from the event log.
+
+**A tile is a link only when there is somewhere to go.** A tile with an
+`action_url` renders as `.stat--link` and carries its own action label —
+"Manage available animals", "See adoptions in progress" — and opens the roster
+already filtered to that status. Two tiles are deliberately **not** links:
+*invitations awaiting a reply*, because there is no staff-side invitation
+list, and *match analyses completed*, because analyses are reached through the
+animal they belong to rather than from an index. A tile that looks clickable
+and goes nowhere useful is worse than one that does not, so the difference is
+visible.
+
+The **agent-queue strip** is the only place in the interface where the second
+process appears as a process: outstanding work, failed work, and how long the
+oldest queued job has waited. It is what makes a stuck queue distinguishable
+from a busy one.
+
+Every figure and every activity entry reads as prose a person wrote — "1
+application needs attention", never "1 application(s)" — and every timestamp
+is a `<time datetime=…>` element carrying both a readable phrase and a
+machine-readable value.
 
 ## 7. Responsive behaviour
 

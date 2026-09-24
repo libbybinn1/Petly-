@@ -44,9 +44,16 @@ demonstrations the project is graded on.
 | `repositories/` | SQLAlchemy, domain | contain business rules |
 | `agent_service/` | its own modules, MCP client, and from `app` only `domain/`, `config`, `infrastructure/models` and `eventstore/` (shared vocabulary and queue access) | import the Flask factory (`app/__init__.py`), `controllers/`, `cqrs/`, `security/` or `services/`; call any command or query |
 
+`repositories/`, `services/` and `views/` are unfilled packages: the CQRS
+handlers hold the session through the bus, view models live beside their
+query, and templates live in `app/templates/`. Their rows state the contract
+any future filling must honour. The boundaries are enforced mechanically by
+`tests/unit/test_architecture_guard.py` and `scripts/verify_requirements.py`.
+
 Specific prohibitions:
 
-- **A command never returns query data.** It returns an identifier or nothing.
+- **A command never returns query data.** It returns an identifier, a count of
+  what it affected, or nothing.
   If a screen needs data after a write, the controller dispatches a query next.
 - **A query never writes.** No `INSERT`, `UPDATE`, `DELETE`, no `session.commit()`.
 - **The domain layer must be unit-testable with no Flask app context.** If a
@@ -102,6 +109,11 @@ measured at:
 |---|---|---|
 | `qwen2.5:3b-instruct` | 16.2 s | 11.3 s |
 | `qwen2.5:7b-instruct` | ~2x the above | ~2x the above |
+
+Re-measured on 2026-09-24 with the tool-using loop in place: a JSON-only
+explanation call took 31 s on a loaded machine, a warm tool-enabled turn 36 to
+43 s, and a cold one 110 to 145 s (model load). `docs/AGENT.md` §14 holds the
+full table. `AGENT_MAX_REASONING_STEPS=4` is the recommended demo setting.
 
 This has a direct design consequence that must be respected:
 

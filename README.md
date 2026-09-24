@@ -9,6 +9,10 @@ Built for *Software Engineering in the AI Era*. The specifications that drive
 the code live in [`docs/`](docs/) — start with
 [`docs/PRD.md`](docs/PRD.md) and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
+**Presenting it?** [`docs/DEMO.md`](docs/DEMO.md) is the runbook: the nine demo
+scenarios with the exact clicks, which account to use, what to point at, and
+the honest list of known limitations.
+
 ---
 
 ## Important: the virtual environment lives outside this folder
@@ -24,7 +28,7 @@ each run (`OSError: [Errno 22]`, then `AttributeError: Meta`, and so on). The
 same test suite that fails inside OneDrive passes reliably from a venv kept
 outside it.
 
-Everywhere the documentation says `.venv/Scripts/python.exe`, use:
+Everywhere the documentation shows `<venv>\Scripts\python.exe`, use:
 
 ```
 C:\Users\libbyb\venvs\petmatch\Scripts\python.exe
@@ -41,65 +45,145 @@ C:\Users\libbyb\venvs\petmatch\Scripts\python.exe -m pip install -r requirements
 
 ## Running it
 
-Set up `.env` first by copying `.env.example` and filling in the values.
+Copy `.env.example` to `.env` and fill in the values first. Every secret lives
+there; none is in the repository.
 
 ```bash
-# 1. verify every external dependency is reachable
-<venv>\Scripts\python.exe scripts\check_environment.py
+set PY=C:\Users\libbyb\venvs\petmatch\Scripts\python.exe
 
-# 2. create the schema and load demo data
-<venv>\Scripts\python.exe scripts\db.py fresh
+# 1. verify every external dependency is reachable
+%PY% scripts\check_environment.py
+
+# 2. create the schema and load demo data   (see the warning below)
+%PY% scripts\db.py fresh
 
 # 3. embed the knowledge base into the vector database
-<venv>\Scripts\python.exe scripts\ingest_knowledge.py
+%PY% scripts\ingest_knowledge.py
 
 # 4. start the web application
-<venv>\Scripts\python.exe run.py            # http://127.0.0.1:5000
+%PY% run.py                        # http://127.0.0.1:5000
 
 # 5. in a second terminal, start the independent agent process
-<venv>\Scripts\python.exe -m agent_service
+%PY% -m agent_service
 ```
 
-Step 2 loads about 157 animals across eleven kinds, 40 adopters and 3 staff,
-and downloads a real photograph for every animal from free public APIs, so a
-first run takes several minutes. Step 3 embeds seventeen curated guides.
+> **Step 2 replaces all data and takes 9–12 minutes.** `db.py fresh` drops
+> every table, recreates it, and loads 157 animals across eleven kinds, 40
+> adopters and 3 staff — downloading a breed-accurate photograph for each
+> animal from free public APIs and pacing itself to stay inside their rate
+> limits. Where a download is not possible it falls back to a committed
+> placeholder, so a fresh clone with no network still satisfies the
+> "every animal has an image" rule.
+>
+> **Never run `db.py seed` over existing data.** `users.email` is unique and a
+> second seed collides part-way through. `fresh` is the only safe reload.
+>
+> Step 3 embeds seventeen curated guides into 104 chunks.
 
-Demo accounts, password `Password123!`:
+`scripts/db.py` takes one command: `check`, `create`, `reset`, `seed`,
+`fresh`, `tables` or `events`. There is no `migrate` — the schema is built
+from the SQLAlchemy metadata, and there is no Alembic directory.
+
+### Recommended agent setting
+
+```
+AGENT_MAX_REASONING_STEPS=4
+```
+
+The default of 8 is a correctness bound. On this machine (CPU-only inference,
+`qwen2.5:3b-instruct`) a tool-enabled turn costs 36–43 seconds warm and up to
+145 seconds cold, so eight turns is several minutes for one analysis. Four is
+ample: with the prerequisite evidence already in the prompt the model usually
+answers on its first or second turn.
+
+### Demo accounts
+
+Password `Password123!`:
 
 | Role | Email |
 |---|---|
 | Staff | `dana@petmatch.org` |
 | Adopter | `maya@example.com` |
 
-## Tests
+Maya arrives with an approved application for Smaug the bearded dragon and
+three other applications closed by the §7.5 cascade, so the approval and
+reopen rules have real data behind them from the first click.
+
+## Tests and quality gates
 
 ```bash
-<venv>\Scripts\python.exe -m pytest tests/ -q          # everything
-<venv>\Scripts\python.exe -m pytest tests/unit -q      # fast, no I/O
-<venv>\Scripts\python.exe -m ruff check .
+%PY% -m pytest tests -q                    # 910 tests, all five suites
+%PY% -m pytest tests/unit -q               # 333, offline, seconds
+%PY% -m pytest -m "unit or api" -q         # the pre-commit loop
+%PY% -m pytest tests/e2e -q                # 49, needs a Playwright browser
+
+%PY% -m ruff check .
+%PY% -m mypy --strict app agent_service mcp_server tests scripts
+%PY% scripts\verify_requirements.py        # 23/23 mandatory requirements
 ```
+
+`mypy --strict` covers `tests` and `scripts` as well as the application: a test
+double whose signature has drifted from the protocol it stands in for passes at
+runtime and proves nothing, and a seeding script that writes the wrong type
+fails nine minutes into a reseed.
+
+`scripts/verify_requirements.py` verifies by **inspecting behaviour** — it
+builds the Flask app and reads its URL map, parses the code with `ast`, and
+calls pure functions directly. It never touches the cloud database or a model.
+
+See [`docs/TESTING.md`](docs/TESTING.md) for the full inventory and what each
+suite proves.
 
 ## Layout
 
 | Path | What is in it |
 |---|---|
-| `app/` | Flask application: controllers, CQRS, domain, event store, repositories |
-| `agent_service/` | The independent agent process: loop, RAG, tools |
+| `app/controllers/` | Six Flask blueprints: home, auth, animals, matches, personal, dashboard |
+| `app/cqrs/` | `base.py` (the bus), `commands/` (18 handlers), `queries/` (19 handlers, and the view models) |
+| `app/domain/` | Matching, application, invitation, profile and animal rules — no framework imports |
+| `app/eventstore/` | `store.py` (append-only) and `projections.py` (replay and rebuild) |
+| `app/infrastructure/` | SQLAlchemy models, engine, session factory |
+| `app/templates/` | Jinja2 views |
+| `agent_service/` | The independent agent process: worker, reason-act loop, RAG, tools |
 | `mcp_server/` | Local MCP tool server, spoken over stdio |
-| `knowledge/` | Curated guides embedded into the vector database |
-| `docs/` | The eleven specification documents |
-| `scripts/` | Database, seeding, ingestion and environment tooling |
+| `knowledge/` | 17 curated guides embedded into the vector database |
+| `docs/` | The eleven specification documents, plus the demo runbook |
+| `scripts/` | Database, seeding, ingestion, environment and verification tooling |
 | `tests/` | unit · integration · api · agent · e2e |
-| `.claude/skills/` | Skills guiding the coding agent |
+| `.claude/skills/` | Five skills guiding the coding agent |
 | `CLAUDE.md` | The five binding rules |
+
+### The screens
+
+| Route | Who | What |
+|---|---|---|
+| `/` | anyone | Landing page with featured animals |
+| `/animals/` | anyone | Structured search: species, size, age band, activity, city, compatibility |
+| `/animals/<id>` | anyone | Details, with the apply form for an adopter |
+| `/search/describe` | anyone | Describe what you want; the agent interprets it off the request path |
+| `/my/profile` | adopter | The profile that drives matching, with the proactive opt-in |
+| `/my/matches` | adopter | Find My Pet: ranked instantly, explained asynchronously |
+| `/my/applications` | adopter | Own applications, with messages, statuses and history links |
+| `/my/invitations` | adopter | Own invitations and the 72-hour countdown |
+| `/my/notifications` | either | The internal inbox |
+| `/animals/manage` | staff | The roster table |
+| `/animals/new`, `/animals/<id>/edit` | staff | List and edit an animal |
+| `/animals/<id>/adopters` | staff | Rank the people who applied, and decide |
+| `/animals/<id>/discover` | staff | Find opted-in adopters who did not apply |
+| `/analyses/<id>` | staff | One analysis in full, with the agent's reasoning trace |
+| `/dashboard` | staff | Operational figures, needs-attention, the agent queue, recent activity |
+| `/history/<type>/<id>` | staff, or the adopter it concerns | The event timeline for one record |
+
+Full contract, including status codes and validation rules, in
+[`docs/API.md`](docs/API.md).
 
 ## Architecture in one paragraph
 
 Three processes. A Flask app in strict MVC with CQRS, writing to a cloud SQL
-Server through an append-only event log. A separate agent process that polls a
-job table, fetches records through MCP tools over stdio, retrieves curated
-knowledge from ChromaDB, and gates web search behind an explicit policy. And
-the MCP tool server itself, spawned as a subprocess.
+Server 2014 through an append-only event log. A separate agent process that
+polls a job table, fetches records through MCP tools over stdio, retrieves
+curated knowledge from ChromaDB, and gates web search behind an explicit
+policy. And the MCP tool server itself, spawned as a subprocess.
 
 **Scores are deterministic Python; the language model only writes the
 explanation.** That is why a score can be justified line by line, why the test

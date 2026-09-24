@@ -1,6 +1,6 @@
 ---
 name: db-management
-description: Connect to, migrate, reset, seed and inspect the PetMatch database. Use whenever working with the Somee.com SQL Server database, running Alembic migrations, loading seed data, or diagnosing connection problems.
+description: Connect to, create, reset, seed and inspect the PetMatch database. Use whenever working with the Somee.com SQL Server database, rebuilding the schema, loading seed data, or diagnosing connection problems.
 ---
 
 # Database Management — PetMatch
@@ -8,22 +8,40 @@ description: Connect to, migrate, reset, seed and inspect the PetMatch database.
 One entry point for every database operation: `scripts/db.py`.
 
 ```bash
-.venv/Scripts/python.exe scripts/db.py <command>
+C:\Users\libbyb\venvs\petmatch\Scripts\python.exe scripts\db.py <command>
 ```
+
+The interpreter is **outside** the project: OneDrive corrupts a virtual
+environment it syncs. Never create a `.venv` inside this directory - see
+README.md.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
 | `check` | Verify connectivity, print server version, table count and write permission |
-| `migrate` | Apply all pending Alembic migrations |
-| `revision -m "msg"` | Autogenerate a new migration from model changes |
-| `downgrade` | Roll back one migration |
-| `reset` | Drop every project table, re-run migrations from scratch |
-| `seed` | Load demo data: animals, adopters, applications, invitations |
-| `fresh` | `reset` + `seed` in one step — the usual "give me a clean demo" command |
-| `tables` | List tables with row counts |
-| `events` | Tail the `domain_events` log (event sourcing inspection) |
+| `create` | Create every table that does not yet exist |
+| `reset` | Drop every project table, then recreate it from the SQLAlchemy metadata |
+| `seed` | Load demo data: animals, adopters, applications, invitations, events |
+| `fresh` | `reset` + `seed` in one step - the only safe way to reload |
+| `tables` | List project tables with row counts |
+| `events` | Show the most recent domain events (event-sourcing inspection) |
+
+**There is no `migrate`, `revision` or `downgrade`, and there is no Alembic
+directory.** The schema is created from `Base.metadata`. One developer, one
+database and a rebuild that takes a minute make a migration history a cost
+with no payer; `requirements.txt` still pins Alembic, and that pin is
+vestigial.
+
+**Two warnings that matter more than the table.**
+
+- `fresh` **replaces all data** and takes **9-12 minutes**, because seeding
+  downloads a breed-accurate photograph for each of 157 animals from free
+  public APIs and paces itself inside their rate limits. Never run it during
+  a demonstration.
+- Never run `seed` over existing data. `users.email` is unique, so a second
+  seed collides part-way through and leaves a half-loaded database. `fresh`
+  is the only safe reload.
 
 ## Target database
 
@@ -68,9 +86,20 @@ Set `LOCAL_DATABASE_URL` in `.env` to work offline:
 LOCAL_DATABASE_URL=sqlite:///petmatch_dev.db
 ```
 
-When present it overrides the cloud database. Unit tests always use SQLite
-in-memory; integration tests run against the real Somee database so the SQL
-Server dialect is genuinely exercised.
+When present it overrides the cloud database.
+
+**Be accurate about what runs where.** Unit tests touch no database at all.
+Integration and API tests build an **in-memory SQLite** database per test. The
+E2E suite starts the server against a **seeded SQLite file**, because Somee's
+free tier throttles under a browser page's request fan-out. What genuinely
+exercises the SQL Server 2014 dialect is `scripts/check_environment.py`,
+`scripts/db.py` and the running application.
+
+That trade-off has one sharp edge worth remembering when writing validation:
+**SQLite accepts a string longer than its column; SQL Server truncates or
+errors.** Length rules therefore have to be enforced in Python, and
+`tests/unit/test_seed_data.py` reads the column widths off the ORM models to
+check them.
 
 ## Troubleshooting
 
@@ -81,5 +110,5 @@ Somee control panel once to wake it.
 **"Login failed for user"** — confirm `.env` matches the Somee panel exactly. The
 password is case-sensitive.
 
-**Migration hangs** — an open transaction from a crashed run holds a schema lock.
-Reconnect and retry; the shared host clears it within a minute.
+**A reset or seed hangs** - an open transaction from a crashed run holds a
+schema lock. Reconnect and retry; the shared host clears it within a minute.

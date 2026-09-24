@@ -330,12 +330,18 @@ implemented as an explicit gate function, `decide_whether_to_search`, so that
 
 The gate opens only when **all** hold:
 
-1. RAG retrieval returned nothing above the relevance threshold, **or** the
-   question concerns current or external facts the knowledge base cannot
-   cover.
-2. The question is **not** about the application's own adopter or animal
+1. The question is **not** about the application's own adopter or animal
    records — those come from MCP tools.
-3. The agent has not already searched for this task.
+2. The agent has not already searched for this task.
+3. **RAG retrieval returned nothing above the relevance threshold.**
+
+Rule 3 is the one worth being exact about: **RAG sufficiency wins.** If the
+curated knowledge base answered, the gate stays shut — *even for a question
+about current or external facts*. A question being external-sounding widens the
+gate only when retrieval came back empty; it never overrides an answer the
+project curated. That is spec §13's "RAG first, web second" read literally, and
+it is what CLAUDE.md R4 says: "Web search runs only when the curated knowledge
+base cannot answer."
 
 Both flags are live, which is what makes the policy load-bearing:
 `relevant_knowledge_found` is whether this task holds any retrieved passage at

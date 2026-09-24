@@ -148,10 +148,16 @@ mocking it would leave the one thing the requirement is about untested.
 | `test_unknown_identifier_returns_structured_not_found` | A missing record yields `found: false`, not a protocol error. |
 | `test_tools_expose_no_mutating_operation` | No tool name describes a write. |
 
-These tests are marked `slow`: each starts a process that opens the cloud
-database, so they need the network. The spawn is retried once, because under
-load it has been seen to fail before the session is ready — a second failure
-is still raised, since a broken transport is what these tests exist to catch.
+These tests are marked `slow`, because each starts a real subprocess. They run
+against a **temporary SQLite database the test seeds itself**, not against
+Somee — which makes them deterministic and, more importantly, means they
+**never skip**. They used to open the cloud database and skip when it held no
+seed data, and a transport test that quietly skips is exactly the one you
+cannot afford to lose: the transport is the whole graded requirement.
+
+The spawn is retried once, because under load it has been seen to fail before
+the session is ready — a second failure is still raised, since a broken
+transport is what these tests exist to catch.
 
 `tests/agent/test_reasoning_loop.py` covers the client side without a
 subprocess: that the manifest carries both tool names with non-empty
