@@ -8,25 +8,46 @@
 
     <form method="post" action="{{ url_for('auth.login') }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+      {#- Both fields are required, so saying it once is clearer than an
+          asterisk on every one of them (docs/UX.md section 9). -#}
+      <p class="required-note">Both fields are required.</p>
+
       <div class="field">
         <label class="field__label" for="email">Email</label>
         <input class="input" type="email" id="email" name="email" value="{{ email or '' }}"
                required autocomplete="email" autofocus>
       </div>
+
       <div class="field">
         <label class="field__label" for="password">Password</label>
-        <input class="input" type="password" id="password" name="password"
-               required autocomplete="current-password">
+        <div class="password-field">
+          <input class="input" type="password" id="password" name="password"
+                 required autocomplete="current-password">
+          {#- `hidden` until petmatch.js unhides it: with JavaScript blocked
+              there is no control at all, rather than one that does nothing. -#}
+          <button type="button" class="password-toggle" data-toggle-password="password"
+                  aria-pressed="false" hidden>
+            <svg class="icon" aria-hidden="true"><use href="#icon-eye"></use></svg>
+            <span class="sr-only">Show password</span>
+          </button>
+        </div>
       </div>
+
       <button class="btn btn--primary btn--block" type="submit">Sign in</button>
     </form>
 
-    <div class="demo-hint">
-      <strong>Demo accounts</strong><br>
-      Staff: <code>dana@petmatch.org</code><br>
-      Adopter: <code>maya@example.com</code><br>
-      Password: <code>Password123!</code>
-    </div>
+    {#- Real credentials, printed on a page anybody can reach. They are here
+        for the demonstration and they are gone the moment FLASK_ENV is
+        anything but development. -#}
+    {% if config.PETMATCH.is_development %}
+      <div class="demo-hint">
+        <strong>Demo accounts</strong> <span class="tag tag--info">Development build</span><br>
+        Staff: <code>dana@petmatch.org</code><br>
+        Adopter: <code>maya@example.com</code><br>
+        Password: <code>Password123!</code>
+      </div>
+    {% endif %}
 
     <div class="auth-card__footer">
       New here? <a href="{{ url_for('auth.register') }}">Create an account</a>

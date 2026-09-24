@@ -7,6 +7,40 @@
 {% macro value_of(field, default='') %}{{ current[field] if current and current[field] is not none else default }}{% endmacro %}
 {% macro checked_if(field) %}{% if current and current[field] %}checked{% endif %}{% endmacro %}
 
+{#- What each field is called in the error summary. The summary links to the
+    control, so the wording here has to be the wording beside it. -#}
+{% set field_labels = {
+     'home_type': 'What kind of home do you live in?',
+     'yard_size_sqm': 'Yard size in square metres',
+     'city': 'Which city do you live in?',
+     'youngest_child_age': 'Age of your youngest child',
+     'other_animals_description': 'Tell us about your other pets',
+     'experience_level': 'How much experience do you have with animals?',
+     'activity_level': 'How active is your household?',
+     'daily_hours_available': 'Hours a day you can give an animal',
+     'preferred_species': 'Species you are interested in',
+     'preferred_age_range': 'What age would suit you?',
+     'preferred_size': 'What size would suit you?',
+} %}
+
+{#- The describedby/invalid pair for one control. Both have to be conditional:
+    pointing `aria-describedby` at an element that is not on the page is
+    itself an accessibility failure, so an id is only referenced when its
+    element is rendered. -#}
+{%- macro described_by(field, has_hint=true) -%}
+  {%- set referenced = [] -%}
+  {%- if has_hint %}{% set _ = referenced.append(field ~ '-hint') %}{% endif -%}
+  {%- if errors and errors[field] %}{% set _ = referenced.append(field ~ '-error') %}{% endif -%}
+  {%- if referenced %} aria-describedby="{{ referenced|join(' ') }}"{% endif -%}
+  {%- if errors and errors[field] %} aria-invalid="true"{% endif -%}
+{%- endmacro -%}
+
+{%- macro error_for(field) -%}
+  {%- if errors and errors[field] -%}
+    <span class="field__error" id="{{ field }}-error">{{ errors[field] }}</span>
+  {%- endif -%}
+{%- endmacro -%}
+
 {% block content %}
 <div class="section-heading">
   <div>
@@ -19,19 +53,34 @@
 </div>
 
 {% if errors %}
-  <div class="alert alert--error" style="margin-bottom: var(--space-5)">
-    Please fix {{ errors|length }} {{ 'problem' if errors|length == 1 else 'problems' }} below.
+  {#- Not "please fix 3 problems below": a count leaves the reader to go and
+      find them. Every message is here, and every one is a link to the
+      control that produced it. -#}
+  <div class="error-summary form-narrow" role="alert">
+    <p class="error-summary__title">
+      <svg class="icon" aria-hidden="true"><use href="#icon-alert"></use></svg>
+      {{ errors|length }} {{ 'answer needs' if errors|length == 1 else 'answers need' }} another look
+    </p>
+    <ul>
+      {% for field, message in errors.items() %}
+        <li><a href="#{{ field }}">{{ field_labels.get(field, field|humanize) }} — {{ message }}</a></li>
+      {% endfor %}
+    </ul>
   </div>
 {% endif %}
 
-<form method="post" action="{{ url_for('personal.my_profile') }}" class="card card--padded">
+<form method="post" action="{{ url_for('personal.my_profile') }}" class="card card--padded form-narrow">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
-  <h2 style="font-size:1.1rem">Your home</h2>
+  <p class="required-note"><span class="required-mark">*</span> Required. Everything else is optional.</p>
 
-  <div class="field">
-    <label class="field__label" for="home_type">What kind of home do you live in?</label>
-    <select class="select" id="home_type" name="home_type" required>
+  <h2 class="form-section">Your home</h2>
+
+  <div class="field field--medium field--wide-text">
+    <label class="field__label" for="home_type">
+      What kind of home do you live in? <span class="required-mark" aria-hidden="true">*</span>
+    </label>
+    <select class="select" id="home_type" name="home_type" required {{ described_by('home_type', false) }}>
       <option value="">Please choose…</option>
       {% for option in options.home_type %}
         <option value="{{ option }}" {% if current and current.home_type == option %}selected{% endif %}>
@@ -39,71 +88,95 @@
         </option>
       {% endfor %}
     </select>
-    {% if errors.home_type %}<span class="field__error">{{ errors.home_type }}</span>{% endif %}
+    {{ error_for('home_type') }}
   </div>
 
   <div class="field">
     <label class="checkbox">
-      <input type="checkbox" name="has_yard" value="1" {{ checked_if('has_yard') }}>
+      <input type="checkbox" id="has_yard" name="has_yard" value="1" {{ checked_if('has_yard') }}
+             aria-describedby="has_yard-hint">
       I have a secure garden or yard
     </label>
-    <span class="field__hint">A garden raises the size of animal a home can comfortably take.</span>
+    <span class="field__hint" id="has_yard-hint">
+      A garden raises the size of animal a home can comfortably take.
+    </span>
   </div>
 
-  <div class="field">
-    <label class="field__label" for="yard_size_sqm">Yard size in square metres (optional)</label>
-    <input class="input" type="number" min="0" id="yard_size_sqm" name="yard_size_sqm"
-           value="{{ value_of('yard_size_sqm') }}">
-    {% if errors.yard_size_sqm %}<span class="field__error">{{ errors.yard_size_sqm }}</span>{% endif %}
+  {#- Revealed by the box above. Without JavaScript it is simply always
+      visible, which is what this form did before (docs/UX.md section 3). -#}
+  <div data-shown-by="has_yard">
+    <div class="field field--short">
+      <label class="field__label" for="yard_size_sqm">Yard size in square metres</label>
+      <input class="input" type="number" min="0" id="yard_size_sqm" name="yard_size_sqm"
+             value="{{ value_of('yard_size_sqm') }}" {{ described_by('yard_size_sqm', false) }}>
+      {{ error_for('yard_size_sqm') }}
+    </div>
   </div>
 
-  <div class="field">
-    <label class="field__label" for="city">Which city do you live in?</label>
-    <input class="input" type="text" id="city" name="city" required value="{{ value_of('city') }}">
-    {% if errors.city %}<span class="field__error">{{ errors.city }}</span>{% endif %}
+  <div class="field field--medium">
+    <label class="field__label" for="city">
+      Which city do you live in? <span class="required-mark" aria-hidden="true">*</span>
+    </label>
+    <input class="input" type="text" id="city" name="city" required
+           value="{{ value_of('city') }}" {{ described_by('city', true) }}>
+    <span class="field__hint" id="city-hint">Distance from an animal's shelter is part of the score.</span>
+    {{ error_for('city') }}
   </div>
 
-  <h2 style="font-size:1.1rem; margin-top: var(--space-6)">Your household</h2>
+  <h2 class="form-section">Your household</h2>
 
   <div class="field">
     <label class="checkbox">
-      <input type="checkbox" name="household_has_children" value="1" {{ checked_if('household_has_children') }}>
+      <input type="checkbox" id="household_has_children" name="household_has_children" value="1"
+             {{ checked_if('household_has_children') }}>
       Children live with me
     </label>
   </div>
 
-  <div class="field">
-    <label class="field__label" for="youngest_child_age">Age of your youngest child</label>
-    <input class="input" type="number" min="0" max="18" id="youngest_child_age"
-           name="youngest_child_age" value="{{ value_of('youngest_child_age') }}">
-    <span class="field__hint">
-      Required if children live with you. Some animals are not suited to young children,
-      and the age decides whether that rules them out.
-    </span>
-    {% if errors.youngest_child_age %}<span class="field__error">{{ errors.youngest_child_age }}</span>{% endif %}
+  <div data-shown-by="household_has_children">
+    <div class="field field--short field--wide-text">
+      <label class="field__label" for="youngest_child_age">Age of your youngest child</label>
+      <input class="input" type="number" min="0" max="18" id="youngest_child_age"
+             name="youngest_child_age" value="{{ value_of('youngest_child_age') }}"
+             {{ described_by('youngest_child_age', true) }}>
+      <span class="field__hint" id="youngest_child_age-hint">
+        Some animals are not suited to young children, and the age decides
+        whether that rules them out.
+      </span>
+      {{ error_for('youngest_child_age') }}
+    </div>
   </div>
 
   <div class="field">
     <label class="checkbox">
-      <input type="checkbox" name="has_other_animals" value="1" {{ checked_if('has_other_animals') }}>
+      <input type="checkbox" id="has_other_animals" name="has_other_animals" value="1"
+             {{ checked_if('has_other_animals') }}>
       I already have pets at home
     </label>
   </div>
 
-  <div class="field">
-    <label class="field__label" for="other_animals_description">Tell us about them (optional)</label>
-    <textarea class="textarea" id="other_animals_description" name="other_animals_description"
-              maxlength="500">{{ value_of('other_animals_description') }}</textarea>
-    {% if errors.other_animals_description %}
-      <span class="field__error">{{ errors.other_animals_description }}</span>
-    {% endif %}
+  <div data-shown-by="has_other_animals">
+    <div class="field">
+      <label class="field__label" for="other_animals_description">Tell us about them</label>
+      <textarea class="textarea" id="other_animals_description" name="other_animals_description"
+                maxlength="500" data-counter="other_animals_description-count"
+                {{ described_by('other_animals_description', true) }}>{{ value_of('other_animals_description') }}</textarea>
+      <span class="field__hint" id="other_animals_description-hint">
+        Species, sizes and how they usually take to a newcomer.
+      </span>
+      <p class="char-counter" id="other_animals_description-count" hidden></p>
+      {{ error_for('other_animals_description') }}
+    </div>
   </div>
 
-  <h2 style="font-size:1.1rem; margin-top: var(--space-6)">You and your routine</h2>
+  <h2 class="form-section">You and your routine</h2>
 
-  <div class="field">
-    <label class="field__label" for="experience_level">How much experience do you have with animals?</label>
-    <select class="select" id="experience_level" name="experience_level" required>
+  <div class="field field--medium field--wide-text">
+    <label class="field__label" for="experience_level">
+      How much experience do you have with animals? <span class="required-mark" aria-hidden="true">*</span>
+    </label>
+    <select class="select" id="experience_level" name="experience_level" required
+            {{ described_by('experience_level', false) }}>
       <option value="">Please choose…</option>
       {% for option in options.experience_level %}
         <option value="{{ option }}" {% if current and current.experience_level == option %}selected{% endif %}>
@@ -111,12 +184,15 @@
         </option>
       {% endfor %}
     </select>
-    {% if errors.experience_level %}<span class="field__error">{{ errors.experience_level }}</span>{% endif %}
+    {{ error_for('experience_level') }}
   </div>
 
-  <div class="field">
-    <label class="field__label" for="activity_level">How active is your household?</label>
-    <select class="select" id="activity_level" name="activity_level" required>
+  <div class="field field--medium field--wide-text">
+    <label class="field__label" for="activity_level">
+      How active is your household? <span class="required-mark" aria-hidden="true">*</span>
+    </label>
+    <select class="select" id="activity_level" name="activity_level" required
+            {{ described_by('activity_level', false) }}>
       <option value="">Please choose…</option>
       {% for option in options.activity_level %}
         <option value="{{ option }}" {% if current and current.activity_level == option %}selected{% endif %}>
@@ -124,27 +200,30 @@
         </option>
       {% endfor %}
     </select>
-    {% if errors.activity_level %}<span class="field__error">{{ errors.activity_level }}</span>{% endif %}
+    {{ error_for('activity_level') }}
   </div>
 
-  <div class="field">
-    <label class="field__label" for="daily_hours_available">Hours a day you can give an animal</label>
+  <div class="field field--short field--wide-text">
+    <label class="field__label" for="daily_hours_available">
+      Hours a day you can give an animal <span class="required-mark" aria-hidden="true">*</span>
+    </label>
     <input class="input" type="number" step="0.5" min="0" max="24" required
            id="daily_hours_available" name="daily_hours_available"
-           value="{{ value_of('daily_hours_available') }}">
-    <span class="field__hint">
+           value="{{ value_of('daily_hours_available') }}"
+           {{ described_by('daily_hours_available', true) }}>
+    <span class="field__hint" id="daily_hours_available-hint">
       Walks, training, play and handling — not time merely in the same room.
       A high-energy dog needs around four hours; a cat or rabbit around one.
     </span>
-    {% if errors.daily_hours_available %}
-      <span class="field__error">{{ errors.daily_hours_available }}</span>
-    {% endif %}
+    {{ error_for('daily_hours_available') }}
   </div>
 
-  <h2 style="font-size:1.1rem; margin-top: var(--space-6)">What you are hoping for</h2>
+  <h2 class="form-section">What you are hoping for</h2>
 
-  <div class="field">
-    <span class="field__label">Species you are interested in (optional)</span>
+  {#- A fieldset and a legend, not a div and a span: the legend is what ties
+      eleven checkboxes to the one question they answer. -#}
+  <fieldset class="field" id="preferred_species" {{ described_by('preferred_species', true) }}>
+    <legend class="field__label">Species you are interested in</legend>
     <div class="checkbox-grid">
       {% for option in options.species %}
         <label class="checkbox">
@@ -154,15 +233,14 @@
         </label>
       {% endfor %}
     </div>
-    <span class="field__hint">Leave all unticked if you are open to anything.</span>
-    {% if errors.preferred_species %}<span class="field__error">{{ errors.preferred_species }}</span>{% endif %}
-  </div>
+    <span class="field__hint" id="preferred_species-hint">Leave all unticked if you are open to anything.</span>
+    {{ error_for('preferred_species') }}
+  </fieldset>
 
-  <div class="field">
-    <label class="field__label" for="preferred_age_range">
-      What age would suit you? <span class="field__hint">optional</span>
-    </label>
-    <select class="select" id="preferred_age_range" name="preferred_age_range">
+  <div class="field field--medium field--wide-text">
+    <label class="field__label" for="preferred_age_range">What age would suit you?</label>
+    <select class="select" id="preferred_age_range" name="preferred_age_range"
+            {{ described_by('preferred_age_range', true) }}>
       <option value="">No preference</option>
       {% for option in options.preferred_age_range %}
         <option value="{{ option }}"
@@ -171,18 +249,17 @@
         </option>
       {% endfor %}
     </select>
-    <span class="field__hint">
+    <span class="field__hint" id="preferred_age_range-hint">
       A preference, not a filter — an animal outside this range is ranked
       lower rather than hidden.
     </span>
-    {% if errors.preferred_age_range %}<span class="field__error">{{ errors.preferred_age_range }}</span>{% endif %}
+    {{ error_for('preferred_age_range') }}
   </div>
 
-  <div class="field">
-    <label class="field__label" for="preferred_size">
-      What size would suit you? <span class="field__hint">optional</span>
-    </label>
-    <select class="select" id="preferred_size" name="preferred_size">
+  <div class="field field--medium">
+    <label class="field__label" for="preferred_size">What size would suit you?</label>
+    <select class="select" id="preferred_size" name="preferred_size"
+            {{ described_by('preferred_size', false) }}>
       <option value="">No preference</option>
       {% for option in options.preferred_size %}
         <option value="{{ option }}"
@@ -191,25 +268,26 @@
         </option>
       {% endfor %}
     </select>
-    {% if errors.preferred_size %}<span class="field__error">{{ errors.preferred_size }}</span>{% endif %}
+    {{ error_for('preferred_size') }}
   </div>
 
   <div class="field opt-in">
     <label class="checkbox">
-      <input type="checkbox" name="open_to_proactive_suggestions" value="1"
-             {{ checked_if('open_to_proactive_suggestions') }}>
+      <input type="checkbox" id="open_to_proactive_suggestions" name="open_to_proactive_suggestions"
+             value="1" {{ checked_if('open_to_proactive_suggestions') }}
+             aria-describedby="open_to_proactive_suggestions-hint">
       <strong>Staff may contact me about animals I have not applied for</strong>
     </label>
-    <span class="field__hint">
+    <span class="field__hint" id="open_to_proactive_suggestions-hint">
       Entirely optional, and off unless you tick it. With it on, staff can invite you
       to consider an animal they think suits your home. You always have 72 hours to
       say yes or no, and saying yes only starts an application.
     </span>
   </div>
 
-  <div style="display:flex; gap: var(--space-3); margin-top: var(--space-5); flex-wrap: wrap">
+  <div class="form-actions">
     <button class="btn btn--primary" type="submit">Save profile</button>
-    <a class="btn btn--ghost" href="{{ url_for('animals.search') }}">Cancel</a>
+    <a class="btn btn--ghost" href="{{ url_for('matches.find_my_pet') }}">Cancel</a>
   </div>
 </form>
 {% endblock %}

@@ -199,65 +199,188 @@ exist.
 ## 4. Screens and permissions
 
 Permissions are enforced on the **server**, not by hiding links. Blueprint
-§12 is explicit that hiding buttons is not sufficient. Every row marked Staff
-below is protected by `@require_staff()`, which returns 403 to an adopter
-even on a direct POST.
+§12 is explicit that hiding buttons is not sufficient, so every row below was
+measured by requesting the route in all three states rather than read off the
+decorators.
+
+**An anonymous visitor is redirected, not refused.** `@require_sign_in` wraps
+`@require_staff()` / `@require_adopter()`, and it is the outer decorator, so a
+signed-out request never reaches the role check: it gets `302 → /login` and,
+after signing in, `?next=` returns it to where it was going. A 401 page would
+be a dead end for somebody who simply has not signed in yet. Getting the role
+wrong *is* a refusal: a signed-in account of the wrong kind gets **403**, on a
+direct POST as much as on a page load.
 
 | Screen | Route | Anonymous | Adopter | Staff |
 |---|---|---|---|---|
 | Home | `/` | yes | yes | yes |
-| Register | `/register` | yes | — | — |
-| Sign in | `/login` | yes | — | — |
+| Register | `/register` | yes | yes | yes |
+| Sign in | `/login` | yes | yes | yes |
 | Browse animals | `/animals/` | yes | yes | yes |
 | Animal details | `/animals/<id>` | yes | yes | yes + applicant count |
-| Animal management | `/animals/manage` | **403** | **403** | yes |
-| Adopter profile | `/my/profile` | **401** | own only | — |
-| My applications | `/my/applications` | **401** | own only | — |
-| My invitations | `/my/invitations` | **401** | own only | — |
-| Find My Pet | `/my/matches` | **401** | yes | — |
-| Find My Adopter | `/animals/<id>/adopters` | **403** | **403** | yes |
-| Find More Adopters | `/animals/<id>/discover` | **403** | **403** | yes |
-| Staff dashboard | `/dashboard` | **403** | **403** | yes |
+| Describe what you want | `/search/describe` | yes | yes | yes |
+| Describe result | `/search/describe/<job_id>` | yes | yes | yes |
+| Animal management | `/animals/manage` | → sign in | **403** | yes |
+| List a new animal | `/animals/new` | → sign in | **403** | yes |
+| Edit an animal | `/animals/<id>/edit` | → sign in | **403** | yes |
+| Change availability | `POST /animals/<id>/status` | → sign in | **403** | yes |
+| Adopter profile | `/my/profile` | → sign in | own only | **403** |
+| My applications | `/my/applications` | → sign in | own only | **403** |
+| My invitations | `/my/invitations` | → sign in | own only | **403** |
+| Notification inbox | `/my/notifications` | → sign in | own only | own only |
+| Find My Pet | `/my/matches` | → sign in | yes | **403** |
+| Find My Adopter | `/animals/<id>/adopters` | → sign in | **403** | yes |
+| Find More Adopters | `/animals/<id>/discover` | → sign in | **403** | yes |
+| Send an invitation | `POST /animals/<id>/invite` | → sign in | **403** | yes |
+| Decide an application | `POST /applications/<id>/decide` | → sign in | **403** | yes |
+| Full match analysis | `/analyses/<id>` | → sign in | **403** | yes |
+| Event history | `/history/<type>/<id>` | → sign in | own records only | yes |
+| Analysis status (JSON) | `/api/analysis-status` | → sign in | `?scope=my-matches` | either scope |
+| Staff dashboard | `/dashboard` | → sign in | **403** | yes |
 
-An adopter can only ever see **their own** profile, applications and
-invitations. Ownership is checked in the query handler, not only in the URL,
-so changing an id in the address bar does not expose another person's data.
+Three rows are worth spelling out, because the rule is not "staff see more":
+
+- **The inbox is not adopter-only.** Staff receive messages too, and an inbox
+  one of the two audiences cannot read is worse than no inbox.
+- **History is not staff-only.** Spec §7.5 is written from the adopter's point
+  of view — an application closed because another was approved, and reopened
+  when that approval was reversed. Which records count as theirs is decided in
+  the query handler, so an adopter who changes an id in the address bar gets
+  403 rather than somebody else's timeline.
+- **`/api/analysis-status` takes its identity from the session.** The
+  adopter scope has no parameter that would let one adopter ask about another;
+  the `animal_id` scope is staff-only and answers with counts, never names or
+  scores.
+
+An adopter can only ever see **their own** profile, applications, invitations
+and inbox. Ownership is checked in the query handler, not only in the URL.
 
 ## 5. Navigation
 
-The top bar adapts to role:
+The top bar adapts to role. It carries, in this order: the brand, the
+navigation, the account, and the light/dark/system control.
 
-- **Anonymous** — Browse animals · Sign in · Join
-- **Adopter** — Browse · My matches · My applications · My invitations · avatar
-- **Staff** — Browse · Manage · Dashboard · avatar
+- **Anonymous** — Browse animals · Sign in · **Join**
+- **Adopter** — Browse animals · My matches · Applications · Invitations ·
+  Profile · avatar · Sign out
+- **Staff** — Browse animals · Dashboard · Manage · avatar · Sign out
+
+One `navlink()` macro renders every link, so `aria-current="page"` cannot be
+forgotten on one of them, and the word "animals" in "Browse animals" is the
+first thing dropped at 640px (see §7).
 
 The avatar shows initials derived from the user's name. Sign-out is a POST
 form, not a link, so a third-party page cannot sign the user out by embedding
 an image.
 
+**The inbox has no bell yet.** `/my/notifications` is reachable by URL and
+from the links inside the messages themselves, and `unread_notification_count`
+is already injected into every template by a context processor — but the top
+bar does not yet render a bell with that count, so an unread message is only
+discovered by going to look for it. The badge component (`.badge`) exists and
+is in use on the invitations screen; the bar is one line of markup away.
+
 ## 6. Key screens
 
 ### Home
-Hero with a one-line proposition and a live count of available animals,
-followed by six featured animals. Anonymous visitors also get a "Create a
-profile" call to action.
+A two-column hero: on the left a one-line proposition, a search field that
+posts straight to the browse screen, two calls to action and a live count of
+available animals; on the right three fanned photographs of real animals.
+Below it, six featured animals in a three-column grid. Anonymous visitors also
+get a "Create a profile" call to action. Below 860px the fan collapses to a
+single photograph behind the copy, with a near-opaque scrim so the text keeps
+its contrast whatever the photograph happens to be.
 
 ### Browse animals (blueprint 4.1, 4.2)
 Free-text search over name, breed and description, plus filters for species,
-size, energy level and the two compatibility flags. Twelve results a page.
-Every card links through to the details view. The empty state explains how to
-widen the search rather than just saying "no results".
+size, **age band**, energy level and the two compatibility flags. The search
+button is the only primary action on the screen; the filter row's "Apply
+filters" is deliberately secondary, because the two do almost the same thing
+and only one of them should look like the way forward.
+
+Every applied filter appears as a **removable chip** above the results, each
+one a link to the same search minus that one parameter, followed by "Clear
+all". Without them the screen said "32 animals match your search" and offered
+no evidence of what had been searched for. The count sentence knows the
+difference: with no filters at all it reads "40 animals looking for a home".
+
+Twenty-four results a page. Every card links through to the details view. The
+empty state explains how to widen the search rather than just saying "no
+results", and offers the describe-it-instead route as a second way in.
 
 ### Animal details (blueprint 4.2)
-Two-column on desktop, stacked on mobile. Large photograph, status tags, a
-six-field specification grid, and a "Living with <name>" panel making
-child and other-animal compatibility explicit. Special needs appear as a
-warning callout rather than buried in body text.
+Two columns on desktop, stacked below 860px.
+
+The left column is the photograph **and the six-field specification grid
+underneath it**. That is not decoration: with the photograph alone, the column
+ended about 300px above the one beside it, and the page finished with a band
+of empty cream.
+
+The right column is the status tags, the name, the species line, the
+description, and then one panel per decision:
+
+- **Living with `<name>`** makes the two compatibility facts explicit. Neither
+  is painted as a fault any more. "Good with children" and "Good with other
+  animals" are successes; the negatives are a caution ("Better suited to a home
+  without young children") and a plain statement ("Happiest as the only pet in
+  the home"), because an animal who wants a quiet house is not defective.
+- **Special needs** appear as a warning callout with an alert icon, inside that
+  panel rather than buried in body text.
+- **Apply to adopt** — for a signed-in adopter, a message field with a live
+  character counter against its 2000-character cap. An anonymous visitor gets
+  the same panel explaining that applications are reviewed by a person, and a
+  way to sign in.
+- **Staff actions** and **Availability** are two panels, not one. Changing
+  availability is what removes an animal from search and from matching, so it
+  gets its own heading, a sentence saying exactly that, and a confirmation
+  before it submits.
+
+A back link with a chevron returns to the browse screen.
 
 ### Animal management (blueprint 4.3)
-The tabular screen. Thumbnail, name, breed, species, age, size, temperament,
-location and a colour-coded status tag per row, with status and species
-filters above.
+The tabular screen: thumbnail, name with breed underneath, species, age, size,
+temperament, location and a colour-coded status tag per row. Filters for
+status, species and age band, plus free text over name, breed and city — with
+the same chip row and paginator as the browse screen, because a staff member
+and an adopter should not have to learn two filter bars.
+
+Forty rows a page, scrolling under a sticky header inside `.table-wrap--tall`.
+Below 760px each row becomes a card (`.table--cards`). Every row offers the
+same four actions in the same order and the same two weights: **Open** and
+**Edit** change or open the record and are secondary; **Rank** and **History**
+only look at it and are ghosts. They sit in a fixed two-by-two block, because
+four buttons of four different widths wrapped three-and-one and made every row
+look like a different set of actions.
+
+### Animal create and edit (spec §20)
+One form for both, at `/animals/new` and `/animals/<id>/edit`, grouped into
+five sections: who they are, what they need, living with others, photographs,
+description. Photographs are one input per address rather than one textarea of
+lines — the textarea needed JavaScript to copy its contents into hidden fields
+at submit time, which meant listing an animal did not work at all with
+JavaScript blocked.
+
+### Adopter profile (spec §5.1)
+A 680px form in four sections. Three fields are revealed by the answer above
+them (`data-shown-by`): yard size by "I have a secure garden", the youngest
+child's age by "children live with me", the description of other pets by "I
+already have pets". Numbers get a 160px control, a city 340px, and the labels
+and hints keep the form's own measure. The proactive-suggestions opt-in is set
+apart in its own callout, because it is the one field that changes who may
+contact the adopter.
+
+### My invitations
+Open invitations first, under a heading with a count badge; answered and
+expired ones below it. Each open invitation carries its own deadline as a
+countdown tag rather than one sentence at the top of the page that applies to
+all of them and to none in particular. Declining is a `.btn--danger-ghost`
+with a confirmation, because it cannot be undone.
+
+### Notification inbox (spec §23)
+Messages newest first, grouped into the last 24 hours and earlier, each with an
+icon for its kind, its type, its age in words, and a small ghost button to open
+it or mark it read. An unread row carries a left border and a heavier title as
+well as a tint, and says "(unread)" in text for anyone who gets none of those.
 
 ### Staff dashboard (blueprint 4.4)
 Stat tiles plus a **Needs Attention** section that links each figure to the
@@ -366,28 +489,100 @@ nobody should trust.
 ### Known remaining violations
 
 Honesty is cheaper than a document that disagrees with the code (rule R5).
-After this pass, axe reports nothing on home, browse, sign in, register,
-describe, the 404 page, the adopter profile and the dashboard, in both
-schemes. Four findings remain, all in per-screen markup rather than the design
-system, and all queued for the per-screen pass:
+
+The per-screen pass cleared the findings on the screens it covered: axe
+reports **nothing at any impact** on home, browse (including a filtered and an
+empty result set), sign in, register, describe, the 404 page, animal details in
+all three roles, animal management, the animal create and edit form, the
+adopter profile with and without validation errors, the invitations screen and
+the notification inbox — in both colour schemes, measured on 2026-09-24.
+
+Two findings remain, both in screens outside that pass:
 
 | Rule | Where | Fix |
 |---|---|---|
-| `heading-order` | `animals/details.html`, `personal/invitations.html`, `matches/find_my_pet.html` | Those screens jump `h1` → `h3` |
-| `empty-table-header` | `animals/manage.html`, `personal/applications.html` | The thumbnail and action columns need `.sr-only` header text |
+| `heading-order` | `matches/find_my_pet.html` | The screen jumps `h1` → `h3` |
+| `empty-table-header` | `personal/applications.html` | The thumbnail and action columns need `.sr-only` header text |
 
 ## 9. Forms (spec §21)
 
-| Form | Screen | Validated |
+| Form | Route | Validated |
 |---|---|---|
-| Registration | `/register` | client + server |
-| Adopter profile | `/my/profile` | client + server |
-| Animal create/edit | `/animals/new`, `/animals/<id>/edit` | client + server |
-| Animal status | animal details, staff | server |
-| Adoption application | animal details | client + server |
-| Invitation response | `/my/invitations` | server |
-| Staff decision | applicant ranking | server |
+| Registration | `POST /register` | client + server |
+| Sign in | `POST /login` | client + server |
+| Adopter profile | `POST /my/profile` | client + server |
+| Animal create | `POST /animals/new` | client + server |
+| Animal edit | `POST /animals/<id>/edit` | client + server |
+| Animal availability | `POST /animals/<id>/status` | server |
+| Adoption application | `POST /my/apply/<animal_id>` | client + server |
+| Withdraw an application | `POST /my/applications/<id>/withdraw` | server |
+| Invitation response | `POST /my/invitations/<id>/respond` | server |
+| Send an invitation | `POST /animals/<id>/invite` | server |
+| Staff decision | `POST /applications/<id>/decide` | server |
+| Mark a message read | `POST /my/notifications/<id>/read`, `/read-all` | server |
+| Search and filters | `GET /animals/`, `GET /animals/manage` | — (GET, no token) |
 
 Client-side validation is a convenience. Server-side validation is the real
 check, and every form has an API test proving the server rejects what the
-browser would have blocked.
+browser would have blocked. Every POST form carries a CSRF token; a unit test
+parses all of them, because a token inserted *inside* an opening `<form>` tag
+once swallowed the form's own `action` (`tests/unit/test_feature_csrf_tokens.py`).
+
+### What a field looks like
+
+- **A label is a `<label for=...>`.** Where the label would be noise — the
+  browse screen's search box — it is `.sr-only` rather than absent, because an
+  `aria-label` alone leaves the control unlabelled for voice control and for
+  translation tools.
+- **A group of checkboxes is a `<fieldset>` with a `<legend class="field__label">`.**
+  A `<span>` above three boxes looks identical and groups nothing: the legend
+  is the only association a screen reader announces.
+- **Every hint and every error has an `id`, and its control points at it**
+  with `aria-describedby`; a control with an error also carries
+  `aria-invalid="true"`. Both are built conditionally, because pointing
+  `aria-describedby` at an element that is not on the page is itself a failure.
+- **A hint belongs to the control above it**, not to the next one down.
+
+### Required, and how it is marked
+
+A form that mixes required and optional fields marks each required one with
+`<span class="required-mark">*</span>` and explains the asterisk once, at the
+top: "\* Required. Everything else is optional." That is the profile form and
+the animal form.
+
+A form where *everything* is required says so once — "Both fields are
+required" — and uses no asterisks at all. That is sign-in and registration.
+An asterisk on every field marks nothing.
+
+### When the server says no
+
+The screen does not say "please fix 3 problems below". It shows an
+`.error-summary` with `role="alert"`: one `<li>` per message, each a link to
+the control that produced it, worded the way that control is worded. The field
+repeats its own message underneath itself, and takes a danger-coloured border.
+A rejected submission renders with what was typed, never with the saved values.
+
+### Fields are as wide as their answers
+
+`.form-narrow` caps a long form at 680px, `.field--medium` a city at 340px and
+`.field--short` a number at 160px. Where the label or the hint is a sentence,
+`.field--wide-text` releases them and caps only the control — a four-line hint
+inside a 160px column is not a narrow field, it is a broken one.
+
+### Progressive disclosure
+
+Three of the profile's fields only matter if the answer above them was yes, so
+they are revealed by it: `data-shown-by="has_yard"`,
+`"household_has_children"`, `"has_other_animals"`, and on the animal form
+`"has_special_needs"`. With JavaScript blocked every one of them is simply
+visible, which is what these forms did before — never content a visitor cannot
+reach.
+
+### Everything else JavaScript adds here
+
+A capped textarea reports what is left (`data-counter`), a password field can
+be revealed (`data-toggle-password`), and a confirmation field reports a
+mismatch through the browser's own validation (`data-match`). All three are
+`hidden` in the markup and unhidden by `petmatch.js`, so a visitor with
+JavaScript blocked never meets a control that does nothing. None of them is
+the check: the server validates every one of these fields again.

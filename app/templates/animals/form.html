@@ -4,11 +4,41 @@
 {# `current` prefers the rejected submission over the saved record, so a
    failed save shows what was typed rather than silently reverting it. #}
 {% set current = submission or animal %}
-{% set is_edit = animal is not none and submission is none or (animal is not none and request.endpoint == 'animals.edit_animal') %}
 {% macro value_of(field, default='') %}{{ current[field] if current and current[field] is not none else default }}{% endmacro %}
-{% macro error_for(field) %}
-  {% if errors and errors[field] %}<p class="field__error">{{ errors[field] }}</p>{% endif %}
-{% endmacro %}
+
+{#- What each field is called in the summary at the top. The summary links to
+    the control, so the wording here has to be the wording beside it. -#}
+{% set field_labels = {
+     'name': 'Name',
+     'species': 'Species',
+     'breed': 'Breed',
+     'age_years': 'Approximate age',
+     'city': 'City',
+     'size': 'Size',
+     'required_space': 'Space they need',
+     'temperament': 'Temperament',
+     'activity_level': 'Energy level',
+     'status': 'Status',
+     'special_needs_description': 'What those needs involve',
+     'image_urls': 'Photographs',
+     'description': 'Description',
+} %}
+
+{#- Both halves are conditional: pointing `aria-describedby` at an element
+    that is not on the page is itself an accessibility failure. -#}
+{%- macro described_by(field, has_hint=false) -%}
+  {%- set referenced = [] -%}
+  {%- if has_hint %}{% set _ = referenced.append(field ~ '-hint') %}{% endif -%}
+  {%- if errors and errors[field] %}{% set _ = referenced.append(field ~ '-error') %}{% endif -%}
+  {%- if referenced %} aria-describedby="{{ referenced|join(' ') }}"{% endif -%}
+  {%- if errors and errors[field] %} aria-invalid="true"{% endif -%}
+{%- endmacro -%}
+
+{%- macro error_for(field) -%}
+  {%- if errors and errors[field] -%}
+    <p class="field__error" id="{{ field }}-error">{{ errors[field] }}</p>
+  {%- endif -%}
+{%- endmacro -%}
 
 {% block content %}
 <div class="section-heading">
@@ -28,28 +58,38 @@
 </div>
 
 {% if errors %}
-  <div class="alert alert--error" style="margin-bottom: var(--space-5)">
-    Please fix {{ errors|length }} {{ 'problem' if errors|length == 1 else 'problems' }} below.
+  <div class="error-summary form-narrow" role="alert">
+    <p class="error-summary__title">
+      <svg class="icon" aria-hidden="true"><use href="#icon-alert"></use></svg>
+      {{ errors|length }} {{ 'answer needs' if errors|length == 1 else 'answers need' }} another look
+    </p>
+    <ul>
+      {% for field, message in errors.items() %}
+        <li><a href="#{{ field }}">{{ field_labels.get(field, field|humanize) }} — {{ message }}</a></li>
+      {% endfor %}
+    </ul>
   </div>
 {% endif %}
 
 <form method="post"
       action="{{ url_for('animals.edit_animal', animal_id=animal.animal_id) if animal else url_for('animals.new_animal') }}"
-      class="card card--padded">
+      class="card card--padded form-narrow">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
-  <h2 style="font-size:1.1rem">Who they are</h2>
+  <p class="required-note"><span class="required-mark">*</span> Required. Everything else is optional.</p>
 
-  <div class="field">
-    <label class="field__label" for="name">Name</label>
+  <h2 class="form-section">Who they are</h2>
+
+  <div class="field field--medium">
+    <label class="field__label" for="name">Name <span class="required-mark" aria-hidden="true">*</span></label>
     <input class="input" id="name" name="name" required maxlength="100"
-           value="{{ value_of('name') }}">
+           value="{{ value_of('name') }}"{{ described_by('name') }}>
     {{ error_for('name') }}
   </div>
 
-  <div class="field">
-    <label class="field__label" for="species">Species</label>
-    <select class="select" id="species" name="species" required>
+  <div class="field field--medium">
+    <label class="field__label" for="species">Species <span class="required-mark" aria-hidden="true">*</span></label>
+    <select class="select" id="species" name="species" required{{ described_by('species') }}>
       <option value="">Please choose…</option>
       {% for value, label in options.species %}
         <option value="{{ value }}" {% if current and current.species == value %}selected{% endif %}>{{ label }}</option>
@@ -58,27 +98,38 @@
     {{ error_for('species') }}
   </div>
 
-  <div class="field">
-    <label class="field__label" for="breed">Breed <span class="field__hint">optional</span></label>
-    <input class="input" id="breed" name="breed" maxlength="100" value="{{ value_of('breed') }}">
+  <div class="field field--medium field--wide-text">
+    <label class="field__label" for="breed">Breed</label>
+    <input class="input" id="breed" name="breed" maxlength="100"
+           value="{{ value_of('breed') }}"{{ described_by('breed', true) }}>
+    <p class="field__hint" id="breed-hint">
+      For an animal filed under "Other", this is what the cards and the
+      details page call them — "Ferret", "Corn snake".
+    </p>
     {{ error_for('breed') }}
   </div>
 
-  <div class="field">
-    <label class="field__label" for="age_years">Approximate age, in years</label>
+  <div class="field field--short field--wide-text">
+    <label class="field__label" for="age_years">
+      Approximate age, in years <span class="required-mark" aria-hidden="true">*</span>
+    </label>
     <input class="input" id="age_years" name="age_years" required
-           type="number" step="0.1" min="0" max="40" value="{{ value_of('age_years') }}">
-    <p class="field__hint">Use a decimal for a young animal — 0.5 means about six months.</p>
+           type="number" step="0.1" min="0" max="40"
+           value="{{ value_of('age_years') }}"{{ described_by('age_years', true) }}>
+    <p class="field__hint" id="age_years-hint">
+      Use a decimal for a young animal — 0.5 means about six months.
+    </p>
     {{ error_for('age_years') }}
   </div>
 
-  <div class="field">
-    <label class="field__label" for="city">City</label>
-    <input class="input" id="city" name="city" required maxlength="100" value="{{ value_of('city') }}">
+  <div class="field field--medium">
+    <label class="field__label" for="city">City <span class="required-mark" aria-hidden="true">*</span></label>
+    <input class="input" id="city" name="city" required maxlength="100"
+           value="{{ value_of('city') }}"{{ described_by('city') }}>
     {{ error_for('city') }}
   </div>
 
-  <h2 style="font-size:1.1rem">What they need</h2>
+  <h2 class="form-section">What they need</h2>
 
   {% for field_name, label, hint in [
       ('size', 'Size', 'Their build, not the space they need.'),
@@ -86,96 +137,126 @@
       ('temperament', 'Temperament', ''),
       ('activity_level', 'Energy level', 'How much exercise and attention they need each day.'),
   ] %}
-  <div class="field">
-    <label class="field__label" for="{{ field_name }}">{{ label }}</label>
-    <select class="select" id="{{ field_name }}" name="{{ field_name }}" required>
+  <div class="field field--medium field--wide-text">
+    <label class="field__label" for="{{ field_name }}">
+      {{ label }} <span class="required-mark" aria-hidden="true">*</span>
+    </label>
+    <select class="select" id="{{ field_name }}" name="{{ field_name }}" required{{ described_by(field_name, hint != '') }}>
       <option value="">Please choose…</option>
       {% for value, option_label in options[field_name if field_name != 'required_space' else 'size'] %}
         <option value="{{ value }}" {% if current and current[field_name] == value %}selected{% endif %}>{{ option_label }}</option>
       {% endfor %}
     </select>
-    {% if hint %}<p class="field__hint">{{ hint }}</p>{% endif %}
+    {% if hint %}<p class="field__hint" id="{{ field_name }}-hint">{{ hint }}</p>{% endif %}
     {{ error_for(field_name) }}
   </div>
   {% endfor %}
 
-  <div class="field">
+  <div class="field field--medium field--wide-text">
     <label class="field__label" for="status">Status</label>
-    <select class="select" id="status" name="status">
+    <select class="select" id="status" name="status"{{ described_by('status', true) }}>
       {% for value, label in options.status %}
         <option value="{{ value }}"
           {% if current and current.status == value %}selected{% elif not current and value == 'AVAILABLE' %}selected{% endif %}>{{ label }}</option>
       {% endfor %}
     </select>
+    <p class="field__hint" id="status-hint">
+      Anything but "Available" takes this animal out of search results and
+      out of matching.
+    </p>
     {{ error_for('status') }}
   </div>
 
-  <h2 style="font-size:1.1rem">Living with others</h2>
+  <h2 class="form-section">Living with others</h2>
 
-  <label class="checkbox">
-    <input type="checkbox" name="good_with_children" value="1"
-           {% if current and current.good_with_children %}checked{% endif %}>
-    <span>Known to be good with children</span>
-  </label>
-  <p class="field__hint">
-    Leave this unticked if it has not been assessed. An unticked box
-    disqualifies this animal from homes with young children, which is the
-    safe way round.
-  </p>
+  {#- A fieldset and a legend, because these three boxes answer one question
+      between them and a screen reader has no other way to know that. -#}
+  <fieldset class="field">
+    <legend class="field__label">What has been assessed</legend>
 
-  <label class="checkbox">
-    <input type="checkbox" name="good_with_other_animals" value="1"
-           {% if current and current.good_with_other_animals %}checked{% endif %}>
-    <span>Known to be good with other animals</span>
-  </label>
-
-  <label class="checkbox">
-    <input type="checkbox" name="has_special_needs" value="1"
-           {% if current and current.has_special_needs %}checked{% endif %}>
-    <span>Has special needs</span>
-  </label>
-
-  <div class="field">
-    <label class="field__label" for="special_needs_description">
-      What those needs involve
+    <label class="checkbox">
+      <input type="checkbox" id="good_with_children" name="good_with_children" value="1"
+             {% if current and current.good_with_children %}checked{% endif %}
+             aria-describedby="good_with_children-hint">
+      <span>Known to be good with children</span>
     </label>
-    <textarea class="textarea" id="special_needs_description" name="special_needs_description"
-              rows="3" maxlength="1000">{{ value_of('special_needs_description') }}</textarea>
-    <p class="field__hint">Required if you ticked the box above.</p>
-    {{ error_for('special_needs_description') }}
-  </div>
-
-  <h2 style="font-size:1.1rem">Photographs</h2>
-
-  <div class="field">
-    <label class="field__label" for="image_urls">Photo addresses, one per line</label>
-    {% set existing_urls = (submission.image_urls if submission else (animal.image_urls if animal else [])) %}
-    <textarea class="textarea" id="image_urls_text" rows="4"
-              placeholder="/static/uploads/milo.jpg">{{ existing_urls | join('\n') }}</textarea>
-    <p class="field__hint">
-      The first address is the main photo. At least one is required — an
-      animal cannot be listed without a picture.
+    <p class="field__hint" id="good_with_children-hint">
+      Leave this unticked if it has not been assessed. An unticked box
+      disqualifies this animal from homes with young children, which is the
+      safe way round.
     </p>
-    {{ error_for('image_urls') }}
+
+    <label class="checkbox">
+      <input type="checkbox" id="good_with_other_animals" name="good_with_other_animals" value="1"
+             {% if current and current.good_with_other_animals %}checked{% endif %}>
+      <span>Known to be good with other animals</span>
+    </label>
+
+    <label class="checkbox">
+      <input type="checkbox" id="has_special_needs" name="has_special_needs" value="1"
+             {% if current and current.has_special_needs %}checked{% endif %}>
+      <span>Has special needs</span>
+    </label>
+  </fieldset>
+
+  {#- Revealed by the box above. Without JavaScript it is always visible,
+      which is what this form did before (docs/UX.md section 3). -#}
+  <div data-shown-by="has_special_needs">
+    <div class="field">
+      <label class="field__label" for="special_needs_description">
+        What those needs involve
+      </label>
+      <textarea class="textarea" id="special_needs_description" name="special_needs_description"
+                rows="3" maxlength="1000" data-counter="special_needs_description-count"
+                {{- described_by('special_needs_description', true) }}>{{ value_of('special_needs_description') }}</textarea>
+      <p class="field__hint" id="special_needs_description-hint">
+        Required if you ticked the box above. This is shown to adopters as a
+        callout on the animal's page, so write it for them.
+      </p>
+      <p class="char-counter" id="special_needs_description-count" hidden></p>
+      {{ error_for('special_needs_description') }}
+    </div>
   </div>
 
-  {# The textarea above is for typing; these hidden inputs are what posts.
-     Kept in step by a tiny inline script so the form still works with one
-     field per URL, which is what the server reads. #}
-  <div id="image_url_inputs">
-    {% for url in existing_urls %}
-      <input type="hidden" name="image_urls" value="{{ url }}">
+  <h2 class="form-section">Photographs</h2>
+
+  {#- One input per photograph rather than one textarea of lines. The
+      textarea needed a script to copy its contents into hidden fields at
+      submit time, which meant listing an animal - a core staff task - did
+      not work at all with JavaScript blocked. -#}
+  {% set existing_urls = (submission.image_urls if submission else (animal.image_urls if animal else [])) %}
+  <fieldset class="field" id="image_urls"{{ described_by('image_urls', true) }}>
+    <legend class="field__label">
+      Photo addresses <span class="required-mark" aria-hidden="true">*</span>
+    </legend>
+    <p class="field__hint" id="image_urls-hint">
+      The first one is the main photo. At least one is required — an animal
+      cannot be listed without a picture.
+    </p>
+    {% for url in (existing_urls | list) + ['', '', ''] %}
+      <div class="field">
+        <label class="field__label" for="image_url_{{ loop.index }}">
+          {{ 'Main photo' if loop.first else 'Photo ' ~ loop.index }}
+        </label>
+        <input class="input" type="text" id="image_url_{{ loop.index }}" name="image_urls"
+               value="{{ url }}" placeholder="/static/uploads/milo.jpg">
+      </div>
     {% endfor %}
-  </div>
+    {{ error_for('image_urls') }}
+  </fieldset>
 
-  <h2 style="font-size:1.1rem">Description</h2>
+  <h2 class="form-section">Description</h2>
 
   <div class="field">
-    <label class="field__label" for="description">
-      How would you describe them? <span class="field__hint">optional</span>
-    </label>
+    <label class="field__label" for="description">How would you describe them?</label>
     <textarea class="textarea" id="description" name="description" rows="5"
-              maxlength="4000">{{ value_of('description') }}</textarea>
+              maxlength="4000" data-counter="description-count"
+              {{- described_by('description', true) }}>{{ value_of('description') }}</textarea>
+    <p class="field__hint" id="description-hint">
+      What a visitor reads first. Their habits, what they like, what they
+      need from a home.
+    </p>
+    <p class="char-counter" id="description-count" hidden></p>
     {{ error_for('description') }}
   </div>
 
@@ -189,29 +270,4 @@
     </a>
   </div>
 </form>
-
-<script>
-  // Turn the one-per-line textarea into the hidden fields the server reads.
-  // Runs on submit so the two can never disagree: whatever is on screen at
-  // the moment of submission is exactly what is posted.
-  (function () {
-    var form = document.querySelector('form.card');
-    var textarea = document.getElementById('image_urls_text');
-    var holder = document.getElementById('image_url_inputs');
-    if (!form || !textarea || !holder) { return; }
-
-    form.addEventListener('submit', function () {
-      holder.innerHTML = '';
-      textarea.value.split('\n').forEach(function (line) {
-        var url = line.trim();
-        if (!url) { return; }
-        var input = document.createElement('input');
-        input.type = 'hidden';
-        input.name = 'image_urls';
-        input.value = url;
-        holder.appendChild(input);
-      });
-    });
-  })();
-</script>
 {% endblock %}

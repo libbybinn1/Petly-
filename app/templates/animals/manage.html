@@ -1,20 +1,57 @@
 {% extends "base.html" %}
 {% block title %}Manage animals — PetMatch{% endblock %}
 
+{#- The same age bands the public search offers, so a staff member and an
+    adopter are never looking at two different definitions of "young"
+    (spec 6.2 and 7.1). -#}
+{%- set age_ranges = [
+      ('0-2', 'Under 2 years'),
+      ('2-8', '2 to 8 years'),
+      ('8+', '8 years and older'),
+] -%}
+{%- set selected_age_range = request.args.get('age_range', '') -%}
+
+{#- The filters currently narrowing the roster, as (query key, label) pairs.
+    Same pattern as the browse screen, so the two filter rows behave
+    identically (docs/UX.md section 6). -#}
+{%- set applied_filters = [] -%}
+{%- if search_text -%}
+  {%- set _ = applied_filters.append(('q', 'Matching “' ~ search_text ~ '”')) -%}
+{%- endif -%}
+{%- if selected_status -%}
+  {%- set _ = applied_filters.append(('status', selected_status|humanize)) -%}
+{%- endif -%}
+{%- if selected_species -%}
+  {%- set _ = applied_filters.append(('species', species_label(selected_species))) -%}
+{%- endif -%}
+{%- for value, label in age_ranges if value == selected_age_range -%}
+  {%- set _ = applied_filters.append(('age_range', label)) -%}
+{%- endfor -%}
+
+{%- macro manage_url_without(key) -%}
+  {%- set remaining = request.args.to_dict() -%}
+  {%- set _ = remaining.pop(key, none) -%}
+  {%- set _ = remaining.pop('page', none) -%}
+  {{- url_for('animals.manage', **remaining) -}}
+{%- endmacro -%}
+
 {% block content %}
 <div class="section-heading">
   <div>
     <h1>Animal management</h1>
     <p>
       {{ results.total_count }} animal{{ '' if results.total_count == 1 else 's' }}
-      {%- if selected_status or selected_species or search_text %} match these filters{% else %} in the organization's care{% endif %}.
+      {%- if applied_filters %} match these filters{% else %} in the organization's care{% endif %}.
       {%- if results.page_count > 1 %} Showing page {{ results.page }} of {{ results.page_count }}.{% endif %}
     </p>
   </div>
-  <a class="btn btn--primary" href="{{ url_for('animals.new_animal') }}">List a new animal</a>
+  <a class="btn btn--primary" href="{{ url_for('animals.new_animal') }}">
+    <svg class="icon" aria-hidden="true"><use href="#icon-plus"></use></svg>
+    List a new animal
+  </a>
 </div>
 
-<form method="get" action="{{ url_for('animals.manage') }}" class="filter-bar">
+<form method="get" action="{{ url_for('animals.manage') }}" class="filter-bar filter-bar--aligned">
   <div class="field">
     <label class="field__label" for="status">Status</label>
     <select class="select" id="status" name="status">
@@ -34,21 +71,52 @@
     </select>
   </div>
   <div class="field">
+    <label class="field__label" for="age_range">Age</label>
+    <select class="select" id="age_range" name="age_range">
+      <option value="">Any age</option>
+      {% for value, label in age_ranges %}
+        <option value="{{ value }}" {% if selected_age_range == value %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="field">
     <label class="field__label" for="q">Name, breed or city</label>
     <input class="input" id="q" name="q" value="{{ search_text }}" placeholder="Search…">
   </div>
   <div class="filter-bar__actions">
-    <button class="btn btn--primary" type="submit">Filter</button>
-    <a class="btn btn--ghost" href="{{ url_for('animals.manage') }}">Clear</a>
+    <button class="btn btn--secondary" type="submit">Apply filters</button>
   </div>
 </form>
 
+{% if applied_filters %}
+  <div class="chip-row">
+    <span class="chip-row__label">Filtered by</span>
+    {% for key, label in applied_filters %}
+      <a class="chip" href="{{ manage_url_without(key) }}">
+        {{ label }}
+        <span class="sr-only">— remove this filter</span>
+        <span class="chip__remove" aria-hidden="true">
+          <svg class="icon"><use href="#icon-x"></use></svg>
+        </span>
+      </a>
+    {% endfor %}
+    <a class="chip chip--clear" href="{{ url_for('animals.manage') }}">Clear all</a>
+  </div>
+{% endif %}
+
 {% if animals %}
-<div class="table-wrap">
-  <table class="table">
+{#- `--tall` caps the height so a forty-row page scrolls under its own sticky
+    header. `table--cards` turns each row into a card below 760px, where nine
+    columns cannot be read however well they scroll. -#}
+<div class="table-wrap table-wrap--tall">
+  <table class="table table--cards">
+    <caption class="sr-only">
+      Every animal in the organization's care, with its species, age, size,
+      temperament, location and adoption status.
+    </caption>
     <thead>
       <tr>
-        <th></th>
+        <th><span class="sr-only">Photograph</span></th>
         <th>Name</th>
         <th>Species</th>
         <th>Age</th>
@@ -56,7 +124,7 @@
         <th>Temperament</th>
         <th>Location</th>
         <th>Status</th>
-        <th></th>
+        <th><span class="sr-only">Actions</span></th>
       </tr>
     </thead>
     <tbody>
@@ -66,31 +134,49 @@
           {% if animal.image_url %}
             <img class="table__thumb" src="{{ animal.image_url }}" alt="" loading="lazy">
           {% else %}
-            <div class="table__thumb" style="display:grid;place-items:center">🐾</div>
+            <div class="table__thumb" aria-hidden="true">
+              <svg class="icon icon--filled"><use href="#icon-paw"></use></svg>
+            </div>
           {% endif %}
         </td>
-        <td><strong>{{ animal.name }}</strong>{% if animal.breed %}<br><span style="color:var(--text-muted);font-size:0.85rem">{{ animal.breed }}</span>{% endif %}</td>
-        <td>{{ animal.species_label }}</td>
-        <td>{{ animal.age_label }}</td>
-        <td>{{ animal.size|humanize }}</td>
-        <td>{{ animal.temperament|humanize }}</td>
-        <td>{{ animal.city }}</td>
-        <td>
+        <td data-label="Name">
+          {#- One element, not two: in card mode the cell is a flex row, so a
+              loose name and a loose breed end up at opposite edges of it. -#}
+          <div class="table__name">
+            <strong>{{ animal.name }}</strong>
+            {%- if animal.breed_note %}<span class="table__sub">{{ animal.breed_note }}</span>{% endif %}
+          </div>
+        </td>
+        <td data-label="Species">{{ animal.species_label }}</td>
+        <td data-label="Age">{{ animal.age_label }}</td>
+        <td data-label="Size">{{ animal.size|humanize }}</td>
+        <td data-label="Temperament">{{ animal.temperament|humanize }}</td>
+        <td data-label="Location">{{ animal.city }}</td>
+        <td data-label="Status">
           {% if animal.status == 'AVAILABLE' %}
-            <span class="tag tag--success">Available</span>
+            <span class="tag tag--success tag--nowrap">Available</span>
           {% elif animal.status == 'ADOPTED' %}
-            <span class="tag tag--info">Adopted</span>
+            <span class="tag tag--info tag--nowrap">Adopted</span>
           {% elif animal.status == 'UNAVAILABLE' %}
-            <span class="tag tag--danger">Unavailable</span>
+            <span class="tag tag--nowrap">Unavailable</span>
           {% else %}
-            <span class="tag tag--warning">{{ animal.status|humanize }}</span>
+            <span class="tag tag--warning tag--nowrap">{{ animal.status|humanize }}</span>
           {% endif %}
         </td>
-        <td style="white-space:nowrap">
-          <a class="btn btn--secondary btn--small" href="{{ url_for('animals.details', animal_id=animal.animal_id) }}">Open</a>
-          <a class="btn btn--ghost btn--small" href="{{ url_for('animals.edit_animal', animal_id=animal.animal_id) }}">Edit</a>
-          <a class="btn btn--ghost btn--small" href="{{ url_for('matches.find_my_adopter', animal_id=animal.animal_id) }}">Rank</a>
-          <a class="btn btn--ghost btn--small" href="{{ url_for('dashboard.aggregate_history', aggregate_type='Animal', aggregate_id=animal.animal_id) }}">History</a>
+        {#- The same four actions in the same order and the same two weights
+            on every row: the two that change the record are secondary, the
+            two that only look at it are ghosts. -#}
+        <td>
+          <div class="table__actions">
+            <a class="btn btn--secondary btn--small"
+               href="{{ url_for('animals.details', animal_id=animal.animal_id) }}">Open</a>
+            <a class="btn btn--secondary btn--small"
+               href="{{ url_for('animals.edit_animal', animal_id=animal.animal_id) }}">Edit</a>
+            <a class="btn btn--ghost btn--small"
+               href="{{ url_for('matches.find_my_adopter', animal_id=animal.animal_id) }}">Rank</a>
+            <a class="btn btn--ghost btn--small"
+               href="{{ url_for('dashboard.aggregate_history', aggregate_type='Animal', aggregate_id=animal.animal_id) }}">History</a>
+          </div>
         </td>
       </tr>
       {% endfor %}
@@ -98,23 +184,35 @@
   </table>
 </div>
   {% if results.page_count > 1 %}
-    <nav class="pagination">
+    <nav class="pagination" aria-label="Roster pages">
       {% if results.has_previous %}
         <a class="btn btn--secondary btn--small"
-           href="{{ url_for('animals.manage', **dict(request.args, page=results.page - 1)) }}">Previous</a>
+           href="{{ url_for('animals.manage', **dict(request.args, page=results.page - 1)) }}">
+          <svg class="icon" aria-hidden="true"><use href="#icon-chevron-left"></use></svg>
+          Previous
+        </a>
       {% endif %}
       <span class="pagination__status">Page {{ results.page }} of {{ results.page_count }}</span>
       {% if results.has_next %}
         <a class="btn btn--secondary btn--small"
-           href="{{ url_for('animals.manage', **dict(request.args, page=results.page + 1)) }}">Next</a>
+           href="{{ url_for('animals.manage', **dict(request.args, page=results.page + 1)) }}">
+          Next
+          <svg class="icon" aria-hidden="true"><use href="#icon-chevron-right"></use></svg>
+        </a>
       {% endif %}
     </nav>
   {% endif %}
 {% else %}
 <div class="empty">
-  <div class="empty__icon">📋</div>
-  <h3>No animals match those filters</h3>
-  <a class="btn btn--secondary" href="{{ url_for('animals.manage') }}">Clear filters</a>
+  <div class="empty__icon">
+    <svg class="icon" aria-hidden="true"><use href="#icon-clipboard"></use></svg>
+  </div>
+  <h2>No animals match those filters</h2>
+  <p>Nothing in the roster matches all of them at once. Clearing one usually helps.</p>
+  <div class="empty__actions">
+    <a class="btn btn--secondary" href="{{ url_for('animals.manage') }}">Clear filters</a>
+    <a class="btn btn--primary" href="{{ url_for('animals.new_animal') }}">List a new animal</a>
+  </div>
 </div>
 {% endif %}
 {% endblock %}

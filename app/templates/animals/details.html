@@ -2,41 +2,28 @@
 {% block title %}{{ animal.name }} — PetMatch{% endblock %}
 
 {% block content %}
-<p style="margin-bottom: var(--space-4)">
-  <a href="{{ url_for('animals.search') }}">&larr; Back to all animals</a>
-</p>
+<a class="backlink" href="{{ url_for('animals.search') }}">
+  <svg class="icon" aria-hidden="true"><use href="#icon-chevron-left"></use></svg>
+  Back to all animals
+</a>
 
 <div class="detail-layout">
-  <div>
+  {#- The photograph used to sit alone in this column and end roughly 300px
+      above the column beside it. The specification grid moved underneath it,
+      which fills that space with the facts a photograph cannot carry and
+      keeps the two columns close to the same height. -#}
+  <div class="detail-media">
     <div class="detail-photo">
       {% if animal.image_url %}
         <img src="{{ animal.image_url }}" alt="{{ animal.name }}, a {{ animal.species_label|lower }}">
       {% else %}
-        <div class="animal-card__placeholder" aria-hidden="true">🐾</div>
+        <div class="animal-card__placeholder" aria-hidden="true">
+          <svg class="icon icon--filled icon--xl"><use href="#icon-paw"></use></svg>
+        </div>
       {% endif %}
     </div>
-  </div>
 
-  <div>
-    <div class="tag-row" style="margin-bottom: var(--space-3)">
-      {% if animal.is_available %}
-        <span class="tag tag--success">Available for adoption</span>
-      {% else %}
-        <span class="tag tag--info">{{ animal.status|humanize }}</span>
-      {% endif %}
-      {% if animal.has_special_needs %}<span class="tag tag--warning">Special needs</span>{% endif %}
-    </div>
-
-    <h1>{{ animal.name }}</h1>
-    <p style="color: var(--text-muted); font-size: 1.05rem; margin-top: calc(-1 * var(--space-2))">
-      {{ animal.species_label }}{% if animal.breed_note %} &middot; {{ animal.breed_note }}{% endif %}
-    </p>
-
-    {% if animal.description %}
-      <p>{{ animal.description }}</p>
-    {% endif %}
-
-    <div class="card card--padded" style="margin-bottom: var(--space-4)">
+    <div class="card card--padded">
       <div class="spec-list">
         <div class="spec">
           <div class="spec__label">Age</div>
@@ -64,19 +51,72 @@
         </div>
       </div>
     </div>
+  </div>
 
-    <div class="card card--padded" style="margin-bottom: var(--space-4)">
-      <h3 style="font-size: 0.95rem; margin-bottom: var(--space-3)">Living with {{ animal.name }}</h3>
-      <div class="tag-row" style="padding-top: 0">
-        <span class="tag {% if animal.good_with_children %}tag--success{% else %}tag--danger{% endif %}">
-          {{ 'Good with children' if animal.good_with_children else 'Not suited to young children' }}
-        </span>
-        <span class="tag {% if animal.good_with_other_animals %}tag--success{% else %}tag--danger{% endif %}">
-          {{ 'Good with other animals' if animal.good_with_other_animals else 'Prefers to be the only pet' }}
-        </span>
+  <div class="detail-main">
+    <div class="detail-intro">
+      <div class="tag-row tag-row--flush">
+        {% if animal.is_available %}
+          <span class="tag tag--success tag--nowrap">
+            <svg class="icon" aria-hidden="true"><use href="#icon-check"></use></svg>
+            Available for adoption
+          </span>
+        {% else %}
+          <span class="tag tag--info tag--nowrap">{{ animal.status|humanize }}</span>
+        {% endif %}
+        {% if animal.has_special_needs %}
+          <span class="tag tag--warning tag--nowrap">
+            <svg class="icon" aria-hidden="true"><use href="#icon-alert"></use></svg>
+            Special needs
+          </span>
+        {% endif %}
+      </div>
+
+      <h1>{{ animal.name }}</h1>
+      {#- `species_label` carries the breed for an OTHER-species animal, and
+          `breed_note` is empty in exactly that case, so this never reads
+          "Ferret · Ferret". Same pair the cards use. -#}
+      <p class="detail-lede">
+        {{ animal.species_label }}{% if animal.breed_note %} &middot; {{ animal.breed_note }}{% endif %}
+      </p>
+
+      {% if animal.description %}
+        <p>{{ animal.description }}</p>
+      {% endif %}
+    </div>
+
+    <div class="card card--padded">
+      <h2 class="panel-title">Living with {{ animal.name }}</h2>
+      {#- A preference is not a fault. Both of these used to be painted in
+          the danger colour, which told an adopter that an animal who likes
+          a quiet house was defective. -#}
+      <div class="tag-row tag-row--flush">
+        {% if animal.good_with_children %}
+          <span class="tag tag--success">
+            <svg class="icon" aria-hidden="true"><use href="#icon-check"></use></svg>
+            Good with children
+          </span>
+        {% else %}
+          <span class="tag tag--warning">
+            <svg class="icon" aria-hidden="true"><use href="#icon-alert"></use></svg>
+            Better suited to a home without young children
+          </span>
+        {% endif %}
+        {% if animal.good_with_other_animals %}
+          <span class="tag tag--success">
+            <svg class="icon" aria-hidden="true"><use href="#icon-check"></use></svg>
+            Good with other animals
+          </span>
+        {% else %}
+          <span class="tag">
+            <svg class="icon" aria-hidden="true"><use href="#icon-info"></use></svg>
+            Happiest as the only pet in the home
+          </span>
+        {% endif %}
       </div>
       {% if animal.special_needs_description %}
-        <div class="alert alert--warning" style="margin-top: var(--space-3); margin-bottom: 0">
+        <div class="alert alert--warning alert--flush">
+          <svg class="icon" aria-hidden="true"><use href="#icon-alert"></use></svg>
           {{ animal.special_needs_description }}
         </div>
       {% endif %}
@@ -84,28 +124,13 @@
 
     {% if current_user.is_authenticated and current_user.is_staff %}
       <div class="card card--padded">
-        <h3 style="font-size: 0.95rem">Staff actions</h3>
-        <p style="color: var(--text-muted)">
-          {{ animal.active_application_count }} active application{{ '' if animal.active_application_count == 1 else 's' }}
+        <h2 class="panel-title">Staff actions</h2>
+        <p class="u-flush">
+          {{ animal.active_application_count }}
+          active application{{ '' if animal.active_application_count == 1 else 's' }}
           for {{ animal.name }}.
         </p>
-        <form method="post"
-              action="{{ url_for('animals.change_animal_status', animal_id=animal.animal_id) }}"
-              data-confirm="Change {{ animal.name }}'s status?"
-              style="display:flex; gap: var(--space-2); align-items:flex-end; margin-bottom: var(--space-3)">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <div class="field" style="margin:0; flex:1">
-            <label class="field__label" for="animal_status">Availability</label>
-            <select class="select" id="animal_status" name="status">
-              {% for value in ['AVAILABLE','RESERVED','ADOPTION_IN_PROGRESS','ADOPTED','UNAVAILABLE'] %}
-                <option value="{{ value }}" {% if animal.status == value %}selected{% endif %}>{{ value|humanize }}</option>
-              {% endfor %}
-            </select>
-          </div>
-          <button class="btn btn--secondary btn--small" type="submit">Update</button>
-        </form>
-
-        <div style="display:flex; gap: var(--space-2); flex-wrap: wrap">
+        <div class="button-row u-spaced">
           <a class="btn btn--primary btn--small"
              href="{{ url_for('matches.find_my_adopter', animal_id=animal.animal_id) }}">
             Find my adopter
@@ -114,32 +139,80 @@
              href="{{ url_for('matches.find_more_adopters', animal_id=animal.animal_id) }}">
             Find more adopters
           </a>
-          <a class="btn btn--ghost btn--small"
+          <a class="btn btn--secondary btn--small"
              href="{{ url_for('animals.edit_animal', animal_id=animal.animal_id) }}">
             Edit record
           </a>
+          <a class="btn btn--ghost btn--small"
+             href="{{ url_for('dashboard.aggregate_history', aggregate_type='Animal', aggregate_id=animal.animal_id) }}">
+            History
+          </a>
         </div>
+      </div>
+
+      {#- Its own panel, because it is its own decision. Changing an animal's
+          availability is what takes them out of every search and every
+          ranking, and it used to be a bare select between two link buttons. -#}
+      <div class="card card--padded">
+        <h2 class="panel-title">Availability</h2>
+        <p class="field__hint" id="animal_status_hint">
+          Marking {{ animal.name }} adopted or unavailable removes them from
+          search results and from matching, and stops new applications.
+          Applications already open are not withdrawn.
+        </p>
+        <form method="post"
+              action="{{ url_for('animals.change_animal_status', animal_id=animal.animal_id) }}"
+              data-confirm="Change {{ animal.name }}&apos;s availability? This decides whether {{ animal.name }} appears in search and matching."
+              class="status-panel u-spaced">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <div class="field">
+            <label class="field__label" for="animal_status">Status</label>
+            <select class="select" id="animal_status" name="status"
+                    aria-describedby="animal_status_hint">
+              {% for value in ['AVAILABLE','RESERVED','ADOPTION_IN_PROGRESS','ADOPTED','UNAVAILABLE'] %}
+                <option value="{{ value }}" {% if animal.status == value %}selected{% endif %}>{{ value|humanize }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <button class="btn btn--danger-ghost" type="submit">Update status</button>
+        </form>
       </div>
     {% elif animal.is_available %}
       {% if current_user.is_authenticated %}
-        <form method="post" action="{{ url_for('personal.apply_to_animal', animal_id=animal.animal_id) }}">
+        <form method="post" action="{{ url_for('personal.apply_to_animal', animal_id=animal.animal_id) }}"
+              class="card card--padded">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <h2 class="panel-title">Apply to adopt {{ animal.name }}</h2>
           <div class="field">
             <label class="field__label" for="applicant_message">
-              Anything you would like us to know? (optional)
+              Anything you would like us to know? <span class="field__hint">optional</span>
             </label>
             <textarea class="textarea" id="applicant_message" name="applicant_message"
                       maxlength="2000"
-                      placeholder="A little about your home, and why {{ animal.name }} appeals to you."></textarea>
+                      data-counter="applicant_message_count"
+                      aria-describedby="applicant_message_hint"></textarea>
+            <p class="field__hint" id="applicant_message_hint">
+              A little about your home, and why {{ animal.name }} appeals to you.
+            </p>
+            {#- Filled by petmatch.js and hidden until then: a server-rendered
+                "0 of 2000" is wrong the moment anybody types. -#}
+            <p class="char-counter" id="applicant_message_count" hidden></p>
           </div>
           <button class="btn btn--primary btn--block" type="submit">
             Apply to adopt {{ animal.name }}
           </button>
         </form>
       {% else %}
-        <a class="btn btn--primary btn--block" href="{{ url_for('auth.login') }}">
-          Sign in to apply for {{ animal.name }}
-        </a>
+        <div class="card card--padded">
+          <h2 class="panel-title">Interested in {{ animal.name }}?</h2>
+          <p>
+            Applications go to a staff member, who reviews every one. You will
+            need an account so we can tell you what happens next.
+          </p>
+          <a class="btn btn--primary btn--block" href="{{ url_for('auth.login') }}">
+            Sign in to apply for {{ animal.name }}
+          </a>
+        </div>
       {% endif %}
     {% endif %}
   </div>

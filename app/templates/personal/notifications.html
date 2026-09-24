@@ -1,6 +1,86 @@
 {% extends "base.html" %}
 {% block title %}Notifications — PetMatch{% endblock %}
 
+{#- One icon per kind of message, so the inbox is scannable before any of it
+    is read. `icon-bell` covers a type this version does not know about. -#}
+{% set type_icons = {
+     'INVITATION_RECEIVED': 'icon-envelope',
+     'INVITATION_RESPONSE': 'icon-check',
+     'APPLICATION_STATUS_CHANGED': 'icon-clipboard',
+     'ANALYSIS_READY': 'icon-sparkle',
+} %}
+
+{#- Split into what arrived in the last day and what did not.
+
+    `created_at` is a naive UTC timestamp and a template has no way to ask
+    what time it is now, so the split is read from `relative_label`, which
+    the view model computed against a correct clock: anything measured in
+    minutes or hours is inside the window, anything measured in days or
+    months is outside it. The headings say "last 24 hours" rather than
+    "today" because that is exactly what this tests, and a calendar-day
+    grouping needs an `is_today` on the view model (see the frontend
+    report's backend requests). -#}
+{%- set recent_notifications = [] -%}
+{%- set older_notifications = [] -%}
+{%- for notification in notifications -%}
+  {%- if 'day' in notification.relative_label
+         or 'month' in notification.relative_label
+         or 'year' in notification.relative_label -%}
+    {%- set _ = older_notifications.append(notification) -%}
+  {%- else -%}
+    {%- set _ = recent_notifications.append(notification) -%}
+  {%- endif -%}
+{%- endfor -%}
+
+{%- macro notification_row(notification) -%}
+<li class="notification-item{% if not notification.is_read %} notification-item--unread{% endif %}">
+  <span class="notification-item__icon">
+    <svg class="icon" aria-hidden="true">
+      <use href="#{{ type_icons.get(notification.notification_type, 'icon-bell') }}"></use>
+    </svg>
+  </span>
+
+  <div class="notification-item__body">
+    <p class="notification-item__title">
+      {{ notification.title }}
+      {#- The tint and the heavier weight are not available to everyone, so
+          the state is also a word (docs/UX.md section 8). -#}
+      {% if not notification.is_read %}<span class="sr-only">(unread)</span>{% endif %}
+    </p>
+    <p class="notification-item__meta">{{ notification.label }} &middot; {{ notification.relative_label }}</p>
+    <p>{{ notification.body }}</p>
+  </div>
+
+  <div class="notification-item__actions">
+    {% if notification.is_read %}
+      {% if notification.target_url %}
+        <a class="btn btn--ghost btn--small" href="{{ notification.target_url }}">Open</a>
+      {% endif %}
+    {% else %}
+      <form method="post"
+            action="{{ url_for('personal.mark_notification_read', notification_id=notification.notification_id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        {% if notification.target_url %}
+          <input type="hidden" name="target_url" value="{{ notification.target_url }}">
+        {% endif %}
+        <button class="btn btn--ghost btn--small" type="submit">
+          {{ 'Open' if notification.target_url else 'Mark as read' }}
+        </button>
+      </form>
+      {% if notification.target_url %}
+        {#- Reading a message and acting on it are two different decisions,
+            so clearing it does not have to mean going somewhere. -#}
+        <form method="post"
+              action="{{ url_for('personal.mark_notification_read', notification_id=notification.notification_id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button class="btn btn--ghost btn--small" type="submit">Mark as read</button>
+        </form>
+      {% endif %}
+    {% endif %}
+  </div>
+</li>
+{%- endmacro -%}
+
 {% block content %}
 <div class="section-heading">
   <div>
@@ -23,46 +103,36 @@
 </div>
 
 {% if notifications %}
-  <ul class="notification-list">
-    {% for notification in notifications %}
-      <li class="notification {% if not notification.is_read %}notification--unread{% endif %}">
-        <div class="notification__body">
-          <div class="notification__meta">
-            <span class="tag tag--brand">{{ notification.label }}</span>
-            <span class="notification__time">{{ notification.relative_label }}</span>
-            {% if not notification.is_read %}<span class="notification__dot" aria-label="Unread"></span>{% endif %}
-          </div>
-          <strong>{{ notification.title }}</strong>
-          <p>{{ notification.body }}</p>
-        </div>
-        <div class="notification__actions">
-          {% if notification.is_read and notification.target_url %}
-            <a class="btn btn--ghost btn--small" href="{{ notification.target_url }}">Open</a>
-          {% elif not notification.is_read %}
-            <form method="post"
-                  action="{{ url_for('personal.mark_notification_read', notification_id=notification.notification_id) }}">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-              {% if notification.target_url %}
-                <input type="hidden" name="target_url" value="{{ notification.target_url }}">
-              {% endif %}
-              <button class="btn btn--secondary btn--small" type="submit">
-                {{ 'Open' if notification.target_url else 'Mark as read' }}
-              </button>
-            </form>
-          {% endif %}
-        </div>
-      </li>
-    {% endfor %}
-  </ul>
+  {% if recent_notifications %}
+    <h2 class="timeline__day">Last 24 hours</h2>
+    <div class="card">
+      <ul class="notification-list">
+        {% for notification in recent_notifications %}{{ notification_row(notification) }}{% endfor %}
+      </ul>
+    </div>
+  {% endif %}
+
+  {% if older_notifications %}
+    <h2 class="timeline__day">Earlier</h2>
+    <div class="card">
+      <ul class="notification-list">
+        {% for notification in older_notifications %}{{ notification_row(notification) }}{% endfor %}
+      </ul>
+    </div>
+  {% endif %}
 {% else %}
   <div class="empty">
-    <div class="empty__icon">🔔</div>
-    <h3>Nothing here yet</h3>
+    <div class="empty__icon">
+      <svg class="icon" aria-hidden="true"><use href="#icon-bell"></use></svg>
+    </div>
+    <h2>Nothing here yet</h2>
     <p>
       We will let you know when there is news about an application, or when
       staff think an animal might suit you.
     </p>
-    <a class="btn btn--secondary" href="{{ url_for('animals.search') }}">Browse animals</a>
+    <div class="empty__actions">
+      <a class="btn btn--secondary" href="{{ url_for('animals.search') }}">Browse animals</a>
+    </div>
   </div>
 {% endif %}
 {% endblock %}

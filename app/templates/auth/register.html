@@ -8,27 +8,58 @@
 
     <form method="post" action="{{ url_for('auth.register') }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+      <p class="required-note">All four fields are required.</p>
+
       <div class="field">
         <label class="field__label" for="full_name">Full name</label>
         <input class="input" type="text" id="full_name" name="full_name"
                value="{{ full_name or '' }}" required autocomplete="name" autofocus>
       </div>
+
       <div class="field">
         <label class="field__label" for="email">Email</label>
         <input class="input" type="email" id="email" name="email"
-               value="{{ email or '' }}" required autocomplete="email">
+               value="{{ email or '' }}" required autocomplete="email"
+               aria-describedby="email-hint">
+        <span class="field__hint" id="email-hint">
+          We use this to sign you in and to tell you about your applications.
+        </span>
       </div>
+
       <div class="field">
         <label class="field__label" for="password">Password</label>
-        <input class="input" type="password" id="password" name="password"
-               required minlength="8" autocomplete="new-password">
-        <span class="field__hint">At least 8 characters.</span>
+        <div class="password-field">
+          <input class="input" type="password" id="password" name="password"
+                 required minlength="8" autocomplete="new-password"
+                 aria-describedby="password-hint">
+          <button type="button" class="password-toggle" data-toggle-password="password"
+                  aria-pressed="false" hidden>
+            <svg class="icon" aria-hidden="true"><use href="#icon-eye"></use></svg>
+            <span class="sr-only">Show password</span>
+          </button>
+        </div>
+        <span class="field__hint" id="password-hint">At least 8 characters.</span>
       </div>
+
       <div class="field">
         <label class="field__label" for="confirm_password">Confirm password</label>
-        <input class="input" type="password" id="confirm_password" name="confirm_password"
-               required minlength="8" autocomplete="new-password">
+        <div class="password-field">
+          {#- `data-match` asks petmatch.js to report a mismatch through the
+              browser's own validation, which saves a round trip. The server
+              checks it again, and its answer is the one that counts. -#}
+          <input class="input" type="password" id="confirm_password" name="confirm_password"
+                 required minlength="8" autocomplete="new-password"
+                 data-match="password" aria-describedby="confirm_password-hint">
+          <button type="button" class="password-toggle" data-toggle-password="confirm_password"
+                  aria-pressed="false" hidden>
+            <svg class="icon" aria-hidden="true"><use href="#icon-eye"></use></svg>
+            <span class="sr-only">Show password</span>
+          </button>
+        </div>
+        <span class="field__hint" id="confirm_password-hint">Type the same password again.</span>
       </div>
+
       <button class="btn btn--primary btn--block" type="submit">Create account</button>
     </form>
 

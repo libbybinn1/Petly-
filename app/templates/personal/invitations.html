@@ -1,6 +1,84 @@
 {% extends "base.html" %}
 {% block title %}My invitations — PetMatch{% endblock %}
 
+{#- Open invitations are a to-do list; answered and expired ones are a
+    record. Mixed together, the one thing this screen exists to say - that
+    something is waiting for you - is the thing it does not say. -#}
+{% set open_invitations = invitations | selectattr('is_awaiting_response') | list %}
+{% set closed_invitations = invitations | rejectattr('is_awaiting_response') | list %}
+
+{%- macro invitation_card(invitation) -%}
+<article class="card card--padded">
+  <div class="candidate__head">
+    <a class="match-thumb" href="{{ url_for('animals.details', animal_id=invitation.animal_id) }}">
+      {% if invitation.animal_image_url %}
+        <img src="{{ invitation.animal_image_url }}" alt="{{ invitation.animal_name }}" loading="lazy">
+      {% else %}
+        <svg class="icon icon--filled icon--lg" aria-hidden="true"><use href="#icon-paw"></use></svg>
+      {% endif %}
+    </a>
+
+    <div class="candidate__identity">
+      <h3>
+        <a href="{{ url_for('animals.details', animal_id=invitation.animal_id) }}">{{ invitation.animal_name }}</a>
+      </h3>
+      <p class="candidate__meta">
+        {{ invitation.animal_species|humanize }} &middot; from {{ invitation.sent_by_name }}
+      </p>
+      <div class="tag-row">
+        {% if invitation.is_awaiting_response %}
+          {#- The deadline, in words, on the invitation itself. It used to be
+              in one sentence at the top of the page that applied to all of
+              them and to none of them in particular. -#}
+          <span class="tag {% if invitation.is_urgent %}tag--warning{% else %}tag--brand{% endif %} tag--nowrap">
+            <svg class="icon" aria-hidden="true"><use href="#icon-clock"></use></svg>
+            {{ invitation.time_remaining_label }}
+          </span>
+        {% elif invitation.status == 'ACCEPTED' %}
+          <span class="tag tag--success tag--nowrap">
+            <svg class="icon" aria-hidden="true"><use href="#icon-check"></use></svg>
+            Accepted
+          </span>
+        {% elif invitation.status == 'DECLINED' %}
+          <span class="tag tag--nowrap">Declined</span>
+        {% elif invitation.is_expired %}
+          <span class="tag tag--warning tag--nowrap">Expired</span>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  {% if invitation.staff_message %}
+    <p class="quote">&ldquo;{{ invitation.staff_message }}&rdquo;</p>
+  {% endif %}
+
+  {% if invitation.is_awaiting_response %}
+    <div class="button-row u-spaced">
+      <form method="post" action="{{ url_for('personal.respond_to_invitation', invitation_id=invitation.invitation_id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="response" value="ACCEPT">
+        <button class="btn btn--primary" type="submit">Yes, I am interested</button>
+      </form>
+      {#- Declining cannot be undone and the invitation does not come back,
+          so the click is not the whole decision (docs/UX.md section 3). -#}
+      <form method="post" action="{{ url_for('personal.respond_to_invitation', invitation_id=invitation.invitation_id) }}"
+            data-confirm="Decline the invitation to meet {{ invitation.animal_name }}? This cannot be undone.">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="response" value="DECLINE">
+        <button class="btn btn--danger-ghost btn--small" type="submit">No thank you</button>
+      </form>
+    </div>
+    <p class="pending u-spaced">
+      Saying yes starts an application. It does not complete an adoption — a staff member reviews it next.
+    </p>
+  {% elif invitation.is_expired %}
+    <p class="pending u-spaced">
+      This invitation expired before it was answered. {{ invitation.animal_name }} may still be available.
+    </p>
+  {% endif %}
+</article>
+{%- endmacro -%}
+
 {% block content %}
 <div class="section-heading">
   <div>
@@ -10,80 +88,40 @@
 </div>
 
 {% if invitations %}
-  <div class="stack">
-    {% for invitation in invitations %}
-    <article class="card card--padded candidate">
-      <div class="candidate__head">
-        <a class="match-thumb" href="{{ url_for('animals.details', animal_id=invitation.animal_id) }}">
-          {% if invitation.animal_image_url %}
-            <img src="{{ invitation.animal_image_url }}" alt="{{ invitation.animal_name }}" loading="lazy">
-          {% else %}
-            <span aria-hidden="true">🐾</span>
-          {% endif %}
-        </a>
+  {% if open_invitations %}
+    <h2 class="group-heading">
+      Waiting for your answer
+      <span class="badge">{{ open_invitations|length }}</span>
+    </h2>
+    <div class="stack">
+      {% for invitation in open_invitations %}
+        {{ invitation_card(invitation) }}
+      {% endfor %}
+    </div>
+  {% endif %}
 
-        <div class="candidate__identity">
-          <h3 style="margin-bottom:2px">
-            <a href="{{ url_for('animals.details', animal_id=invitation.animal_id) }}">{{ invitation.animal_name }}</a>
-          </h3>
-          <p class="candidate__meta">
-            {{ invitation.animal_species|humanize }} · from {{ invitation.sent_by_name }}
-          </p>
-          <div class="tag-row" style="padding-top: var(--space-2)">
-            {% if invitation.is_awaiting_response %}
-              <span class="tag {% if invitation.is_urgent %}tag--danger{% else %}tag--brand{% endif %}">
-                {{ invitation.time_remaining_label }}
-              </span>
-            {% elif invitation.status == 'ACCEPTED' %}
-              <span class="tag tag--success">Accepted</span>
-            {% elif invitation.status == 'DECLINED' %}
-              <span class="tag">Declined</span>
-            {% elif invitation.is_expired %}
-              <span class="tag tag--warning">Expired</span>
-            {% endif %}
-          </div>
-        </div>
-      </div>
-
-      {% if invitation.staff_message %}
-        <p style="margin: var(--space-4) 0 0; padding-top: var(--space-4); border-top: 1px solid var(--border-soft)">
-          &ldquo;{{ invitation.staff_message }}&rdquo;
-        </p>
-      {% endif %}
-
-      {% if invitation.is_awaiting_response %}
-        <div style="display:flex; gap: var(--space-2); margin-top: var(--space-4); flex-wrap: wrap">
-          <form method="post" action="{{ url_for('personal.respond_to_invitation', invitation_id=invitation.invitation_id) }}">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <input type="hidden" name="response" value="ACCEPT">
-            <button class="btn btn--primary" type="submit">Yes, I am interested</button>
-          </form>
-          <form method="post" action="{{ url_for('personal.respond_to_invitation', invitation_id=invitation.invitation_id) }}">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <input type="hidden" name="response" value="DECLINE">
-            <button class="btn btn--secondary" type="submit">No thank you</button>
-          </form>
-        </div>
-        <p class="pending" style="margin-top: var(--space-3)">
-          Saying yes starts an application. It does not complete an adoption — a staff member reviews it next.
-        </p>
-      {% elif invitation.is_expired %}
-        <p class="pending" style="margin-top: var(--space-4)">
-          This invitation expired before it was answered. {{ invitation.animal_name }} may still be available.
-        </p>
-      {% endif %}
-    </article>
-    {% endfor %}
-  </div>
+  {% if closed_invitations %}
+    <h2 class="group-heading">Answered and expired</h2>
+    <div class="stack">
+      {% for invitation in closed_invitations %}
+        {{ invitation_card(invitation) }}
+      {% endfor %}
+    </div>
+  {% endif %}
 {% else %}
   <div class="empty">
-    <div class="empty__icon">✉️</div>
-    <h3>No invitations yet</h3>
+    <div class="empty__icon">
+      <svg class="icon" aria-hidden="true"><use href="#icon-envelope"></use></svg>
+    </div>
+    <h2>No invitations yet</h2>
     <p>
       If staff think an animal would suit your home, they will invite you here.
       Make sure your profile is complete and you have opted in to suggestions.
     </p>
-    <a class="btn btn--primary" href="{{ url_for('matches.find_my_pet') }}">See your matches</a>
+    <div class="empty__actions">
+      <a class="btn btn--primary" href="{{ url_for('matches.find_my_pet') }}">See your matches</a>
+      <a class="btn btn--secondary" href="{{ url_for('personal.my_profile') }}">Check my profile</a>
+    </div>
   </div>
 {% endif %}
 {% endblock %}

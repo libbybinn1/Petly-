@@ -6,11 +6,14 @@
    is reachable through its Refresh link. This file only makes those things
    pleasanter. No build step, no framework, no dependencies (spec section 30).
 
-   Four behaviours, each opted into from a template by one attribute:
+   Seven behaviours, each opted into from a template by one attribute:
      [data-theme-choice]        light / dark / system theme buttons
      form[data-confirm]         confirm before a destructive submit
      [data-shown-by="<id>"]     reveal a region when a checkbox is ticked
      [data-analysis-status-url] poll for finished agent explanations
+     [data-toggle-password]     reveal the password in that field
+     [data-counter="<id>"]      report how much of a capped field is left
+     [data-match="<id>"]        warn before submitting two unequal passwords
    ========================================================================== */
 (function () {
   "use strict";
@@ -160,11 +163,91 @@
     schedule();
   }
 
+  /* ------------------------------------------------- reveal a password */
+
+  /* Typing a password you cannot see is how people end up locked out of an
+     account they registered thirty seconds ago. The button is `hidden` in
+     the markup and unhidden here, so a visitor with JavaScript blocked is
+     never offered a control that does nothing. */
+  function initPasswordToggles() {
+    document.querySelectorAll("[data-toggle-password]").forEach(function (button) {
+      var field = document.getElementById(button.getAttribute("data-toggle-password"));
+      if (!field) {
+        return;
+      }
+      var symbol = button.querySelector("use");
+      var label = button.querySelector(".sr-only");
+
+      button.hidden = false;
+      button.addEventListener("click", function () {
+        var revealing = field.type === "password";
+        field.type = revealing ? "text" : "password";
+        button.setAttribute("aria-pressed", revealing ? "true" : "false");
+        if (symbol) {
+          symbol.setAttribute("href", revealing ? "#icon-eye-off" : "#icon-eye");
+        }
+        if (label) {
+          label.textContent = revealing ? "Hide password" : "Show password";
+        }
+      });
+    });
+  }
+
+  /* ------------------------------------------- characters left to type */
+
+  var NEAR_LIMIT_FRACTION = 0.9;
+
+  /* A `maxlength` that silently stops accepting characters reads as a broken
+     keyboard. The count is rendered here rather than server-side, because a
+     server-rendered "0 of 2000" is wrong the moment anybody types. */
+  function initCounters() {
+    document.querySelectorAll("[data-counter]").forEach(function (field) {
+      var output = document.getElementById(field.getAttribute("data-counter"));
+      var limit = parseInt(field.getAttribute("maxlength"), 10);
+      if (!output || !limit) {
+        return;
+      }
+
+      var sync = function () {
+        var used = field.value.length;
+        output.hidden = false;
+        output.textContent = used + " of " + limit + " characters";
+        output.classList.toggle("is-near-limit", used >= limit * NEAR_LIMIT_FRACTION);
+      };
+      field.addEventListener("input", sync);
+      sync();
+    });
+  }
+
+  /* ------------------------------------------------ passwords must match */
+
+  /* The server checks this too, and its answer is the one that counts. This
+     only saves a round trip that would otherwise come back with both fields
+     cleared. `setCustomValidity` is used rather than a message of our own so
+     the browser reports it the same way it reports every other field. */
+  function initPasswordMatch() {
+    document.querySelectorAll("[data-match]").forEach(function (confirmation) {
+      var original = document.getElementById(confirmation.getAttribute("data-match"));
+      if (!original) {
+        return;
+      }
+      var sync = function () {
+        var mismatched = confirmation.value !== "" && confirmation.value !== original.value;
+        confirmation.setCustomValidity(mismatched ? "The two passwords do not match." : "");
+      };
+      confirmation.addEventListener("input", sync);
+      original.addEventListener("input", sync);
+    });
+  }
+
   function start() {
     initTheme();
     initConfirmations();
     initDisclosure();
     initAnalysisPolling();
+    initPasswordToggles();
+    initCounters();
+    initPasswordMatch();
   }
 
   if (document.readyState === "loading") {

@@ -1566,3 +1566,275 @@ img { max-width: 100%; display: block; }
   background: var(--border-soft);
 }
 .timeline__day:first-child { margin-top: 0; }
+
+/* ==========================================================================
+   Per-screen components (docs/UX.md sections 3 and 6)
+   --------------------------------------------------------------------------
+   Phase A built the design system; these are the pieces the per-screen pass
+   needed that no component covered yet. Everything below is additive: no
+   token and no phase-A rule is redefined here.
+
+   They also exist to delete markup. The nine templates in this pass carried
+   about 130 inline `style=` attributes between them, which is the same thing
+   as having no design system at all: a spacing decision made forty times
+   cannot be changed once. Every rule below replaced at least two of them.
+   ========================================================================== */
+
+/* ---------------------------------------------------------- back link -- */
+
+/* A details page opened from a search result needs a way back that is not
+   the browser's button. The chevron points the direction the link goes. */
+.backlink {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+  font-size: 0.92rem;
+}
+.backlink .icon { width: 0.95em; height: 0.95em; }
+
+/* ------------------------------------------------------------- alerts -- */
+
+/* An alert that introduces the form below it, rather than one in a stack. */
+.alert--page { margin-bottom: var(--space-5); }
+/* An alert that is the last thing inside a panel: its own bottom margin
+   would double the panel's padding. */
+.alert--flush { margin-top: var(--space-3); margin-bottom: 0; }
+
+/* A flash message is rendered by base.html, before the page's own content,
+   so an auth screen cannot wrap it in anything. Matching it by the shape of
+   the page it landed on keeps a 424px card from being introduced by an
+   1180px banner. */
+.page:has(.auth-shell) > .stack {
+  max-width: 424px;
+  margin-inline: auto;
+}
+
+/* -------------------------------------------------------------- forms -- */
+
+/* A checkbox group is a fieldset with a legend, which is the only grouping a
+   screen reader announces. Both arrive with browser chrome that has to be
+   removed before they look like the rest of the form. */
+fieldset.field {
+  border: 0;
+  padding: 0;
+  margin-inline: 0;
+  /* A fieldset sizes itself to min-content, so without this a long legend
+     stretches its flex track and breaks the filter row. */
+  min-width: 0;
+}
+legend.field__label { padding: 0; }
+
+/* `--short` and `--medium` cap the whole field, which is right when the
+   label is about as short as the answer. When it is not, this modifier
+   releases the label and the hint and caps only the control: a four-line
+   hint inside a 160px column is not a narrow field, it is a broken one. */
+.field--short.field--wide-text,
+.field--medium.field--wide-text { max-width: none; }
+.field--short.field--wide-text > .input,
+.field--short.field--wide-text > .select { max-width: 160px; }
+.field--medium.field--wide-text > .input,
+.field--medium.field--wide-text > .select { max-width: 340px; }
+
+/* Required is marked on the field and explained once at the top of the
+   form: an asterisk nobody has defined is decoration. */
+.required-mark { color: var(--danger-fg); font-weight: var(--weight-bold); }
+.required-note {
+  font-size: 0.83rem;
+  color: var(--text-muted);
+  margin: 0 0 var(--space-5);
+}
+
+/* Every message the server rejected, in one list at the top, each one a link
+   to the control that produced it. A summary that only says how many
+   problems there are leaves the reader to go and find them. */
+.error-summary {
+  border: 1px solid var(--danger-fg);
+  border-left-width: 4px;
+  border-radius: var(--radius-md);
+  background: var(--danger-bg);
+  padding: var(--space-4);
+  margin-bottom: var(--space-5);
+}
+.error-summary__title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 1rem;
+  font-weight: var(--weight-bold);
+  color: var(--danger-fg);
+  margin-bottom: var(--space-2);
+}
+.error-summary ul { margin: 0; padding-left: var(--space-5); }
+.error-summary li { font-size: 0.9rem; margin-bottom: 2px; }
+.error-summary a { color: var(--danger-fg); }
+
+/* The end of a form: the action, and the way out of it. Referenced by
+   animals/form.html since it was written, and never defined. */
+.form-actions {
+  display: flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: var(--space-6);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border-soft);
+}
+
+/* How much of a capped textarea is left. Hidden until JavaScript fills it,
+   because a server-rendered "0 of 2000" is wrong the moment anybody types. */
+.char-counter {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin: 6px 0 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.char-counter.is-near-limit {
+  color: var(--warning-fg);
+  font-weight: var(--weight-semibold);
+}
+
+/* Reveal a password. The button is `hidden` in the markup and unhidden by
+   petmatch.js, so with JavaScript blocked there is no control at all rather
+   than a control that does nothing. */
+.password-field { position: relative; display: flex; }
+.password-field .input { padding-right: 46px; }
+.password-toggle {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  translate: 0 -50%;
+  width: 36px; height: 36px;
+  display: grid; place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.password-toggle:hover { color: var(--text-strong); background: var(--surface-hover); }
+
+/* --------------------------------------------------------- filter bar -- */
+
+/* `align-items: flex-end` lines up the bottoms of controls of different
+   heights, which pushes their *labels* out of line - and a label is what a
+   person reads when scanning a filter row. Aligning to the top lines the
+   labels up instead; the action group keeps `flex-end` on its own, so it
+   sits on the controls' baseline when it shares their row and gains no
+   phantom offset when it wraps onto a row of its own. */
+.filter-bar--aligned { align-items: flex-start; }
+.filter-bar--aligned .filter-bar__actions { align-self: flex-end; }
+
+/* ------------------------------------------------------------- tables -- */
+
+/* A second line in a cell - a breed under a name - is a detail rather than a
+   value, so it is set quieter instead of at the same size. */
+.table__name { min-width: 0; }
+.table__sub { display: block; color: var(--text-muted); font-size: 0.82rem; }
+@media (max-width: 760px) {
+  /* Card mode right-aligns every value against its label. */
+  .table__name { text-align: right; }
+}
+
+/* Row actions keep one order and one pair of weights on every row, so the
+   column reads as a list of four things rather than four different rows.
+   Two fixed columns rather than a wrapping flex row: buttons of four
+   different widths wrapped three-and-one, which made every row look like a
+   different set of actions. */
+.table__actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+  min-width: 152px;
+}
+@media (max-width: 760px) {
+  /* In card mode the row has the whole width, so the actions can sit on one
+     line under the values they act on. */
+  .table__actions { display: flex; flex-wrap: wrap; min-width: 0; }
+}
+
+/* "Adoption in progress" wrapping inside a pill turns a status into two
+   lines of text with a rounded box around them. */
+.tag--nowrap { white-space: nowrap; }
+
+/* ----------------------------------------------------- animal details -- */
+
+/* The photograph column used to end 300px above the column beside it. The
+   specification grid moves underneath the photograph, which fills that space
+   with the facts a photograph cannot carry. */
+.detail-media { display: flex; flex-direction: column; gap: var(--space-5); }
+.detail-main  { display: flex; flex-direction: column; gap: var(--space-5); }
+
+/* The name, the species line and the description belong to one another, so
+   they are one block inside that column rather than three gapped ones. */
+.detail-intro > * { margin-bottom: 0; }
+.detail-intro > * + * { margin-top: var(--space-3); }
+.detail-lede { color: var(--text-muted); font-size: 1.05rem; }
+
+/* A tag row that opens a panel rather than closing a card: `.tag-row` pushes
+   itself to the bottom of a flex card, which is wrong at the top of one. */
+.tag-row--flush { margin-top: 0; padding-top: 0; }
+
+/* Changing an animal's availability closes applications, so it is a panel
+   with a heading and its consequence written on it - not a select floating
+   between two link buttons. */
+.status-panel { display: flex; gap: var(--space-3); align-items: flex-end; flex-wrap: wrap; }
+.status-panel .field { margin-bottom: 0; flex: 1 1 200px; }
+
+/* A row of buttons that are peers: staff actions, or an answer to an
+   invitation. */
+.button-row { display: flex; gap: var(--space-2); flex-wrap: wrap; align-items: center; }
+
+/* Somebody else's words, set apart from the page's own. */
+.quote {
+  margin: var(--space-4) 0 0;
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border-soft);
+  color: var(--text-normal);
+}
+
+/* A heading that separates two groups of cards on one screen - open
+   invitations from answered ones, today's messages from older ones. Its top
+   margin collapses with whatever sits above it, so the first group heading
+   on a page is no further down than it needs to be. */
+.group-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: var(--space-6) 0 var(--space-4);
+  font-size: 1.3rem;
+}
+
+/* ------------------------------------------------------ notifications -- */
+
+/* The list fills its card, so it has to carry the card's rounding: an unread
+   row is tinted edge to edge and would otherwise square off the corner. */
+.notification-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+/* A row is three lines with no space between them; `p`'s 16px bottom margin
+   would turn each message into a paragraph of its own. */
+.notification-item__body p { margin: 0; }
+.notification-item__body p + p { margin-top: 2px; }
+.notification-item__actions { display: flex; gap: var(--space-2); flex-shrink: 0; flex-wrap: wrap; }
+
+/* ------------------------------------------------------- empty states -- */
+
+/* `.empty` styled an h1 and an h3; a zero-result panel sitting under the
+   screen's own h1 needs the level in between. */
+.empty h2 { margin-bottom: var(--space-2); font-size: 1.3rem; }
+
+/* ---------------------------------------------------------- utilities -- */
+
+/* Four one-line rules, each of which replaced several inline styles. They
+   are utilities on purpose: not one of them describes a component. */
+.u-nowrap { white-space: nowrap; }
+.u-flush  { margin-bottom: 0; }
+.u-spaced { margin-top: var(--space-3); }
+.u-muted  { color: var(--text-muted); }

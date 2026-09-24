@@ -1,25 +1,98 @@
 {% extends "base.html" %}
 {% block title %}Browse animals — PetMatch{% endblock %}
 
+{#- The age bands the search offers, defined once so the select, the chip
+    label and the "clear all" logic cannot disagree about them (spec 6.2). -#}
+{%- set age_ranges = [
+      ('0-2', 'Under 2 years'),
+      ('2-8', '2 to 8 years'),
+      ('8+', '8 years and older'),
+] -%}
+{%- set selected_age_range = request.args.get('age_range', '') -%}
+
+{#- Every filter currently narrowing the results, as (query key, label)
+    pairs. One list drives both the chip row and the sentence under the
+    heading, so the screen cannot say "32 match your search" while showing
+    no evidence that anything was searched for (docs/UX.md section 6). -#}
+{%- set applied_filters = [] -%}
+{%- if filters.text -%}
+  {%- set _ = applied_filters.append(('q', 'Matching “' ~ filters.text ~ '”')) -%}
+{%- endif -%}
+{%- if filters.species -%}
+  {%- set _ = applied_filters.append(('species', filters.species|humanize)) -%}
+{%- endif -%}
+{%- if filters.size -%}
+  {%- set _ = applied_filters.append(('size', filters.size|humanize ~ ' size')) -%}
+{%- endif -%}
+{#- Read from the query string rather than from `filters`, because the age
+    band is matched in the query layer rather than carried on the filters
+    object. An unrecognised value produces no chip, which is also what it
+    produces in the results. -#}
+{%- for value, label in age_ranges if value == selected_age_range -%}
+  {%- set _ = applied_filters.append(('age_range', label)) -%}
+{%- endfor -%}
+{%- if filters.activity_level -%}
+  {%- set _ = applied_filters.append(('activity_level', filters.activity_level|humanize ~ ' energy')) -%}
+{%- endif -%}
+{%- if filters.good_with_children -%}
+  {%- set _ = applied_filters.append(('good_with_children', 'Good with children')) -%}
+{%- endif -%}
+{%- if filters.good_with_other_animals -%}
+  {%- set _ = applied_filters.append(('good_with_other_animals', 'Good with other animals')) -%}
+{%- endif -%}
+
+{#- The same search with one parameter dropped, which is what a removable
+    chip links to. `page` is dropped as well: page four of a narrower search
+    is rarely a page of the wider one, and landing on an empty page after
+    removing a filter looks like the removal failed. -#}
+{%- macro search_url_without(key) -%}
+  {%- set remaining = request.args.to_dict() -%}
+  {%- set _ = remaining.pop(key, none) -%}
+  {%- set _ = remaining.pop('page', none) -%}
+  {{- url_for('animals.search', **remaining) -}}
+{%- endmacro -%}
+
 {% block content %}
 <div class="section-heading">
   <div>
     <h1>Browse animals</h1>
-    <p>{{ results.total_count }} animal{{ '' if results.total_count == 1 else 's' }} match your search.</p>
+    <p>
+      {%- if filters.is_empty %}
+        {{ results.total_count }} animal{{ '' if results.total_count == 1 else 's' }}
+        looking for a home.
+      {%- elif results.total_count == 1 %}
+        1 animal matches your search.
+      {%- else %}
+        {{ results.total_count }} animals match your search.
+      {%- endif %}
+    </p>
   </div>
+  {#- Was a third button in the search row, where it competed with the search
+      itself. It is an alternative way to start, so it belongs beside the
+      heading. -#}
+  <a class="btn btn--secondary" href="{{ url_for('matches.natural_language_search') }}">
+    <svg class="icon" aria-hidden="true"><use href="#icon-sparkle"></use></svg>
+    Describe it instead
+  </a>
 </div>
 
 <form method="get" action="{{ url_for('animals.search') }}">
   <div class="searchbar">
-    <input class="input" type="search" name="q" value="{{ filters.text or '' }}"
-           placeholder="Search by name, breed or description…" aria-label="Search animals">
-    <button class="btn btn--primary" type="submit">Search</button>
-    <a class="btn btn--secondary" href="{{ url_for('matches.natural_language_search') }}">
-      Describe it instead
-    </a>
+    {#- A real label, visually hidden. An `aria-label` alone leaves the field
+        unlabelled for anyone using voice control or a translation tool. -#}
+    <label class="sr-only" for="q">Search animals by name, breed or description</label>
+    <input class="input" type="search" id="q" name="q" value="{{ filters.text or '' }}"
+           placeholder="Search by name, breed or description…">
+    <button class="btn btn--primary" type="submit">
+      <svg class="icon" aria-hidden="true"><use href="#icon-search"></use></svg>
+      Search
+    </button>
   </div>
 
-  <div class="filter-bar">
+  {#- One primary action per screen. This row used to hold a second
+      `btn--primary` ("Apply filters") beside the search button, so the page
+      offered two equally weighted ways to do almost the same thing. -#}
+  <div class="filter-bar filter-bar--aligned">
     <div class="field">
       <label class="field__label" for="species">Species</label>
       <select class="select" id="species" name="species">
@@ -41,6 +114,16 @@
     </div>
 
     <div class="field">
+      <label class="field__label" for="age_range">Age</label>
+      <select class="select" id="age_range" name="age_range">
+        <option value="">Any age</option>
+        {% for value, label in age_ranges %}
+          <option value="{{ value }}" {% if selected_age_range == value %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="field">
       <label class="field__label" for="activity_level">Energy level</label>
       <select class="select" id="activity_level" name="activity_level">
         <option value="">Any</option>
@@ -50,8 +133,11 @@
       </select>
     </div>
 
-    <div class="field">
-      <span class="field__label">Must be</span>
+    {#- A fieldset with a legend, not a div with a span: the legend is the
+        only grouping a screen reader announces, so without it the two boxes
+        are two unrelated questions. -#}
+    <fieldset class="field">
+      <legend class="field__label">Must be</legend>
       <label class="checkbox">
         <input type="checkbox" name="good_with_children" value="1"
                {% if filters.good_with_children %}checked{% endif %}>
@@ -62,41 +148,73 @@
                {% if filters.good_with_other_animals %}checked{% endif %}>
         Good with other animals
       </label>
-    </div>
+    </fieldset>
 
     <div class="filter-bar__actions">
-      <button class="btn btn--primary" type="submit">Apply filters</button>
-      <a class="btn btn--ghost" href="{{ url_for('animals.search') }}">Clear</a>
+      <button class="btn btn--secondary" type="submit">Apply filters</button>
     </div>
   </div>
 </form>
 
+{% if applied_filters %}
+  {#- What is narrowing the list, and how to stop it. Each chip links to this
+      same search minus its own parameter. -#}
+  <div class="chip-row">
+    <span class="chip-row__label">Filtered by</span>
+    {% for key, label in applied_filters %}
+      <a class="chip" href="{{ search_url_without(key) }}">
+        {{ label }}
+        <span class="sr-only">— remove this filter</span>
+        <span class="chip__remove" aria-hidden="true">
+          <svg class="icon"><use href="#icon-x"></use></svg>
+        </span>
+      </a>
+    {% endfor %}
+    <a class="chip chip--clear" href="{{ url_for('animals.search') }}">Clear all</a>
+  </div>
+{% endif %}
+
 {% if results.animals %}
   <div class="grid-animals">
     {% for animal in results.animals %}
-      {% include "_animal_card.html" %}
+      {% with card_position = loop.index %}
+        {% include "_animal_card.html" %}
+      {% endwith %}
     {% endfor %}
   </div>
 
   {% if results.page_count > 1 %}
-    <nav class="pagination">
+    <nav class="pagination" aria-label="Search result pages">
       {% if results.has_previous %}
         <a class="btn btn--secondary btn--small"
-           href="{{ url_for('animals.search', **dict(request.args, page=results.page - 1)) }}">Previous</a>
+           href="{{ url_for('animals.search', **dict(request.args, page=results.page - 1)) }}">
+          <svg class="icon" aria-hidden="true"><use href="#icon-chevron-left"></use></svg>
+          Previous
+        </a>
       {% endif %}
       <span class="pagination__status">Page {{ results.page }} of {{ results.page_count }}</span>
       {% if results.has_next %}
         <a class="btn btn--secondary btn--small"
-           href="{{ url_for('animals.search', **dict(request.args, page=results.page + 1)) }}">Next</a>
+           href="{{ url_for('animals.search', **dict(request.args, page=results.page + 1)) }}">
+          Next
+          <svg class="icon" aria-hidden="true"><use href="#icon-chevron-right"></use></svg>
+        </a>
       {% endif %}
     </nav>
   {% endif %}
 {% else %}
   <div class="empty">
-    <div class="empty__icon">🔍</div>
-    <h3>No animals match those filters</h3>
+    <div class="empty__icon">
+      <svg class="icon" aria-hidden="true"><use href="#icon-search"></use></svg>
+    </div>
+    <h2>No animals match those filters</h2>
     <p>Try widening your search — removing a filter or two usually helps.</p>
-    <a class="btn btn--secondary" href="{{ url_for('animals.search') }}">Clear filters</a>
+    <div class="empty__actions">
+      <a class="btn btn--secondary" href="{{ url_for('animals.search') }}">Clear filters</a>
+      <a class="btn btn--ghost" href="{{ url_for('matches.natural_language_search') }}">
+        Describe what you want instead
+      </a>
+    </div>
   </div>
 {% endif %}
 {% endblock %}
