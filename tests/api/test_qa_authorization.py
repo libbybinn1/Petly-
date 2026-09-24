@@ -271,38 +271,34 @@ class TestAnonymousRequests:
             assert "/login" in response.headers["Location"]
 
     @pytest.mark.parametrize(
-        ("path", "documented_status"),
+        "path",
         [
-            ("/animals/manage", 403),
-            ("/dashboard", 403),
-            ("/animals/some-animal/adopters", 403),
-            ("/animals/some-animal/discover", 403),
-            ("/my/profile", 401),
-            ("/my/applications", 401),
-            ("/my/invitations", 401),
-            ("/my/matches", 401),
+            "/animals/manage",
+            "/dashboard",
+            "/animals/some-animal/adopters",
+            "/animals/some-animal/discover",
+            "/my/profile",
+            "/my/applications",
+            "/my/invitations",
+            "/my/matches",
         ],
     )
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "DOC MISMATCH: docs/UX.md section 4 tabulates 401 or 403 for an "
-            "anonymous visitor on each protected screen. Every one of those "
-            "routes is decorated @require_sign_in *outside* @require_staff / "
-            "@require_adopter, so Flask-Login's redirect runs first and the "
-            "server answers 302 to /login. The 401 branch inside require_role "
-            "is unreachable on these routes. Either the table should say "
-            "'redirect to sign-in' or the decorator order should be swapped. "
-            "The redirect is the friendlier behaviour, so the document is "
-            "probably what is wrong."
-        ),
-    )
     def test_anonymous_status_matches_the_documented_table(
-        self, client: FlaskClient, world: dict[str, str], path: str,
-        documented_status: int,
+        self, client: FlaskClient, world: dict[str, str], path: str
     ) -> None:
-        """Proves the permission table in docs/UX.md describes the real server."""
-        assert client.get(path).status_code == documented_status
+        """Proves the permission table in docs/UX.md describes the real server.
+
+        The table says an anonymous visitor on any protected screen is sent
+        to sign in. That is what `@require_sign_in`, the outermost decorator
+        on every one of these routes, does: a 302 to /login before any role
+        check runs. An earlier version of the table promised 401 or 403 here;
+        the document was corrected to the friendlier behaviour the server
+        has always had, and this test keeps the two from drifting again.
+        """
+        response = client.get(path)
+
+        assert response.status_code == 302, path
+        assert "/login" in response.headers["Location"], path
 
     def test_a_deactivated_account_loses_an_existing_session(
         self, application: Flask, world: dict[str, str],
