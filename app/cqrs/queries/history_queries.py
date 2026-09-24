@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.cqrs.base import Query, QueryHandler
 from app.cqrs.queries.dashboard_queries import EVENT_DESCRIPTIONS
+from app.cqrs.queries.formatting import DisplayDate, to_display_moment
 from app.domain.enums import AggregateType, DomainEventType
 from app.eventstore.store import EventStore, RecordedEvent
 from app.infrastructure.models import (
@@ -55,6 +56,11 @@ class HistoryEntry:
         """
         return self.actor_name == "The system"
 
+    @property
+    def occurred(self) -> DisplayDate:
+        """When this happened, in the three forms a timeline needs."""
+        return to_display_moment(self.occurred_at)
+
 
 @dataclass(frozen=True)
 class AggregateHistory:
@@ -66,12 +72,31 @@ class AggregateHistory:
     entries: list[HistoryEntry]
 
 
+class HistoryNotVisibleError(PermissionError):
+    """Raised when a viewer asks for the history of somebody else's record."""
+
+
 @dataclass(frozen=True)
 class GetAggregateHistoryQuery(Query):
-    """Fetch every recorded event for one aggregate."""
+    """Fetch every recorded event for one aggregate.
+
+    Carries the viewer as well as the record, because spec section 7.5 is
+    written from the adopter's point of view: an adopter whose application
+    was closed by somebody else's approval, and later reopened, should be
+    able to see that happen. The rule travels with the data rather than
+    living in the controller (rule R2).
+
+    Attributes:
+        aggregate_type: One of `AggregateType`'s values.
+        aggregate_id: The record to show the history of.
+        viewer_adopter_profile_id: The signed-in adopter's profile, if any.
+        viewer_is_staff: Whether the viewer may read any record's history.
+    """
 
     aggregate_type: str
     aggregate_id: str
+    viewer_adopter_profile_id: str | None = None
+    viewer_is_staff: bool = False
 
 
 class GetAggregateHistoryHandler(QueryHandler[AggregateHistory | None]):
@@ -89,6 +114,10 @@ class GetAggregateHistoryHandler(QueryHandler[AggregateHistory | None]):
         Returns:
             The history, empty entries included, or None when the aggregate
             itself cannot be found.
+
+        Raises:
+            HistoryNotVisibleError: The record is not the viewer's and they
+                are not staff.
         """
         assert isinstance(query, GetAggregateHistoryQuery)
 
@@ -96,6 +125,8 @@ class GetAggregateHistoryHandler(QueryHandler[AggregateHistory | None]):
             aggregate_type = AggregateType(query.aggregate_type)
         except ValueError:
             return None
+
+        _ensure_history_is_visible(session, aggregate_type, query)
 
         events = _events_about(session, aggregate_type, query.aggregate_id)
         if not events and not _aggregate_exists(session, aggregate_type, query.aggregate_id):
@@ -124,6 +155,47 @@ class GetAggregateHistoryHandler(QueryHandler[AggregateHistory | None]):
                 for event in events
             ],
         )
+
+
+# Which aggregates an adopter may see the history of, and the column that
+# says whose they are. An animal's history names every applicant, and a
+# profile is somebody's household, so neither is on this list: those stay
+# staff-only (docs/UX.md section 4).
+_OWNED_BY_ADOPTER: dict[AggregateType, type[Any]] = {
+    AggregateType.APPLICATION: AdoptionApplication,
+    AggregateType.INVITATION: AdoptionInvitation,
+}
+
+
+def _ensure_history_is_visible(
+    session: Session, aggregate_type: AggregateType, query: GetAggregateHistoryQuery
+) -> None:
+    """Raise unless this viewer may read this record's history (FR-2.4).
+
+    A record that does not exist is refused rather than reported absent,
+    for a non-staff viewer: answering 404 for "no such application" and 403
+    for "not yours" would turn this route into a way of discovering which
+    identifiers are real.
+
+    Args:
+        session: A read-only session.
+        aggregate_type: The kind of record being asked for.
+        query: The request, carrying the viewer.
+
+    Raises:
+        HistoryNotVisibleError: The viewer is not staff and the record is
+            not theirs.
+    """
+    if query.viewer_is_staff:
+        return
+
+    model = _OWNED_BY_ADOPTER.get(aggregate_type)
+    if model is not None and query.viewer_adopter_profile_id is not None:
+        row = session.get(model, query.aggregate_id)
+        if row is not None and row.adopter_profile_id == query.viewer_adopter_profile_id:
+            return
+
+    raise HistoryNotVisibleError("This history belongs to somebody else.")
 
 
 def _events_about(

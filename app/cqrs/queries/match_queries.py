@@ -24,9 +24,18 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.cqrs.base import Query, QueryHandler
+from app.cqrs.queries.animal_queries import (
+    DEFAULT_PAGE_SIZE,
+    AnimalCard,
+    AnimalSearchFilters,
+    apply_search_filters,
+    to_animal_card,
+)
+from app.cqrs.queries.formatting import describe_relative_time, to_display_moment
 from app.domain.application_rules import ALLOWED_APPLICATION_TRANSITIONS
 from app.domain.enums import (
     ActivityLevel,
+    AnalysisJobStatus,
     AnimalSize,
     AnimalStatus,
     ApplicationStatus,
@@ -46,6 +55,7 @@ from app.domain.matching import (
 from app.infrastructure.models import (
     AdopterProfile,
     AdoptionApplication,
+    AnalysisJob,
     Animal,
     MatchAnalysis,
     User,
@@ -108,6 +118,10 @@ class RankedCandidate:
     application_id: str | None = None
     application_status: str | None = None
     analysis: StoredAnalysis | None = None
+    # "4 minutes ago", when a job for this pairing is still queued. None
+    # when nothing is queued, which is a different state from waiting: the
+    # explanation may simply never have been asked for.
+    queued_at_label: str | None = None
 
     @property
     def analysis_is_pending(self) -> bool:
@@ -196,6 +210,8 @@ class RankedAnimal:
     image_url: str | None
     score: MatchScore
     analysis: StoredAnalysis | None = None
+    # See RankedCandidate.queued_at_label.
+    queued_at_label: str | None = None
 
     @property
     def species_label(self) -> str:
@@ -255,6 +271,46 @@ class FindMyPetQuery(Query):
 
 
 @dataclass(frozen=True)
+class FindMyPetWithIntentQuery(Query):
+    """Rank animals for one adopter, narrowed by what they just asked for.
+
+    Spec section 6.4 calls the combination of a stable profile with a current
+    intent "the key distinction" of this product: the profile says what suits
+    this household, the description says what they are in the mood for today,
+    and neither alone is the answer.
+
+    The narrowing is a database filter and the ranking is the deterministic
+    scorer. No model is involved at this point - the model's only
+    contribution was turning prose into `filters`, and that happened in
+    another process before this query ran (rule R4).
+
+    Attributes:
+        adopter_profile_id: Whose profile ranks the results.
+        filters: The interpreted criteria, from `filters_from_intent`.
+        limit: How many animals to return.
+    """
+
+    adopter_profile_id: str
+    filters: AnimalSearchFilters
+    limit: int = DEFAULT_PAGE_SIZE
+
+
+@dataclass(frozen=True)
+class ExcludedCandidate:
+    """An adopter discovery rejected, and the rule that rejected them.
+
+    Spec section 10 runs eligibility *before* ranking, so these people never
+    reach the list. Reporting only how many were excluded told a staff member
+    that a judgement had been made and nothing about what it was, which is
+    the one thing they would want to check.
+    """
+
+    adopter_profile_id: str
+    full_name: str
+    disqualification_reason: str
+
+
+@dataclass(frozen=True)
 class RankingResult:
     """A ranked candidate list plus the context a screen needs."""
 
@@ -262,6 +318,11 @@ class RankingResult:
     animal_name: str
     candidates: list[RankedCandidate] = field(default_factory=list)
     excluded_count: int = 0
+    # Populated by discovery, which hides disqualified candidates entirely.
+    # Applicant ranking leaves it empty because it shows its disqualified
+    # applicants in the list itself, flagged - staff asked about those
+    # people by name, so hiding them would be the wrong answer.
+    excluded_candidates: list[ExcludedCandidate] = field(default_factory=list)
 
 
 # --------------------------------------------------------------------------
@@ -295,6 +356,7 @@ class RankApplicantsHandler(QueryHandler[RankingResult | None]):
         analyses = _analyses_for_animal(
             session, query.animal_id, MatchDirection.ANIMAL_TO_ADOPTER
         )
+        queued_labels = _queued_labels_for_animal(session, query.animal_id)
 
         candidates: list[RankedCandidate] = []
         excluded = 0
@@ -319,6 +381,7 @@ class RankApplicantsHandler(QueryHandler[RankingResult | None]):
                     score,
                     analyses.get(profile.adopter_profile_id),
                     application,
+                    queued_labels.get(profile.adopter_profile_id),
                 )
             )
 
@@ -368,24 +431,32 @@ class FindMoreAdoptersHandler(QueryHandler[RankingResult | None]):
         analyses = _analyses_for_animal(
             session, query.animal_id, MatchDirection.ANIMAL_TO_ADOPTER
         )
+        queued_labels = _queued_labels_for_animal(session, query.animal_id)
 
         candidates: list[RankedCandidate] = []
-        disqualified = 0
+        excluded: list[ExcludedCandidate] = []
 
         for profile in eligible_profiles:
             score = calculate_match_score(
                 _adopter_facts(profile), animal_facts, MatchDirection.ANIMAL_TO_ADOPTER
             )
             if score.is_disqualified:
-                # Unlike applicant ranking, discovery hides these entirely:
-                # staff did not ask about this person, so surfacing a
-                # disqualified suggestion is noise.
-                disqualified += 1
+                # Unlike applicant ranking, discovery keeps these out of the
+                # list: staff did not ask about this person, so a
+                # disqualified suggestion would be noise in the ranking. The
+                # reason is still recorded, so the screen can show what was
+                # ruled out and why rather than only a count.
+                excluded.append(_to_excluded_candidate(session, profile, score))
                 continue
 
             candidates.append(
                 _build_candidate(
-                    session, profile, score, analyses.get(profile.adopter_profile_id)
+                    session,
+                    profile,
+                    score,
+                    analyses.get(profile.adopter_profile_id),
+                    None,
+                    queued_labels.get(profile.adopter_profile_id),
                 )
             )
 
@@ -393,7 +464,8 @@ class FindMoreAdoptersHandler(QueryHandler[RankingResult | None]):
             animal_id=animal.animal_id,
             animal_name=animal.name,
             candidates=_sorted_candidates(candidates)[: query.limit],
-            excluded_count=disqualified,
+            excluded_count=len(excluded),
+            excluded_candidates=sorted(excluded, key=lambda item: item.full_name),
         )
 
     @staticmethod
@@ -430,45 +502,59 @@ class FindMyPetHandler(QueryHandler[list[RankedAnimal]]):
         if profile is None:
             return []
 
-        animals = (
-            session.execute(
-                select(Animal)
-                .options(selectinload(Animal.images))
-                .where(Animal.status == AnimalStatus.AVAILABLE.value)
-            )
-            .scalars()
-            .all()
-        )
-
-        adopter_facts = _adopter_facts(profile)
+        scored = _score_available_animals(session, profile, filters=None)
         analyses = _analyses_for_adopter(
             session, query.adopter_profile_id, MatchDirection.ADOPTER_TO_ANIMAL
         )
+        queued_labels = _queued_labels_for_adopter(session, query.adopter_profile_id)
 
-        ranked: list[RankedAnimal] = []
-        for animal in animals:
-            score = calculate_match_score(
-                adopter_facts, _animal_facts(animal), MatchDirection.ADOPTER_TO_ANIMAL
+        ranked = [
+            RankedAnimal(
+                animal_id=animal.animal_id,
+                name=animal.name,
+                species=animal.species,
+                breed=animal.breed,
+                age_years=float(animal.age_years),
+                city=animal.city,
+                image_url=animal.primary_image_url,
+                score=score,
+                analysis=analyses.get(animal.animal_id),
+                queued_at_label=queued_labels.get(animal.animal_id),
             )
-            if score.is_disqualified:
-                continue
-
-            ranked.append(
-                RankedAnimal(
-                    animal_id=animal.animal_id,
-                    name=animal.name,
-                    species=animal.species,
-                    breed=animal.breed,
-                    age_years=float(animal.age_years),
-                    city=animal.city,
-                    image_url=animal.primary_image_url,
-                    score=score,
-                    analysis=analyses.get(animal.animal_id),
-                )
-            )
-
-        ranked.sort(key=lambda item: (-item.score.score, item.animal_id))
+            for animal, score in scored
+        ]
         return ranked[: query.limit]
+
+
+class FindMyPetWithIntentHandler(QueryHandler[list[AnimalCard]]):
+    """Answers FindMyPetWithIntentQuery (spec section 6.4).
+
+    Returns cards rather than the richer `RankedAnimal` because this feeds a
+    results grid: the same `_animal_card.html` the ordinary search renders,
+    with a score on it. The alternative - a second card layout for the one
+    screen that fuses a profile with an intent - is exactly the drift
+    docs/UX.md section 3 forbids.
+    """
+
+    def handle(self, query: Query, session: Session) -> list[AnimalCard]:
+        """Rank the animals matching an intent against one adopter's profile.
+
+        An adopter whose profile has been deleted between the job being
+        queued and this page being opened gets an empty list rather than an
+        error: their description has already been interpreted, and the
+        intent-only results are one link away.
+        """
+        assert isinstance(query, FindMyPetWithIntentQuery)
+
+        profile = session.get(AdopterProfile, query.adopter_profile_id)
+        if profile is None:
+            return []
+
+        scored = _score_available_animals(session, profile, query.filters)
+        return [
+            to_animal_card(animal, match_score=score.score)
+            for animal, score in scored[: query.limit]
+        ]
 
 
 @dataclass(frozen=True)
@@ -493,10 +579,26 @@ class MatchAnalysisDetail:
     reasons: list[str]
     concerns: list[str]
     missing_information: list[str]
-    evidence_sources: list[dict[str, str]]
+    # Passed through as the agent stored them. Not `dict[str, str]`: each
+    # source carries a `cited` boolean saying whether a reason actually
+    # referred to it, and the template shows that marker (rule R4).
+    evidence_sources: list[dict[str, Any]]
     used_web_search: bool
     model_name: str
     generated_at: str
+    # The ordered steps the agent took. Empty for an analysis written before
+    # the agent recorded one, which is why the template guards on it.
+    reasoning_trace: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def cited_sources(self) -> list[dict[str, Any]]:
+        """The sources a reason actually referred to.
+
+        Matches `StoredAnalysis.cited_sources`: an uncited source was
+        fetched and not used, which belongs in the record but is not
+        evidence for anything on screen.
+        """
+        return [source for source in self.evidence_sources if source.get("cited")]
 
 
 class GetMatchAnalysisHandler(QueryHandler[MatchAnalysisDetail | None]):
@@ -529,7 +631,8 @@ class GetMatchAnalysisHandler(QueryHandler[MatchAnalysisDetail | None]):
             evidence_sources=_decode_list(analysis.evidence_sources),
             used_web_search=bool(analysis.used_web_search),
             model_name=analysis.model_name,
-            generated_at=analysis.generated_at.strftime("%d %b %Y, %H:%M"),
+            generated_at=to_display_moment(analysis.generated_at).display,
+            reasoning_trace=_decode_list(analysis.reasoning_trace),
         )
 
 
@@ -545,12 +648,133 @@ def _sorted_candidates(candidates: list[RankedCandidate]) -> list[RankedCandidat
     )
 
 
+def _score_available_animals(
+    session: Session, profile: AdopterProfile, filters: AnimalSearchFilters | None
+) -> list[tuple[Animal, MatchScore]]:
+    """Score every available animal for one adopter, best first.
+
+    Shared by Find My Pet and its profile-fused variant, which differ only
+    in what they narrow to and what they build from the result. Keeping the
+    scoring in one place is what guarantees the same animal cannot hold two
+    different scores on two screens for the same adopter (FR-9.7).
+
+    Disqualified pairings are dropped rather than ranked last: a hard
+    constraint is a rule, not a low score (spec section 8), and offering an
+    adopter an animal they may not adopt would be a worse answer than a
+    shorter list.
+
+    Args:
+        session: A read-only session.
+        profile: The adopter to score against.
+        filters: Extra narrowing, from an interpreted intent. None ranks
+            every available animal.
+
+    Returns:
+        (animal, score) pairs, highest score first, ties broken on identifier.
+    """
+    statement = select(Animal).options(selectinload(Animal.images))
+    if filters is None:
+        statement = statement.where(Animal.status == AnimalStatus.AVAILABLE.value)
+    else:
+        statement = apply_search_filters(statement, filters)
+
+    adopter_facts = _adopter_facts(profile)
+    scored: list[tuple[Animal, MatchScore]] = []
+
+    for animal in session.execute(statement).scalars().all():
+        score = calculate_match_score(
+            adopter_facts, _animal_facts(animal), MatchDirection.ADOPTER_TO_ANIMAL
+        )
+        if not score.is_disqualified:
+            scored.append((animal, score))
+
+    scored.sort(key=lambda pair: (-pair[1].score, pair[0].animal_id))
+    return scored
+
+
+def _to_excluded_candidate(
+    session: Session, profile: AdopterProfile, score: MatchScore
+) -> ExcludedCandidate:
+    """Record one adopter discovery ruled out, with the rule that ruled them out."""
+    user = session.get(User, profile.user_id)
+    return ExcludedCandidate(
+        adopter_profile_id=profile.adopter_profile_id,
+        full_name=user.full_name if user else "Unknown",
+        disqualification_reason=(
+            score.disqualification_reason or "A hard eligibility rule was not met."
+        ),
+    )
+
+
+def _queued_labels_for_animal(session: Session, animal_id: str) -> dict[str, str]:
+    """How long each outstanding job for this animal has been waiting.
+
+    Fetched in one query for the whole screen rather than per candidate, for
+    the same reason as `_analyses_for_animal`: ranking twenty applicants
+    should not issue twenty round trips to a shared cloud database.
+
+    Args:
+        session: A read-only session.
+        animal_id: The animal being ranked for.
+
+    Returns:
+        A relative label such as "4 minutes ago", keyed by adopter profile.
+        Adopters with nothing queued are absent.
+    """
+    rows = session.execute(
+        select(AnalysisJob.adopter_profile_id, AnalysisJob.created_at)
+        .where(AnalysisJob.animal_id == animal_id)
+        .where(AnalysisJob.status.in_(_OUTSTANDING_JOB_STATUSES))
+        .order_by(AnalysisJob.created_at)
+    ).tuples().all()
+    return {
+        adopter_profile_id: describe_relative_time(created_at)
+        for adopter_profile_id, created_at in rows
+        if adopter_profile_id is not None
+    }
+
+
+def _queued_labels_for_adopter(
+    session: Session, adopter_profile_id: str
+) -> dict[str, str]:
+    """How long each outstanding job for this adopter has been waiting.
+
+    Args:
+        session: A read-only session.
+        adopter_profile_id: The adopter being ranked for.
+
+    Returns:
+        A relative label such as "4 minutes ago", keyed by animal. Animals
+        with nothing queued are absent.
+    """
+    rows = session.execute(
+        select(AnalysisJob.animal_id, AnalysisJob.created_at)
+        .where(AnalysisJob.adopter_profile_id == adopter_profile_id)
+        .where(AnalysisJob.status.in_(_OUTSTANDING_JOB_STATUSES))
+        .order_by(AnalysisJob.created_at)
+    ).tuples().all()
+    return {
+        animal_id: describe_relative_time(created_at)
+        for animal_id, created_at in rows
+        if animal_id is not None
+    }
+
+
+# A job the page is still waiting on. IN_PROGRESS counts because the wait is
+# the same from the screen's point of view.
+_OUTSTANDING_JOB_STATUSES = (
+    AnalysisJobStatus.PENDING.value,
+    AnalysisJobStatus.IN_PROGRESS.value,
+)
+
+
 def _build_candidate(
     session: Session,
     profile: AdopterProfile,
     score: MatchScore,
     analysis: StoredAnalysis | None,
     application: AdoptionApplication | None = None,
+    queued_at_label: str | None = None,
 ) -> RankedCandidate:
     """Assemble one ranked candidate row."""
     user = session.get(User, profile.user_id)
@@ -568,6 +792,7 @@ def _build_candidate(
         application_id=application.application_id if application else None,
         application_status=application.status if application else None,
         analysis=analysis,
+        queued_at_label=queued_at_label,
     )
 
 

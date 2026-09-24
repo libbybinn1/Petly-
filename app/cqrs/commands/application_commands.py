@@ -531,8 +531,17 @@ class ReverseApprovalHandler(CommandHandler[int]):
             actor_user_id=command.staff_user_id,
         )
 
+        # The causation comes from the log, not from the column (FR-13.3).
+        # `closed_because_application_id` is a projection of the closing
+        # event kept for query speed; reading the decision off the
+        # projection meant a row edited outside the application - or a
+        # projection that had drifted - could reopen the wrong applications,
+        # which is the exact mistake event sourcing was adopted to prevent.
+        # The column is now a cross-check, verified by
+        # `app.eventstore.projections.rebuild_projections`.
+        causes = _closure_causes_from_events(event_store)
         snapshots = [
-            _to_snapshot(row)
+            _to_snapshot(row, causes.get(row.application_id))
             for row in _applications_of(session, approved.adopter_profile_id)
         ]
         to_reopen = select_applications_to_reopen(approved.application_id, snapshots)
@@ -585,15 +594,60 @@ def _applications_of(session: Session, adopter_profile_id: str) -> list[Adoption
     )
 
 
-def _to_snapshot(row: AdoptionApplication) -> ApplicationSnapshot:
-    """Convert a row into the value object the domain rules operate on."""
+def _to_snapshot(
+    row: AdoptionApplication, closed_because_application_id: str | None = None
+) -> ApplicationSnapshot:
+    """Convert a row into the value object the domain rules operate on.
+
+    Args:
+        row: The stored application.
+        closed_because_application_id: The closing cause derived from the
+            event log, for the reversal path. Omitted elsewhere, where the
+            projected column is what the caller means.
+
+    Returns:
+        The snapshot the rules in `app.domain.application_rules` judge.
+    """
     return ApplicationSnapshot(
         application_id=row.application_id,
         adopter_profile_id=row.adopter_profile_id,
         animal_id=row.animal_id,
         status=ApplicationStatus(row.status),
-        closed_because_application_id=row.closed_because_application_id,
+        closed_because_application_id=(
+            closed_because_application_id
+            if closed_because_application_id is not None
+            else row.closed_because_application_id
+        ),
     )
+
+
+def _closure_causes_from_events(event_store: EventStore) -> dict[str, str]:
+    """Read from the log which approval most recently closed each application.
+
+    The closing event carries `caused_by_application_id`, so the log can
+    answer the spec 7.5 question - "which applications did *this* approval
+    close?" - without consulting any projection.
+
+    The most recent closure wins, which is why this is a map rather than a
+    filtered set. An application closed by approval A, reopened when A was
+    reversed, then closed again by approval B is currently closed *by B*;
+    reversing A a second time must not reopen it. Events arrive oldest
+    first, so later entries overwrite earlier ones.
+
+    Args:
+        event_store: The store to read the log through.
+
+    Returns:
+        The causing application identifier, keyed by the closed application.
+    """
+    causes: dict[str, str] = {}
+    for event in event_store.read_events_of_type(
+        DomainEventType.APPLICATION_CLOSED_DUE_TO_OTHER_APPROVAL
+    ):
+        cause = event.payload.get("caused_by_application_id")
+        if isinstance(cause, str):
+            causes[event.aggregate_id] = cause
+    return causes
 
 
 def _user_id_of(session: Session, adopter_profile_id: str) -> str | None:

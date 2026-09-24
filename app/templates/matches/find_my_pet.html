@@ -10,8 +10,14 @@
   <a class="btn btn--secondary btn--small" href="{{ url_for('animals.search') }}">Browse everything instead</a>
 </div>
 
+{#- `data-analysis-status-url` opts this page into the poller in petmatch.js
+    (docs/UX.md section 3): it asks the status endpoint how much agent work is
+    outstanding and reloads once something has changed. The scope carries no
+    identifier — the endpoint reads the signed-in adopter's profile from the
+    session — so this URL discloses nothing even if it is shared. Without
+    JavaScript the Refresh link in each pending block does the same job. -#}
 {% if matches %}
-  <div class="stack">
+  <div class="stack" data-analysis-status-url="{{ url_for('matches.analysis_status', scope='my-matches') }}">
     {% for match in matches %}
     <article class="card card--padded candidate">
       <div class="candidate__head">
@@ -49,7 +55,9 @@
               {% for reason in match.analysis.reasons %}<li>{{ reason }}</li>{% endfor %}
             </ul>
           {% elif match.analysis_is_pending %}
-            <p class="pending">We are still preparing this explanation. The score is already final.</p>
+            {% with queued_at_label = match.queued_at_label %}
+              {% include "matches/_pending_analysis.html" %}
+            {% endwith %}
           {% endif %}
 
           {% if match.analysis and match.analysis.concerns %}

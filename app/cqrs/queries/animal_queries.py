@@ -46,6 +46,20 @@ class AnimalCard:
     good_with_children: bool
     good_with_other_animals: bool
     has_special_needs: bool
+    # How well this animal suits the adopter the card is being shown to,
+    # 0-100. Set only by the match queries, which know whose profile to
+    # score against; a public search has no adopter and leaves it None, so
+    # a card can tell "no score was computed" from "scored badly".
+    match_score: int | None = None
+
+    @property
+    def has_match_score(self) -> bool:
+        """Whether a personal score was computed for this card.
+
+        `if animal.match_score` would hide a genuine score of 0, which is
+        what a disqualified pairing scores (app/domain/matching.py).
+        """
+        return self.match_score is not None
 
     @property
     def age_label(self) -> str:
@@ -107,6 +121,9 @@ class AnimalSearchFilters:
     size: str | None = None
     activity_level: str | None = None
     city: str | None = None
+    # One of AGE_RANGE_BOUNDS' keys, or None for no age constraint. Spec
+    # section 6.2 names age among the filters the search must offer.
+    age_range: str | None = None
     good_with_children: bool = False
     good_with_other_animals: bool = False
     available_only: bool = True
@@ -121,6 +138,7 @@ class AnimalSearchFilters:
                 self.size,
                 self.activity_level,
                 self.city,
+                self.age_range,
                 self.good_with_children,
                 self.good_with_other_animals,
             )
@@ -176,14 +194,64 @@ class ListAllAnimalsQuery(Query):
 
     status: str | None = None
     species: str | None = None
+    size: str | None = None
+    # One of AGE_RANGE_BOUNDS' keys, or None. Spec section 7.1 names age and
+    # size among the filters the staff table must offer.
+    age_range: str | None = None
     text: str | None = None
     page: int = 1
     page_size: int = STAFF_PAGE_SIZE
 
 
-def _to_card(animal: Animal) -> AnimalCard:
-    """Convert an ORM animal into a grid card."""
+# The age bands both filters offer, matching the vocabulary the seed data
+# and `AdopterProfile.preferred_age_range` already use ("0-2 years" and so
+# on). Bounds are (minimum inclusive, maximum exclusive); None is unbounded,
+# so the three bands tile the whole range with no gap and no overlap - an
+# animal of exactly 2.0 years is an adult, not both.
+AGE_RANGE_BOUNDS: dict[str, tuple[float | None, float | None]] = {
+    "0-2": (None, 2.0),
+    "2-8": (2.0, 8.0),
+    "8+": (8.0, None),
+}
+
+
+def parse_age_range(raw_value: str | None) -> str | None:
+    """Read an age band from a query string, dropping anything unrecognised.
+
+    Spec section 6.2 and section 7.1 both name age as a filter. The value
+    arrives from a URL, so it is whatever somebody typed there: an
+    unrecognised band becomes None, meaning "no age constraint", rather than
+    an error page or a filter matching nothing.
+
+    Args:
+        raw_value: The raw `age_range` parameter, which may be absent.
+
+    Returns:
+        One of `AGE_RANGE_BOUNDS`' keys, or None.
+    """
+    candidate = (raw_value or "").strip()
+    if candidate in AGE_RANGE_BOUNDS:
+        return candidate
+    return None
+
+
+def to_animal_card(animal: Animal, match_score: int | None = None) -> AnimalCard:
+    """Convert an ORM animal into a grid card.
+
+    Public because the match queries build the same card for a results grid
+    and must not grow a second, drifting copy of it (docs/UX.md section 3:
+    the animal card is one definition).
+
+    Args:
+        animal: The row to convert.
+        match_score: How well this animal suits the adopter being served,
+            when there is one. Omitted for an anonymous listing.
+
+    Returns:
+        The card view model.
+    """
     return AnimalCard(
+        match_score=match_score,
         animal_id=animal.animal_id,
         name=animal.name,
         species=animal.species,
@@ -204,7 +272,7 @@ def _to_card(animal: Animal) -> AnimalCard:
 SelectT = TypeVar("SelectT", bound=Select[Any])
 
 
-def _apply_filters(statement: SelectT, filters: AnimalSearchFilters) -> SelectT:
+def apply_search_filters(statement: SelectT, filters: AnimalSearchFilters) -> SelectT:
     """Narrow a select statement by the supplied filters.
 
     Generic over the statement type because the same filters are applied
@@ -213,8 +281,19 @@ def _apply_filters(statement: SelectT, filters: AnimalSearchFilters) -> SelectT:
 
     Extracted from the handler so each condition stays readable and the
     handler itself reads as a sequence of steps rather than a wall of
-    conditionals.
+    conditionals. Public because the profile-fused search in
+    `app.cqrs.queries.match_queries` narrows by the same filters, and two
+    implementations of "matching the intent" would eventually disagree
+    about what the visitor asked for (spec section 6.4).
+
+    Args:
+        statement: The select to narrow.
+        filters: The criteria to apply. Absent criteria narrow nothing.
+
+    Returns:
+        The statement with one WHERE clause per supplied criterion.
     """
+    statement = _apply_age_band(statement, filters.age_range)
     if filters.available_only:
         statement = statement.where(Animal.status == AnimalStatus.AVAILABLE.value)
     if filters.species:
@@ -238,6 +317,32 @@ def _apply_filters(statement: SelectT, filters: AnimalSearchFilters) -> SelectT:
                 Animal.description.like(pattern, escape=LIKE_ESCAPE),
             )
         )
+    return statement
+
+
+def _apply_age_band(statement: SelectT, age_range: str | None) -> SelectT:
+    """Narrow a select statement to one age band.
+
+    Shared by the public search and the staff table so "2-8" means the same
+    span of years on both screens. An unrecognised band narrows nothing,
+    which is what `parse_age_range` has usually already ensured.
+
+    Args:
+        statement: The select to narrow.
+        age_range: One of `AGE_RANGE_BOUNDS`' keys, or None.
+
+    Returns:
+        The statement, narrowed when the band was recognised.
+    """
+    bounds = AGE_RANGE_BOUNDS.get((age_range or "").strip())
+    if bounds is None:
+        return statement
+
+    minimum, maximum = bounds
+    if minimum is not None:
+        statement = statement.where(Animal.age_years >= minimum)
+    if maximum is not None:
+        statement = statement.where(Animal.age_years < maximum)
     return statement
 
 
@@ -275,9 +380,11 @@ class SearchAnimalsHandler(QueryHandler[AnimalSearchResults]):
         assert isinstance(query, SearchAnimalsQuery)
 
         base = select(Animal).options(selectinload(Animal.images))
-        filtered = _apply_filters(base, query.filters)
+        filtered = apply_search_filters(base, query.filters)
 
-        count_statement = _apply_filters(select(func.count()).select_from(Animal), query.filters)
+        count_statement = apply_search_filters(
+            select(func.count()).select_from(Animal), query.filters
+        )
         total_count = int(session.execute(count_statement).scalar_one())
 
         offset = max(0, (query.page - 1) * query.page_size)
@@ -287,7 +394,7 @@ class SearchAnimalsHandler(QueryHandler[AnimalSearchResults]):
         animals = session.execute(page_statement).scalars().all()
 
         return AnimalSearchResults(
-            animals=[_to_card(animal) for animal in animals],
+            animals=[to_animal_card(animal) for animal in animals],
             total_count=total_count,
             page=query.page,
             page_size=query.page_size,
@@ -322,7 +429,7 @@ class GetAnimalDetailsHandler(QueryHandler[AnimalDetails | None]):
             ).scalar_one()
         )
 
-        card = _to_card(animal)
+        card = to_animal_card(animal)
         return AnimalDetails(
             **card.__dict__,
             description=animal.description,
@@ -369,7 +476,7 @@ class ListAllAnimalsHandler(QueryHandler[AnimalSearchResults]):
         )
 
         return AnimalSearchResults(
-            animals=[_to_card(animal) for animal in animals],
+            animals=[to_animal_card(animal) for animal in animals],
             total_count=total,
             page=page,
             page_size=page_size,
@@ -377,16 +484,27 @@ class ListAllAnimalsHandler(QueryHandler[AnimalSearchResults]):
 
 
 def _apply_staff_filters(statement: SelectT, query: ListAllAnimalsQuery) -> SelectT:
-    """Narrow a staff listing by status, species and free text.
+    """Narrow a staff listing by status, species, size, age and free text.
 
-    Separate from `_apply_filters` because the staff table filters on
+    Separate from `apply_search_filters` because the staff table filters on
     different things: every status is visible here, which is the whole
-    point of the screen.
+    point of the screen, and the free-text search covers the city rather
+    than the description.
+
+    Args:
+        statement: The select to narrow.
+        query: The staff listing request.
+
+    Returns:
+        The statement with one WHERE clause per supplied criterion.
     """
+    statement = _apply_age_band(statement, query.age_range)
     if query.status:
         statement = statement.where(Animal.status == query.status)
     if query.species:
         statement = statement.where(Animal.species == query.species)
+    if query.size:
+        statement = statement.where(Animal.size == query.size)
     if query.text:
         pattern = f"%{_escape_like(query.text.strip())}%"
         statement = statement.where(
@@ -400,11 +518,17 @@ def _apply_staff_filters(statement: SelectT, query: ListAllAnimalsQuery) -> Sele
 
 
 def available_filter_options() -> dict[str, list[str]]:
-    """Enumerate the values offered in the search form's dropdowns."""
+    """Enumerate the values offered in the search form's dropdowns.
+
+    The age bands come from `AGE_RANGE_BOUNDS` rather than being written out
+    in the template, so a band added here appears in the form and is
+    understood by the query in the same edit.
+    """
     return {
         "species": [member.value for member in Species],
         "size": [member.value for member in AnimalSize],
         "activity_level": [member.value for member in ActivityLevel],
+        "age_range": list(AGE_RANGE_BOUNDS),
     }
 
 

@@ -16,7 +16,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.cqrs.base import Query, QueryHandler
-from app.domain.enums import ApplicationStatus, InvitationStatus
+from app.cqrs.queries.formatting import DisplayDate, to_display_date
+from app.domain.enums import AggregateType, ApplicationStatus, InvitationStatus
 from app.domain.invitation_rules import has_expired
 from app.infrastructure.models import (
     AdoptionApplication,
@@ -93,6 +94,26 @@ class ApplicationSummary:
     def is_active(self) -> bool:
         """Whether this application is still in play."""
         return ApplicationStatus(self.status).is_active
+
+    @property
+    def submitted(self) -> DisplayDate:
+        """When this was submitted, in the three forms the table needs.
+
+        A date with no clock time: which minute an application was sent is
+        not something anybody reads off this screen.
+        """
+        return to_display_date(self.submitted_at)
+
+    @property
+    def history_url(self) -> str:
+        """Where this application's recorded history can be read.
+
+        Spec section 7.5 is written from the adopter's side - an application
+        closed because another was approved, and reopened if that approval
+        is reversed - so the adopter needs somewhere to see it happen. Built
+        from the identifier rather than stored, so it cannot go stale.
+        """
+        return f"/history/{AggregateType.APPLICATION.value}/{self.application_id}"
 
 
 @dataclass(frozen=True)

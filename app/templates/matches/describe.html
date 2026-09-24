@@ -2,6 +2,16 @@
 {% block title %}Describe what you are looking for — PetMatch{% endblock %}
 
 {% block content %}
+{#- While the agent is interpreting, the page reloads itself. A meta refresh
+    rather than JavaScript because this screen has no score to keep in sync
+    and no endpoint to poll - there is simply nothing to show yet, and the
+    Refresh link in the pending block covers a browser that ignores it.
+
+    It sits in the body because base.html exposes no head block; every
+    browser honours it here. Worth moving into a `{% raw %}{% block head %}{% endraw %}`
+    if base.html ever grows one. -#}
+{% if job and job.is_waiting %}<meta http-equiv="refresh" content="4">{% endif %}
+
 <div class="section-heading">
   <div>
     <h1>Describe what you are looking for</h1>
@@ -10,25 +20,63 @@
   <a class="btn btn--secondary btn--small" href="{{ url_for('animals.search') }}">Use filters instead</a>
 </div>
 
+{% if error %}
+  <div class="alert alert--error" style="margin-bottom: var(--space-4)">{{ error }}</div>
+{% endif %}
+
 <form method="post" action="{{ url_for('matches.natural_language_search') }}" class="card card--padded">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <div class="field">
     <label class="field__label" for="description">What kind of animal are you hoping for?</label>
     <textarea class="textarea" id="description" name="description" required
+              maxlength="{{ maximum_description_length }}"
               placeholder="For example: something like a hamster or rabbit, a small rodent. Or: an animal that works well in an apartment and does not need much activity.">{{ described }}</textarea>
+    <p class="field__hint">Up to {{ maximum_description_length }} characters.</p>
   </div>
+
+  {#- Offered only to a signed-in adopter with a complete profile: there is
+      nothing stable to combine the request with otherwise (spec 6.4). -#}
+  {% if can_use_profile %}
+    <label class="checkbox" for="use_profile">
+      <input type="checkbox" id="use_profile" name="use_profile" value="1"
+             {% if job and job.uses_profile %}checked{% endif %}>
+      Also rank the results against my adoption profile
+    </label>
+  {% endif %}
+
   <button class="btn btn--primary" type="submit">Find animals</button>
 </form>
 
-{% if intent and not intent.understood %}
+{% if job and job.is_waiting %}
+  <div class="card card--padded" style="margin-top: var(--space-5)">
+    <h3 class="panel-title">Reading your description</h3>
+    <p style="margin-bottom: var(--space-3)">
+      The agent is working out what &ldquo;{{ job.described }}&rdquo; means as search
+      criteria. This page refreshes itself; nothing is lost if you wait or come back.
+    </p>
+    {% with queued_at_label = job.queued_at.relative_label %}
+      {% include "matches/_pending_analysis.html" %}
+    {% endwith %}
+  </div>
+
+{% elif job and job.has_failed %}
+  <div class="alert alert--warning" style="margin-top: var(--space-5)">
+    We could not interpret that just now — the agent may not be running.
+    Your description has not been lost, and the filters find the same animals.
+  </div>
+  <p><a class="btn btn--secondary" href="{{ url_for('animals.search') }}">Search with filters instead</a></p>
+
+{% elif intent and not intent.understood %}
   <div class="alert alert--warning" style="margin-top: var(--space-5)">
     {{ intent.interpretation }}
   </div>
+
 {% elif intent and not intent.has_any_criteria %}
   <div class="alert alert--info" style="margin-top: var(--space-5)">
     We could not pick out any specific requirements from that. Try mentioning a
     species, a size, or how active you would like the animal to be.
   </div>
+
 {% elif intent %}
   <div class="card card--padded" style="margin-top: var(--space-5)">
     <h3 class="panel-title">How we read that</h3>
@@ -48,15 +96,51 @@
       {% if intent.good_with_other_animals %}
         <span class="tag tag--success">Good with other animals</span>
       {% endif %}
+      {% if job and job.uses_profile %}
+        <span class="tag tag--info">Ranked against your profile</span>
+      {% endif %}
     </div>
     <p class="pending" style="margin-top: var(--space-3)">
       Only what you actually said is used. Anything you did not mention is left open,
-      so nothing is quietly ruled out.
+      so nothing is quietly ruled out. The ordering is arithmetic, not model output.
     </p>
   </div>
 {% endif %}
 
-{% if results %}
+{#- Two result shapes: `ranked` when the search was fused with a profile,
+    `results` for an intent-only search. Both render the one animal card
+    partial, so the two paths cannot drift (docs/UX.md 3). -#}
+{% if ranked is not none %}
+  <div class="section-heading" style="margin-top: var(--space-6)">
+    <div>
+      <h2>{{ ranked|length }} animal{{ '' if ranked|length == 1 else 's' }} for you</h2>
+      <p>Matching what you described, ranked by how well each suits your household.</p>
+    </div>
+  </div>
+
+  {% if ranked %}
+    <div class="grid-animals">
+      {% for animal in ranked %}
+        <div>
+          {% with card_position = loop.index %}{% include "_animal_card.html" %}{% endwith %}
+          {% if animal.has_match_score %}
+            <p class="pending" style="margin-top: var(--space-2)">
+              {{ animal.match_score }}% match with your profile
+            </p>
+          {% endif %}
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="empty">
+      <div class="empty__icon">🔍</div>
+      <h3>Nothing available matches that for your household right now</h3>
+      <p>Our roster changes often. Browsing everything may turn up something close.</p>
+      <a class="btn btn--primary" href="{{ url_for('animals.search') }}">Browse all animals</a>
+    </div>
+  {% endif %}
+
+{% elif results %}
   <div class="section-heading" style="margin-top: var(--space-6)">
     <div>
       <h2>{{ results.total_count }} matching animal{{ '' if results.total_count == 1 else 's' }}</h2>
@@ -66,7 +150,7 @@
   {% if results.animals %}
     <div class="grid-animals">
       {% for animal in results.animals %}
-        {% include "_animal_card.html" %}
+        {% with card_position = loop.index %}{% include "_animal_card.html" %}{% endwith %}
       {% endfor %}
     </div>
   {% else %}

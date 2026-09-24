@@ -41,6 +41,7 @@ from app.domain.enums import (
     Temperament,
     UserRole,
 )
+from app.eventstore.projections import replay_application
 from app.eventstore.store import EventStore
 from app.infrastructure.database import Base
 from app.infrastructure.models import (
@@ -520,28 +521,20 @@ class TestEventLogIntegrity:
             )
             session.commit()
 
-        status_from_event = {
-            DomainEventType.APPLICATION_SUBMITTED: ApplicationStatus.SUBMITTED,
-            DomainEventType.APPLICATION_UNDER_REVIEW: ApplicationStatus.UNDER_REVIEW,
-            DomainEventType.APPLICATION_APPROVED: ApplicationStatus.APPROVED,
-            DomainEventType.APPLICATION_REJECTED: ApplicationStatus.REJECTED,
-            DomainEventType.APPLICATION_WITHDRAWN: ApplicationStatus.WITHDRAWN,
-            DomainEventType.APPLICATION_CLOSED_DUE_TO_OTHER_APPROVAL: ApplicationStatus.CLOSED,
-            DomainEventType.APPLICATION_REOPENED: ApplicationStatus.SUBMITTED,
-        }
-
         with session_factory() as session:
             store = EventStore(session)
             for application_id in (approved, cascade_closed, withdrawn):
-                replayed = None
-                for event in store.read_aggregate_stream(application_id):
-                    if event.event_type in status_from_event:
-                        replayed = status_from_event[event.event_type]
+                # The production reducer, not a copy of it. This test used to
+                # carry its own event-to-status table, which meant it proved
+                # that *the test* could replay the log and left the
+                # application unable to (BG-5).
+                replayed = replay_application(store.read_aggregate_stream(application_id))
 
                 stored = session.get(AdoptionApplication, application_id)
                 assert stored is not None
-                assert replayed is ApplicationStatus(stored.status), (
-                    f"{application_id}: replay gave {replayed}, projection has {stored.status}"
+                assert replayed.status is ApplicationStatus(stored.status), (
+                    f"{application_id}: replay gave {replayed.status}, "
+                    f"projection has {stored.status}"
                 )
 
 

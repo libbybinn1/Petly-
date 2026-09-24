@@ -10,31 +10,63 @@
   <a class="btn btn--secondary btn--small" href="{{ url_for('animals.manage') }}">Manage animals</a>
 </div>
 
+{#- A figure that implies an action should be the way to take it (spec 22),
+    so a tile with somewhere to go renders as a link. The three without a
+    screen of their own stay plain rather than pretending: the view model
+    decides which is which, not this template. -#}
 <div class="stat-row" style="margin-bottom: var(--space-6)">
-  <div class="stat">
-    <div class="stat__value">{{ summary.available_animals }}</div>
-    <div class="stat__label">Available for adoption</div>
+  {% for tile in summary.tiles %}
+    {% if tile.is_actionable %}
+      <a class="stat stat--link" href="{{ tile.action_url }}">
+        <div class="stat__value">{{ tile.value }}</div>
+        <div class="stat__label">{{ tile.label }}</div>
+        <div class="stat__label">{{ tile.action_label }} &rarr;</div>
+      </a>
+    {% else %}
+      <div class="stat">
+        <div class="stat__value">{{ tile.value }}</div>
+        <div class="stat__label">{{ tile.label }}</div>
+      </div>
+    {% endif %}
+  {% endfor %}
+</div>
+
+{#- The agent runs as a separate process with its own terminal, which staff
+    do not have open. Without this strip a stopped worker looked exactly
+    like an idle one: explanations simply never appeared (CLAUDE.md R4). -#}
+<div class="card card--padded" style="margin-bottom: var(--space-6)">
+  <h2 style="font-size:1.25rem">Agent queue</h2>
+  <div class="coverage">
+    <div class="coverage__row">
+      <span class="coverage__label">Explanations still to write</span>
+      <span class="coverage__value">{{ summary.analyses_pending }}</span>
+    </div>
+    <div class="coverage__row">
+      <span class="coverage__label">Jobs that gave up</span>
+      <span class="coverage__value {% if summary.analyses_failed %}is-warning{% endif %}">
+        {{ summary.analyses_failed }}
+      </span>
+    </div>
+    {% if summary.analyses_queued_oldest %}
+      <div class="coverage__row">
+        <span class="coverage__label">Longest wait so far</span>
+        <span class="coverage__value">
+          <time datetime="{{ summary.analyses_queued_oldest.iso }}">
+            {{ summary.analyses_queued_oldest.relative_label }}
+          </time>
+        </span>
+      </div>
+    {% endif %}
   </div>
-  <div class="stat">
-    <div class="stat__value">{{ summary.pending_applications }}</div>
-    <div class="stat__label">Applications awaiting review</div>
-  </div>
-  <div class="stat">
-    <div class="stat__value">{{ summary.applications_under_review }}</div>
-    <div class="stat__label">Under review</div>
-  </div>
-  <div class="stat">
-    <div class="stat__value">{{ summary.open_invitations }}</div>
-    <div class="stat__label">Invitations awaiting a reply</div>
-  </div>
-  <div class="stat">
-    <div class="stat__value">{{ summary.adoptions_in_progress }}</div>
-    <div class="stat__label">Adoptions in progress</div>
-  </div>
-  <div class="stat">
-    <div class="stat__value">{{ summary.analyses_completed }}</div>
-    <div class="stat__label">Match analyses completed</div>
-  </div>
+  <p class="pending" style="margin-top: var(--space-4)">
+    {% if summary.agent_is_working %}
+      The agent writes explanations on CPU-only hardware, which takes tens of
+      seconds each. Scores are already final everywhere — they are arithmetic,
+      not model output.
+    {% else %}
+      Nothing is queued. Every requested explanation has been written.
+    {% endif %}
+  </p>
 </div>
 
 <div class="detail-layout">
@@ -110,7 +142,7 @@
         <ol class="activity">
           {% for entry in summary.recent_activity %}
           <li class="activity__item">
-            <span class="activity__time">{{ entry.occurred_at.strftime('%d %b, %H:%M') }}</span>
+            <time class="activity__time" datetime="{{ entry.occurred.iso }}">{{ entry.occurred.display }}</time>
             <span class="activity__text">
               {% if entry.animal_id %}
                 {{ entry.actor_name }} {{ entry.description }}

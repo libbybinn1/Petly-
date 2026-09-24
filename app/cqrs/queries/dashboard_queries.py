@@ -24,7 +24,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.cqrs.base import Query, QueryHandler
+from app.cqrs.queries.formatting import DisplayDate, to_display_moment
 from app.domain.enums import (
+    AnalysisJobStatus,
     AnimalStatus,
     ApplicationStatus,
     DomainEventType,
@@ -35,6 +37,7 @@ from app.eventstore.store import EventStore, RecordedEvent
 from app.infrastructure.models import (
     AdoptionApplication,
     AdoptionInvitation,
+    AnalysisJob,
     Animal,
     MatchAnalysis,
     User,
@@ -72,7 +75,15 @@ EVENT_DESCRIPTIONS: dict[DomainEventType, str] = {
 
 @dataclass(frozen=True)
 class ActivityEntry:
-    """One line of the recent-activity feed, derived from an event."""
+    """One line of the recent-activity feed, derived from an event.
+
+    `animal_id` and `animal_name` are set together or not at all. An event
+    naming an animal that has since been deleted used to carry the
+    identifier with no name, and the feed rendered "Staff Member approved an
+    adoption of" followed by a link with no text - a truncated sentence and
+    an invisible link. Either the animal can be named and linked, or the
+    sentence ends where it ends.
+    """
 
     occurred_at: datetime
     actor_name: str
@@ -86,6 +97,32 @@ class ActivityEntry:
         if self.animal_name:
             return f"{self.actor_name} {self.description} {self.animal_name}"
         return f"{self.actor_name} {self.description}"
+
+    @property
+    def occurred(self) -> DisplayDate:
+        """When this happened, in the three forms the feed needs."""
+        return to_display_moment(self.occurred_at)
+
+
+@dataclass(frozen=True)
+class StatTile:
+    """One headline figure, with somewhere to act on it (spec section 22).
+
+    `action_url` is optional and honestly so: three of these figures have no
+    screen of their own to open yet - there is no cross-animal application
+    queue and no staff invitation list - and a tile that looks clickable and
+    goes nowhere useful is worse than one that does not.
+    """
+
+    value: int
+    label: str
+    action_url: str | None = None
+    action_label: str | None = None
+
+    @property
+    def is_actionable(self) -> bool:
+        """Whether this tile should render as a link."""
+        return bool(self.action_url and self.action_label)
 
 
 @dataclass(frozen=True)
@@ -114,6 +151,12 @@ class DashboardSummary:
     animals_without_suitable_applicants: int
     adoptions_in_progress: int
     analyses_completed: int
+    # The agent's queue. Staff cannot see the agent's terminal, so a stuck
+    # or failing worker was invisible from the application: explanations
+    # simply never appeared and nothing said why (CLAUDE.md R4).
+    analyses_pending: int = 0
+    analyses_failed: int = 0
+    analyses_queued_oldest_at: datetime | None = None
     attention_items: list[AttentionItem] = field(default_factory=list)
     recent_activity: list[ActivityEntry] = field(default_factory=list)
 
@@ -121,6 +164,60 @@ class DashboardSummary:
     def needs_attention(self) -> bool:
         """Whether anything requires staff action right now."""
         return bool(self.attention_items)
+
+    @property
+    def agent_is_working(self) -> bool:
+        """Whether the agent has anything outstanding."""
+        return self.analyses_pending > 0
+
+    @property
+    def analyses_queued_oldest(self) -> DisplayDate | None:
+        """When the longest-waiting job was queued, ready to display."""
+        if self.analyses_queued_oldest_at is None:
+            return None
+        return to_display_moment(self.analyses_queued_oldest_at)
+
+    @property
+    def tiles(self) -> list[StatTile]:
+        """The headline figures, in the order the dashboard shows them.
+
+        A property rather than a stored field so a tile cannot disagree with
+        the count it displays: there is one number, and the tile is a view of
+        it.
+        """
+        roster = "/animals/manage"
+        return [
+            StatTile(
+                self.available_animals,
+                "Available for adoption",
+                f"{roster}?status={AnimalStatus.AVAILABLE.value}",
+                "Manage available animals",
+            ),
+            StatTile(
+                self.pending_applications,
+                "Applications awaiting review",
+                roster,
+                "Open the roster",
+            ),
+            StatTile(
+                self.applications_under_review,
+                "Under review",
+                roster,
+                "Open the roster",
+            ),
+            # No staff-side invitation list exists yet, so this one is a
+            # figure rather than a link. See the report accompanying E-8.
+            StatTile(self.open_invitations, "Invitations awaiting a reply"),
+            StatTile(
+                self.adoptions_in_progress,
+                "Adoptions in progress",
+                f"{roster}?status={AnimalStatus.ADOPTION_IN_PROGRESS.value}",
+                "See adoptions in progress",
+            ),
+            # Likewise: analyses are reached through the animal they belong
+            # to, not from an index of their own.
+            StatTile(self.analyses_completed, "Match analyses completed"),
+        ]
 
 
 @dataclass(frozen=True)
@@ -159,6 +256,7 @@ class GetDashboardSummaryHandler(QueryHandler[DashboardSummary]):
         without_applicants = _count_available_animals_without_applicants(session)
         without_suitable = _count_available_animals_without_suitable_applicants(session)
         stale = _count_stale_applications(session, now)
+        jobs_by_status = _count_analysis_jobs_by_status(session)
 
         summary_without_attention = DashboardSummary(
             available_animals=available,
@@ -174,6 +272,11 @@ class GetDashboardSummaryHandler(QueryHandler[DashboardSummary]):
                 AnimalStatus.ADOPTION_IN_PROGRESS.value, 0
             ),
             analyses_completed=_count_analyses(session),
+            analyses_pending=sum(
+                jobs_by_status.get(status.value, 0) for status in _OUTSTANDING_JOB_STATUSES
+            ),
+            analyses_failed=jobs_by_status.get(AnalysisJobStatus.FAILED.value, 0),
+            analyses_queued_oldest_at=_oldest_outstanding_job_at(session),
         )
 
         return DashboardSummary(
@@ -218,6 +321,36 @@ def _count_analyses(session: Session) -> int:
     return int(
         session.execute(select(func.count()).select_from(MatchAnalysis)).scalar_one()
     )
+
+
+# A job the dashboard is still waiting on. IN_PROGRESS counts as pending
+# because from the outside there is no difference: no explanation yet.
+_OUTSTANDING_JOB_STATUSES = (AnalysisJobStatus.PENDING, AnalysisJobStatus.IN_PROGRESS)
+
+
+def _count_analysis_jobs_by_status(session: Session) -> dict[str, int]:
+    """Count the agent's queue grouped by status, in one query."""
+    rows = session.execute(
+        select(AnalysisJob.status, func.count()).group_by(AnalysisJob.status)
+    ).tuples().all()
+    return dict(rows)
+
+
+def _oldest_outstanding_job_at(session: Session) -> datetime | None:
+    """When the longest-waiting agent job was queued, or None if none is.
+
+    The figure that distinguishes a busy queue from a stopped one: a pending
+    count alone looks the same whether the worker is thirty seconds behind
+    or was killed yesterday.
+    """
+    oldest: datetime | None = session.execute(
+        select(func.min(AnalysisJob.created_at)).where(
+            AnalysisJob.status.in_(
+                [status.value for status in _OUTSTANDING_JOB_STATUSES]
+            )
+        )
+    ).scalar_one_or_none()
+    return oldest
 
 
 def _active_application_statuses() -> list[str]:
@@ -317,6 +450,26 @@ def _count_stale_applications(session: Session, now: datetime) -> int:
     )
 
 
+def _count_phrase(quantity: int, singular: str, plural: str) -> str:
+    """Phrase a count with the right noun, and never with "(s)".
+
+    "1 application(s) waiting over a week" is the kind of line that tells a
+    reader the software was written in a hurry, and it appeared on the most
+    senior screen in the product. Both forms are written out because English
+    plurals are not a suffix rule ("animal with no suitable applicant"
+    becomes "animals with no suitable applicant", not "applicants").
+
+    Args:
+        quantity: How many.
+        singular: The phrase following "1".
+        plural: The phrase following any other number.
+
+    Returns:
+        The count and its noun phrase.
+    """
+    return f"{quantity} {singular if quantity == 1 else plural}"
+
+
 def _build_attention_items(summary: DashboardSummary) -> list[AttentionItem]:
     """Turn the figures into actions (spec section 22).
 
@@ -328,7 +481,11 @@ def _build_attention_items(summary: DashboardSummary) -> list[AttentionItem]:
     if summary.stale_applications:
         items.append(
             AttentionItem(
-                headline=f"{summary.stale_applications} application(s) waiting over a week",
+                headline=_count_phrase(
+                    summary.stale_applications,
+                    "application waiting over a week",
+                    "applications waiting over a week",
+                ),
                 detail="These were submitted more than seven days ago and are still untouched.",
                 action_label="Review applications",
                 action_url="/animals/manage",
@@ -339,7 +496,11 @@ def _build_attention_items(summary: DashboardSummary) -> list[AttentionItem]:
     if summary.expired_invitations:
         items.append(
             AttentionItem(
-                headline=f"{summary.expired_invitations} invitation(s) expired unanswered",
+                headline=_count_phrase(
+                    summary.expired_invitations,
+                    "invitation expired unanswered",
+                    "invitations expired unanswered",
+                ),
                 detail=(
                     "The 72-hour window closed without a response. These adopters "
                     "may still be worth contacting about another animal."
@@ -353,7 +514,11 @@ def _build_attention_items(summary: DashboardSummary) -> list[AttentionItem]:
     if summary.animals_without_applicants:
         items.append(
             AttentionItem(
-                headline=f"{summary.animals_without_applicants} animal(s) with no applicants",
+                headline=_count_phrase(
+                    summary.animals_without_applicants,
+                    "animal with no applicants",
+                    "animals with no applicants",
+                ),
                 detail=(
                     "Nobody has applied for these. Proactive discovery can find "
                     "suitable adopters who have not seen them."
@@ -367,9 +532,10 @@ def _build_attention_items(summary: DashboardSummary) -> list[AttentionItem]:
     if summary.animals_without_suitable_applicants:
         items.append(
             AttentionItem(
-                headline=(
-                    f"{summary.animals_without_suitable_applicants} animal(s) with no "
-                    f"suitable applicant"
+                headline=_count_phrase(
+                    summary.animals_without_suitable_applicants,
+                    "animal with no suitable applicant",
+                    "animals with no suitable applicant",
                 ),
                 detail=(
                     "These have applicants, but none scores above the recommendation "
@@ -384,7 +550,11 @@ def _build_attention_items(summary: DashboardSummary) -> list[AttentionItem]:
     if summary.pending_applications:
         items.append(
             AttentionItem(
-                headline=f"{summary.pending_applications} application(s) awaiting a first look",
+                headline=_count_phrase(
+                    summary.pending_applications,
+                    "application awaiting a first look",
+                    "applications awaiting a first look",
+                ),
                 detail="Newly submitted applications nobody has opened yet.",
                 action_label="Open the roster",
                 action_url="/animals/manage",
@@ -411,6 +581,7 @@ def _recent_activity(session: Session) -> list[ActivityEntry]:
     entries: list[ActivityEntry] = []
     for event in events:
         animal_id = event.payload.get("animal_id")
+        animal_name = animal_names.get(animal_id) if isinstance(animal_id, str) else None
         entries.append(
             ActivityEntry(
                 occurred_at=event.occurred_at,
@@ -418,8 +589,11 @@ def _recent_activity(session: Session) -> list[ActivityEntry]:
                 description=EVENT_DESCRIPTIONS.get(
                     event.event_type, event.event_type.value
                 ),
-                animal_name=animal_names.get(animal_id) if animal_id else None,
-                animal_id=animal_id,
+                animal_name=animal_name,
+                # Dropped when the animal cannot be named: the two travel
+                # together or the feed renders a link with no text after a
+                # sentence with no object. See ActivityEntry.
+                animal_id=animal_id if animal_name else None,
             )
         )
     return entries

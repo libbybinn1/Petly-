@@ -140,7 +140,9 @@ Google-convention docstrings. `ruff check` and `mypy --strict` must pass.
 - **Corporate TLS interception.** An SSL-inspecting firewall (Palo Alto "Forward
   Trust CA") re-signs HTTPS. Python must call `truststore.inject_into_ssl()` at
   startup or every outbound HTTPS request fails certificate verification. This is
-  done once in `app/__init__.py` and `agent_service/__main__.py`.
+  done once at import time in `app/config.py` (which the Flask factory, the
+  scripts and the tests all import first) and again in `agent_service/__main__.py`
+  for the standalone agent process.
 - **SQL Server 2014 has no JSON type.** Serialize to `NVARCHAR(MAX)` in Python.
   See the `db-management` skill for the full list of engine constraints.
 - **Secrets live in `.env`**, which is gitignored. Never commit credentials,

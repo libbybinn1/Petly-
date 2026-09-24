@@ -33,8 +33,12 @@
   A staff member makes the final decision.
 </div>
 
+{#- Opts this page into the poller in petmatch.js (docs/UX.md section 3).
+    Scoped to this one animal, and staff-only on the server: the endpoint
+    refuses the `animal_id` scope to an adopter. Counts and a timestamp
+    only — it names no adopter and reports no score. -#}
 {% if ranking.candidates %}
-  <div class="stack">
+  <div class="stack" data-analysis-status-url="{{ url_for('matches.analysis_status', animal_id=ranking.animal_id) }}">
     {% for candidate in ranking.candidates %}
     <article class="card card--padded candidate">
       <div class="candidate__head">
@@ -130,7 +134,9 @@
                 {% for reason in candidate.analysis.reasons %}<li>{{ reason }}</li>{% endfor %}
               </ul>
             {% elif candidate.analysis_is_pending %}
-              <p class="pending">The agent is still writing this explanation. The score above is final.</p>
+              {% with queued_at_label = candidate.queued_at_label %}
+                {% include "matches/_pending_analysis.html" %}
+              {% endwith %}
             {% else %}
               <p class="pending">No explanation was recorded.</p>
             {% endif %}
@@ -183,14 +189,6 @@
     {% endfor %}
   </div>
 
-  {% if ranking.excluded_count %}
-    <p class="pending" style="margin-top: var(--space-5); text-align:center">
-      {{ ranking.excluded_count }}
-      {{ 'candidate was' if ranking.excluded_count == 1 else 'candidates were' }}
-      excluded by a hard eligibility rule.
-    </p>
-  {% endif %}
-
 {% else %}
   <div class="empty">
     <div class="empty__icon">{{ '🔎' if is_discovery else '📭' }}</div>
@@ -209,5 +207,35 @@
       </a>
     {% endif %}
   </div>
+{% endif %}
+
+{#- Discovery hides disqualified candidates, so it says who and why rather
+    than only how many: a count records that a judgement was made and
+    nothing about what it was (spec section 10). Applicant ranking shows
+    its disqualified applicants in the list above, flagged, so it carries
+    no excluded list and keeps the count. -#}
+{% if ranking.excluded_candidates %}
+  <details class="card card--padded" style="margin-top: var(--space-5)">
+    <summary>
+      {{ ranking.excluded_candidates|length }}
+      {{ 'adopter was' if ranking.excluded_candidates|length == 1 else 'adopters were' }}
+      excluded by a hard eligibility rule
+    </summary>
+    <ul class="reason-list reason-list--concern" style="margin-top: var(--space-3)">
+      {% for excluded in ranking.excluded_candidates %}
+        <li><strong>{{ excluded.full_name }}</strong> — {{ excluded.disqualification_reason }}</li>
+      {% endfor %}
+    </ul>
+    <p class="pending" style="margin-top: var(--space-3)">
+      A hard constraint is a rule, not a low score: no combination of good
+      criteria can outweigh one (spec section 8).
+    </p>
+  </details>
+{% elif ranking.excluded_count %}
+  <p class="pending" style="margin-top: var(--space-5); text-align:center">
+    {{ ranking.excluded_count }}
+    {{ 'candidate was' if ranking.excluded_count == 1 else 'candidates were' }}
+    excluded by a hard eligibility rule.
+  </p>
 {% endif %}
 {% endblock %}

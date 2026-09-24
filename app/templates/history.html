@@ -7,7 +7,14 @@
     <h1>{{ history.title }}</h1>
     <p>Everything recorded for this {{ history.aggregate_type|lower }}, oldest first.</p>
   </div>
-  <a class="btn btn--secondary btn--small" href="{{ url_for('dashboard.dashboard') }}">Back to dashboard</a>
+  {#- An adopter can reach this page for their own records now, and the
+      dashboard would answer them 403 — so send each role somewhere it can
+      actually go. -#}
+  {% if current_user.is_staff %}
+    <a class="btn btn--secondary btn--small" href="{{ url_for('dashboard.dashboard') }}">Back to dashboard</a>
+  {% else %}
+    <a class="btn btn--secondary btn--small" href="{{ url_for('personal.my_applications') }}">Back to my applications</a>
+  {% endif %}
 </div>
 
 <div class="card card--padded">
@@ -28,7 +35,8 @@
           {% if entry.detail %}<span class="timeline__detail">&mdash; {{ entry.detail }}</span>{% endif %}
         </div>
         <div class="timeline__meta">
-          {{ entry.occurred_at.strftime('%d %b %Y, %H:%M') }} ·
+          <time datetime="{{ entry.occurred.iso }}">{{ entry.occurred.display }}</time> ·
+          {{ entry.occurred.relative_label }} ·
           step {{ entry.sequence_number }} · {{ entry.event_label }}
         </div>
       </div>

@@ -407,24 +407,12 @@ class TestNoLanguageModelInTheRequestPath:
 
         response = client.post("/search/describe", data={"description": "   "})
 
-        assert response.status_code == 200
+        # 400 since BG-6: the route validates and enqueues, so a blank
+        # description is refused here rather than re-rendered, and no job
+        # is created for the agent to fail on.
+        assert response.status_code == 400
         assert calls == []
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "BUG: match_controller.natural_language_search "
-            "(app/controllers/match_controller.py line 167-205) calls "
-            "_build_interpreter().interpret(described) inside the request. "
-            "NFR-3.1 and CLAUDE.md R4 both say no LLM call may occur in a "
-            "request/response path, with measured CPU-only inference at "
-            "11-16 s. The route is also open to anonymous visitors and applies "
-            "no length cap, so an unauthenticated caller can pin a worker "
-            "thread for ~16 s per request with an arbitrarily long prompt. "
-            "AnalysisJobType.INTERPRET_INTENT already exists in the enum and is "
-            "unused, which suggests this was meant to go through the job queue."
-        ),
-    )
     def test_describing_a_search_does_not_call_a_model_in_the_request(
         self, client: FlaskClient, world: dict[str, str],
         monkeypatch: pytest.MonkeyPatch,
@@ -436,7 +424,10 @@ class TestNoLanguageModelInTheRequestPath:
             "/search/describe", data={"description": "a small calm rabbit"}
         )
 
-        assert response.status_code == 200
+        # 302 since BG-6: the request enqueues an INTERPRET_INTENT job and
+        # redirects to the page that waits for it, so no inference happens
+        # while a request is being served.
+        assert response.status_code == 302
         assert calls == []
 
     def test_an_unreachable_model_still_renders_the_search_page(
@@ -455,7 +446,10 @@ class TestNoLanguageModelInTheRequestPath:
             "/search/describe", data={"description": "a small calm rabbit"}
         )
 
-        assert response.status_code == 200
+        # 302 since BG-6. The model's reachability is now irrelevant to this
+        # request: whether Ollama is running is discovered by the agent in
+        # its own process, and shows up as a failed job on the result page.
+        assert response.status_code == 302
 
     def test_the_ranking_screens_call_no_model(
         self, adopter_client: FlaskClient, staff_client: FlaskClient,

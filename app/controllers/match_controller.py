@@ -7,8 +7,6 @@ server for every staff route (blueprint section 12).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from flask import (
     Blueprint,
     abort,
@@ -22,7 +20,11 @@ from flask import (
 from flask_login import current_user
 from werkzeug.wrappers import Response
 
-from app.controllers.helpers import get_bus, get_configuration
+from app.controllers.helpers import ViewResult, get_bus, parse_checkbox
+from app.cqrs.commands.analysis_commands import (
+    MAXIMUM_DESCRIPTION_LENGTH,
+    EnqueueIntentInterpretationCommand,
+)
 from app.cqrs.commands.application_commands import (
     ApproveApplicationCommand,
     MarkApplicationUnderReviewCommand,
@@ -34,12 +36,20 @@ from app.cqrs.commands.invitation_commands import SendInvitationCommand
 from app.cqrs.queries.analysis_status_queries import GetAnalysisStatusQuery
 from app.cqrs.queries.animal_queries import (
     DEFAULT_PAGE_SIZE,
-    AnimalSearchFilters,
+    AnimalCard,
+    AnimalSearchResults,
     SearchAnimalsQuery,
+)
+from app.cqrs.queries.intent_queries import (
+    GetIntentJobQuery,
+    IntentJobNotYoursError,
+    InterpretedIntentView,
+    filters_from_intent,
 )
 from app.cqrs.queries.match_queries import (
     FindMoreAdoptersQuery,
     FindMyPetQuery,
+    FindMyPetWithIntentQuery,
     GetMatchAnalysisQuery,
     RankApplicantsQuery,
 )
@@ -48,10 +58,8 @@ from app.domain.application_rules import (
     IllegalTransitionError,
 )
 from app.domain.invitation_rules import InvitationNotAllowedError
+from app.domain.search_intent import SearchIntent
 from app.security.authorization import require_adopter, require_sign_in, require_staff
-
-if TYPE_CHECKING:  # Import for typing only; see _build_interpreter.
-    from agent_service.intent import IntentInterpreter
 
 match_blueprint = Blueprint("matches", __name__)
 
@@ -283,26 +291,6 @@ def send_invitation(animal_id: str) -> Response:
     return redirect(url_for("matches.find_more_adopters", animal_id=animal_id))
 
 
-def _build_interpreter() -> IntentInterpreter:
-    """Construct the intent interpreter from configuration.
-
-    Imported inside the function so the web tier does not load the agent's
-    modules at start-up. The two run as separate processes (rule R2); this
-    is the one narrow place the app borrows the interpretation helper.
-    """
-    from agent_service.intent import IntentInterpreter
-    from agent_service.llm_client import OllamaLanguageModel
-
-    settings = get_configuration()
-    return IntentInterpreter(
-        OllamaLanguageModel(
-            base_url=settings.agent.ollama_base_url,
-            name=settings.agent.chat_model,
-        )
-    )
-
-
-
 @match_blueprint.route("/api/analysis-status")
 @require_sign_in
 def analysis_status() -> Response:
@@ -345,45 +333,202 @@ def analysis_status() -> Response:
 
 
 @match_blueprint.route("/search/describe", methods=["GET", "POST"])
-def natural_language_search() -> str:
-    """Search by describing what you are looking for (spec section 6.3).
+def natural_language_search() -> ViewResult:
+    """Describe what you are looking for, and queue its interpretation.
 
-    The model converts the description into criteria; the ordinary
-    deterministic search then runs against them. Nothing the model produces
-    selects an animal or scores anything.
+    Spec section 6.3 wants search in the adopter's own words, and
+    interpreting words needs a model. On this hardware a model call costs
+    11 to 16 seconds (CLAUDE.md R4), so it cannot happen here: this view
+    validates the text, enqueues an `INTERPRET_INTENT` job and redirects to
+    the page that waits for it. The request itself does no inference and
+    touches no model.
 
     Open to anyone, including signed-out visitors: describing what you want
     is a browsing feature, not a personal one.
+
+    Returns:
+        The empty form on GET, a redirect to the job's page on a good POST,
+        or the form again under 400 when the description is unusable.
     """
-    described = (request.form.get("description") or request.args.get("q") or "").strip()
+    if request.method == "GET":
+        return _describe_page((request.args.get("q") or "").strip())
 
-    if not described:
-        return render_template("matches/describe.html", intent=None, results=None, described="")
+    return _queue_interpretation()
 
-    intent = _build_interpreter().interpret(described)
 
-    if not intent.understood or not intent.has_any_criteria:
-        return render_template(
-            "matches/describe.html", intent=intent, results=None, described=described
-        )
+def _queue_interpretation() -> ViewResult:
+    """Validate a submitted description and enqueue its interpretation.
 
-    results = get_bus().dispatch_query(
-        SearchAnimalsQuery(
-            filters=AnimalSearchFilters(
-                species=intent.species[0].value if len(intent.species) == 1 else None,
-                size=intent.size.value if intent.size else None,
-                activity_level=(
-                    intent.activity_level.value if intent.activity_level else None
-                ),
-                good_with_children=bool(intent.good_with_children),
-                good_with_other_animals=bool(intent.good_with_other_animals),
-                available_only=True,
-            ),
-            page=1,
-            page_size=DEFAULT_PAGE_SIZE,
+    The length cap is enforced here rather than trusted from the textarea's
+    `maxlength`, which a forged post ignores (NFR-5.2). It matters more than
+    the usual field cap: this text becomes a model prompt in another
+    process, where its length is directly a cost, and the route is open to
+    signed-out visitors.
+
+    Returns:
+        A redirect to the new job's page, or the re-rendered form under 400.
+    """
+    described = (request.form.get("description") or "").strip()
+    if not described or len(described) > MAXIMUM_DESCRIPTION_LENGTH:
+        return _describe_page(described, error=_description_problem(described)), 400
+
+    use_profile = parse_checkbox(request.form.get("use_profile")) and _may_fuse_profile()
+
+    job_id = get_bus().dispatch_command(
+        EnqueueIntentInterpretationCommand(
+            natural_language_query=described,
+            adopter_profile_id=current_user.adopter_profile_id if use_profile else None,
         )
     )
+    return redirect(url_for("matches.describe_result", analysis_job_id=job_id))
 
+
+@match_blueprint.route("/search/describe/<analysis_job_id>")
+def describe_result(analysis_job_id: str) -> ViewResult:
+    """Show one described search: waiting, failed, or its results.
+
+    The page a POST redirects to, and the one a visitor may reload. While
+    the agent is still working it renders the pending block and refreshes
+    itself; once the interpretation lands it runs the *deterministic* search
+    against it and shows animals.
+
+    Two kinds of result, and which one appears is decided by the job rather
+    than by this request: a job carrying a profile fuses the adopter's
+    stable situation with what they just asked for (spec section 6.4), and
+    one without runs the ordinary structured search.
+
+    Args:
+        analysis_job_id: The interpretation job, from the URL.
+
+    Returns:
+        The describe page in whichever state the job is in.
+    """
+    try:
+        job = get_bus().dispatch_query(
+            GetIntentJobQuery(
+                analysis_job_id=analysis_job_id,
+                viewer_adopter_profile_id=_signed_in_profile_id(),
+                viewer_is_staff=_signed_in_as_staff(),
+            )
+        )
+    except IntentJobNotYoursError:
+        abort(403)
+
+    if job is None:
+        abort(404)
+    if not job.is_ready:
+        return _describe_page(job.described, job=job)
+
+    return _describe_results(job)
+
+
+def _describe_results(job: InterpretedIntentView) -> str:
+    """Run the deterministic search for a completed interpretation.
+
+    Args:
+        job: A job whose `is_ready` is true, so its intent is present.
+
+    Returns:
+        The describe page showing what the criteria matched.
+    """
+    intent = job.intent
+    assert intent is not None  # guaranteed by InterpretedIntentView.is_ready
+
+    if not intent.understood or not intent.has_any_criteria:
+        return _describe_page(job.described, job=job, intent=intent)
+
+    filters = filters_from_intent(intent)
+
+    if job.adopter_profile_id is not None:
+        ranked = get_bus().dispatch_query(
+            FindMyPetWithIntentQuery(
+                adopter_profile_id=job.adopter_profile_id, filters=filters
+            )
+        )
+        return _describe_page(job.described, job=job, intent=intent, ranked=ranked)
+
+    results = get_bus().dispatch_query(
+        SearchAnimalsQuery(filters=filters, page=1, page_size=DEFAULT_PAGE_SIZE)
+    )
+    return _describe_page(job.described, job=job, intent=intent, results=results)
+
+
+def _describe_page(
+    described: str,
+    job: InterpretedIntentView | None = None,
+    intent: SearchIntent | None = None,
+    results: AnimalSearchResults | None = None,
+    ranked: list[AnimalCard] | None = None,
+    error: str | None = None,
+) -> str:
+    """Render the describe screen in one of its states.
+
+    Every branch of this feature renders the same template, so they render
+    it through one function: a state that forgot to pass `can_use_profile`
+    would silently drop the checkbox rather than fail.
+
+    Args:
+        described: What the visitor typed, for re-rendering the textarea.
+        job: The interpretation job, when there is one.
+        intent: The parsed criteria, when the job completed.
+        results: Intent-only search results.
+        ranked: Profile-fused results, already ordered best first.
+        error: What is wrong with the description, when it was refused.
+
+    Returns:
+        The rendered page.
+    """
     return render_template(
-        "matches/describe.html", intent=intent, results=results, described=described
+        "matches/describe.html",
+        described=described,
+        job=job,
+        intent=intent,
+        results=results,
+        ranked=ranked,
+        error=error,
+        can_use_profile=_may_fuse_profile(),
+        maximum_description_length=MAXIMUM_DESCRIPTION_LENGTH,
+    )
+
+
+def _description_problem(described: str) -> str:
+    """Say what is wrong with a refused description, in the visitor's terms."""
+    if not described:
+        return "Please describe what you are looking for."
+    return (
+        f"Please keep your description under "
+        f"{MAXIMUM_DESCRIPTION_LENGTH} characters."
+    )
+
+
+def _signed_in_profile_id() -> str | None:
+    """The signed-in adopter's profile identifier, or None for anyone else.
+
+    Anonymous visitors reach these routes, and Flask-Login's anonymous user
+    carries none of the attributes `AuthenticatedUser` does.
+    """
+    if not current_user.is_authenticated:
+        return None
+    profile_id: str | None = current_user.adopter_profile_id
+    return profile_id
+
+
+def _signed_in_as_staff() -> bool:
+    """Whether a staff member is signed in."""
+    return bool(current_user.is_authenticated and current_user.is_staff)
+
+
+def _may_fuse_profile() -> bool:
+    """Whether this visitor can combine their profile with an intent.
+
+    Spec section 6.4 fuses *stable* facts with the current request, and an
+    incomplete profile has no stable facts worth fusing - scoring against
+    half a household would rank animals by guesswork and present it as
+    personalisation.
+    """
+    return bool(
+        current_user.is_authenticated
+        and current_user.is_adopter
+        and current_user.adopter_profile_id
+        and current_user.has_complete_profile
     )

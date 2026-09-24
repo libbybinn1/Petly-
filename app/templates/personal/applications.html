@@ -40,8 +40,19 @@
             {{ application.animal_species|humanize }}
             {% if application.came_from_invitation %} · from an invitation{% endif %}
           </span>
+          {#- What the adopter wrote when they applied. It was stored and
+              then shown nowhere, so there was no way to recall what had
+              already been said to the organization. -#}
+          {% if application.applicant_message %}
+            <p class="pending" style="margin-top: var(--space-2)">
+              &ldquo;{{ application.applicant_message }}&rdquo;
+            </p>
+          {% endif %}
         </td>
-        <td style="white-space:nowrap">{{ application.submitted_at.strftime('%d %b %Y') }}</td>
+        <td style="white-space:nowrap">
+          <time datetime="{{ application.submitted.iso }}">{{ application.submitted.display }}</time><br>
+          <span style="color:var(--text-muted); font-size:0.85rem">{{ application.submitted.relative_label }}</span>
+        </td>
         <td>
           {% if application.status == 'APPROVED' %}
             <span class="tag tag--success">Approved</span>
@@ -58,6 +69,11 @@
           {% endif %}
         </td>
         <td style="white-space:nowrap">
+          {#- Every row links to its own recorded history, which is how an
+              adopter sees *why* a closed application closed and that a
+              reopened one was reopened (spec 7.5). The query checks the
+              application is theirs. -#}
+          <a class="btn btn--ghost btn--small" href="{{ application.history_url }}">History</a>
           {% if application.is_active %}
             <form method="post"
                   action="{{ url_for('personal.withdraw_application', application_id=application.application_id) }}"

@@ -148,6 +148,10 @@ def _register_commands(bus: MessageBus, settings: Configuration) -> None:
         RegisterAdopterCommand,
         RegisterAdopterHandler,
     )
+    from app.cqrs.commands.analysis_commands import (
+        EnqueueIntentInterpretationCommand,
+        EnqueueIntentInterpretationHandler,
+    )
     from app.cqrs.commands.animal_commands import (
         ChangeAnimalStatusCommand,
         ChangeAnimalStatusHandler,
@@ -191,6 +195,9 @@ def _register_commands(bus: MessageBus, settings: Configuration) -> None:
         SaveAdopterProfileHandler,
     )
 
+    bus.register_command(
+        EnqueueIntentInterpretationCommand, EnqueueIntentInterpretationHandler()
+    )
     bus.register_command(SubmitApplicationCommand, SubmitApplicationHandler())
     bus.register_command(WithdrawApplicationCommand, WithdrawApplicationHandler())
     bus.register_command(ApproveApplicationCommand, ApproveApplicationHandler())
@@ -255,11 +262,17 @@ def _register_queries(bus: MessageBus) -> None:
         GetAggregateHistoryHandler,
         GetAggregateHistoryQuery,
     )
+    from app.cqrs.queries.intent_queries import (
+        GetIntentJobHandler,
+        GetIntentJobQuery,
+    )
     from app.cqrs.queries.match_queries import (
         FindMoreAdoptersHandler,
         FindMoreAdoptersQuery,
         FindMyPetHandler,
         FindMyPetQuery,
+        FindMyPetWithIntentHandler,
+        FindMyPetWithIntentQuery,
         GetMatchAnalysisHandler,
         GetMatchAnalysisQuery,
         RankApplicantsHandler,
@@ -288,6 +301,8 @@ def _register_queries(bus: MessageBus) -> None:
     bus.register_query(RankApplicantsQuery, RankApplicantsHandler())
     bus.register_query(FindMoreAdoptersQuery, FindMoreAdoptersHandler())
     bus.register_query(FindMyPetQuery, FindMyPetHandler())
+    bus.register_query(FindMyPetWithIntentQuery, FindMyPetWithIntentHandler())
+    bus.register_query(GetIntentJobQuery, GetIntentJobHandler())
     bus.register_query(GetMatchAnalysisQuery, GetMatchAnalysisHandler())
     bus.register_query(ListMyNotificationsQuery, ListMyNotificationsHandler())
     bus.register_query(GetDashboardSummaryQuery, GetDashboardSummaryHandler())

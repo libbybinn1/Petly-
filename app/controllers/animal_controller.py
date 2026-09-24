@@ -38,6 +38,7 @@ from app.cqrs.queries.animal_queries import (
     ListAllAnimalsQuery,
     SearchAnimalsQuery,
     available_filter_options,
+    parse_age_range,
     species_filter_label,
 )
 from app.domain.animal_rules import (
@@ -69,6 +70,10 @@ def _filters_from_request() -> AnimalSearchFilters:
         size=request.args.get("size") or None,
         activity_level=request.args.get("activity_level") or None,
         city=request.args.get("city") or None,
+        # Validated against the known bands rather than passed through: the
+        # value comes from a URL anyone can edit, and an unrecognised band
+        # must mean "no age constraint" rather than an error (spec 6.2).
+        age_range=parse_age_range(request.args.get("age_range")),
         good_with_children=parse_checkbox(request.args.get("good_with_children")),
         good_with_other_animals=parse_checkbox(request.args.get("good_with_other_animals")),
         available_only=not parse_checkbox(request.args.get("include_unavailable")),
@@ -279,6 +284,8 @@ def manage() -> str:
         ListAllAnimalsQuery(
             status=request.args.get("status") or None,
             species=request.args.get("species") or None,
+            size=request.args.get("size") or None,
+            age_range=parse_age_range(request.args.get("age_range")),
             text=request.args.get("q", "").strip() or None,
             page=parse_positive_integer(request.args.get("page"), 1),
             page_size=STAFF_PAGE_SIZE,
@@ -293,5 +300,7 @@ def manage() -> str:
         species_label=species_filter_label,
         selected_status=request.args.get("status", ""),
         selected_species=request.args.get("species", ""),
+        selected_size=request.args.get("size", ""),
+        selected_age_range=parse_age_range(request.args.get("age_range")) or "",
         search_text=request.args.get("q", ""),
     )
