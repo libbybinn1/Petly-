@@ -123,6 +123,7 @@ Sources: course blueprint §4, §12, §13, §17; PetMatch spec §4–§25.
 | FR-9.6 | A deterministic eligibility filter MUST run before anyone is ranked for discovery (spec §10). | MUST | `tests/unit/test_invitation_rules.py::TestSendingEligibility`, `test_a_disqualified_adopter_is_named_with_their_reason` |
 | FR-9.7 | Every match MUST be presented with reasons and concerns, never a bare number. | MUST | `test_every_criterion_supplies_an_explanation`, `test_an_empty_reasons_list_falls_back_to_the_criterion_text` |
 | FR-9.8 | The eleven criteria of spec §8 MUST each be weighted in both directions, and each weight set MUST sum to 1. | MUST | `test_each_direction_sums_to_one`, `test_every_criterion_is_weighted_in_both_directions` |
+| FR-9.9 | Every eligible match MUST carry a fit grade (A+ to F) whose itemised deductions add up to exactly 100 minus the score, each with its criterion's explanation. A disqualified match MUST carry none. | MUST | `test_deductions_add_up_to_exactly_what_the_score_is_missing`, `test_the_grade_never_contradicts_the_band`, `test_a_disqualified_pairing_shows_no_grade` |
 
 ### FR-10 The agent
 
@@ -131,7 +132,7 @@ Sources: course blueprint §4, §12, §13, §17; PetMatch spec §4–§25.
 | FR-10.1 | The agent MUST run as an independent OS process, not inside the Flask app (blueprint **§4 item 5** — the AI-agent item; §4.5 is Data Entry). | MUST | `scripts/verify_requirements.py`, check "AI agent, own process"; `test_agent_and_mcp_modules_never_import_the_web_tier` |
 | FR-10.2 | The agent MUST obtain domain records through MCP tools over stdio, not by importing the application's web tier. | MUST | `test_both_mcp_tools_are_called`, `test_get_adopter_profile_round_trips` |
 | FR-10.3 | The agent MUST consult the Vector DB via RAG as part of its assessment (blueprint §7). | MUST | `test_knowledge_base_is_consulted`, `test_retrieval_succeeds_with_no_keyword_overlap` |
-| FR-10.4 | The agent MUST use web search only when the curated knowledge base cannot answer (spec §13). RAG sufficiency wins, even for an external topic. | MUST | `test_no_search_when_knowledge_base_answers`, `test_agent_does_not_search_when_rag_suffices` |
+| FR-10.4 | The agent MUST use web search only when the curated knowledge base cannot answer (spec §13). RAG sufficiency wins, even for an external topic. The guides count as answering only when a retrieved passage names the animal (its breed, or its species when no breed is recorded). | MUST | `test_no_search_when_knowledge_base_answers`, `test_agent_does_not_search_when_rag_suffices`, `test_generic_guidance_does_not_count_as_covering_a_breed`, `test_a_passage_naming_the_breed_keeps_the_web_shut` |
 | FR-10.5 | The agent MUST NOT use web search to retrieve the application's own records. | MUST | `test_never_searches_for_the_applications_own_records`, `test_a_model_request_about_our_own_records_never_reaches_the_web` |
 | FR-10.6 | The agent MUST return structured output: reasons, concerns, missing information, citations — with the score supplied deterministically. | MUST | `test_analysis_has_every_declared_field`, `test_wrong_schema_still_yields_a_storable_outcome` |
 | FR-10.7 | The agent MUST NOT make the final adoption decision (spec §6.4). | MUST | `test_agent_never_names_a_decision_command`, `test_agent_exposes_no_decision_capability`, `test_the_outcome_carries_no_decision_field` |

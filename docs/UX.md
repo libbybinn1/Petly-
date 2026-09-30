@@ -114,6 +114,7 @@ preference must never be able to break a page.
 | Animal card | `.animal-card` — `_animal_card.html` | Home, search, describe |
 | Score ring | `.score` — `matches/_score_ring.html` | Every ranking and analysis screen |
 | Criterion breakdown | `.criterion` — `matches/_criteria_bars.html` | Analysis, ranking |
+| Fit grade | `.fit-card` — `matches/_fit_grade.html`, `matches/_fit_deduction.html` | Find My Pet, applicant ranking, analysis |
 | Pending analysis | `.pending-block` — `matches/_pending_analysis.html` | Any screen waiting on the agent |
 | Skeleton | `.skeleton` — `_skeleton.html` | Inside the pending block |
 | Icon | `.icon` — `_icons.html` | Everywhere |
@@ -177,6 +178,34 @@ interface and the scorer cannot come to disagree about what a good match is,
 which is exactly what happened when five templates each held their own copy of
 the numbers. A disqualified pairing shows no ring at all: it failed a rule
 rather than scoring badly.
+
+### The fit grade
+
+A number says how good a match is. It does not say why the match is not 100.
+The fit grade is built by `build_fit_report` in `app/domain/fit_grade.py`. It
+turns the deterministic score into a letter (A+ to F), a verdict ("Strong
+fit") and a list of where the points went. Each line is a criterion, the
+whole points it cost, and the scorer's own explanation for that criterion.
+
+- **Exact, not illustrative.** A criterion scoring `s` at weight `w` costs
+  `(100 − s) × w` points, and the weights sum to one. Rounded by the
+  largest-remainder method, the lines add up to exactly `100 − score`. The
+  test `test_deductions_add_up_to_exactly_what_the_score_is_missing` checks
+  this against the real scorer.
+- **The letter cannot contradict the ring.** B starts at the STRONG
+  threshold and D at the recommendation threshold, so every A or B is
+  green, every C or D amber, and only an F is weak.
+- **One meter, 100 points wide.** The kept points come first, then each
+  deduction as its own segment, largest first. Each line's badge uses its
+  segment's colour. A ranking card lists the three largest deductions and
+  folds the rest into a `<details>`, so no JavaScript is needed. The
+  analysis page lists them all.
+- **A disqualified pairing gets no grade.** It failed a rule rather than
+  scoring badly, and an F would suggest otherwise.
+- **Not model output.** The agent is given the grade and its deductions in
+  its prompt (`_fit_grade_section` in `agent_service/explanation.py`) so
+  that its concerns explain the real losses. It never computes or changes
+  them.
 
 ### Icons, not emoji
 

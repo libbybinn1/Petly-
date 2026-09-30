@@ -1,0 +1,11 @@
+{# One line of the fit grade. Expects `deduction` (a PointDeduction) and
+   `colour_index`, its position in the meter, so the line and its segment match. #}
+<li class="deduction">
+  <span class="deduction__points fit-meter__lost--{{ colour_index }}">−{{ deduction.points }}</span>
+  <div class="deduction__body">
+    <span class="deduction__name">{{ deduction.criterion_name }}
+      <span class="deduction__criterion-score">scored {{ deduction.criterion_score }}/100</span>
+    </span>
+    <span class="deduction__why">{{ deduction.explanation }}</span>
+  </div>
+</li>

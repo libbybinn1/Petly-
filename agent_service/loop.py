@@ -35,12 +35,13 @@ service at all.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from app.domain.enums import MatchDirection
+from app.domain.enums import MatchDirection, Species
 from app.domain.facts import (
     adopter_facts_from,
     animal_facts_from,
@@ -241,7 +242,7 @@ class MatchAnalysisAgent:
         )
 
         _note_payload_gaps(adopter_payload, animal_payload, session)
-        self._gather_first_evidence(adopter, animal, session)
+        self._gather_first_evidence(adopter, animal, _breed_of(animal_payload), session)
 
         explanation = self._explain(adopter_payload, animal_payload, score, session)
         return _build_outcome(score, explanation, session)
@@ -284,7 +285,11 @@ class MatchAnalysisAgent:
         return adopter_payload, animal_payload
 
     def _gather_first_evidence(
-        self, adopter: AdopterFacts, animal: AnimalFacts, session: ReasoningSession
+        self,
+        adopter: AdopterFacts,
+        animal: AnimalFacts,
+        breed: str | None,
+        session: ReasoningSession,
     ) -> None:
         """Retrieve curated guidance for this pairing, then apply the web gate.
 
@@ -293,14 +298,32 @@ class MatchAnalysisAgent:
         should still be answering over evidence rather than over a bare
         record.
 
+        Two retrievals: one about the pairing's situation, one about the
+        animal itself. The knowledge base counts as having answered only
+        when a retrieved passage names this animal - its breed, or its
+        species when no breed is recorded. Generic apartment or exercise
+        guidance always matches a situational question, so "anything came
+        back" would keep the web gate shut for every pairing, including a
+        Saluki the curated guides never mention (spec section 13).
+
         Args:
             adopter: The adopter's facts, used to phrase the question.
             animal: The animal's facts, used to phrase the question.
+            breed: The animal's breed as recorded, if any.
             session: The task state, which receives the evidence.
         """
-        question = _knowledge_question_for(adopter, animal)
-        self._search_knowledge(question, session)
-        self._search_web(question, session)
+        self._search_knowledge(_knowledge_question_for(adopter, animal, breed), session)
+
+        animal_question = _animal_care_question_for(animal, breed)
+        self._search_knowledge(animal_question, session)
+
+        subject = breed or _species_words(animal)
+        is_covered = knowledge_covers_animal(session, animal, breed)
+        session.record(
+            "knowledge_coverage",
+            f'curated guides {"cover" if is_covered else "do not mention"} "{subject}"',
+        )
+        self._search_web(animal_question, session, knowledge_covers_question=is_covered)
 
     # ------------------------------------------------------------------
     # The tools, each returning the observation the model will read
@@ -343,7 +366,13 @@ class MatchAnalysisAgent:
             f"[{passage.chunk.citation}] {shorten(passage.chunk.text)}" for passage in passages
         )
 
-    def _search_web(self, query: str, session: ReasoningSession) -> str:
+    def _search_web(
+        self,
+        query: str,
+        session: ReasoningSession,
+        *,
+        knowledge_covers_question: bool | None = None,
+    ) -> str:
         """Apply the spec section 13 gate, and search only if it opens.
 
         The gate's inputs are live rather than assumed: whether the knowledge
@@ -354,13 +383,20 @@ class MatchAnalysisAgent:
         Args:
             query: What is to be looked up.
             session: The task state, which receives any results.
+            knowledge_covers_question: Whether the curated guides answered
+                this specific question. Left unset for a search the model
+                asks for, where any passage already held counts.
 
         Returns:
             The observation to feed back to the model.
         """
         decision = decide_whether_to_search(
             query,
-            relevant_knowledge_found=bool(session.retrieved),
+            relevant_knowledge_found=(
+                bool(session.retrieved)
+                if knowledge_covers_question is None
+                else knowledge_covers_question
+            ),
             already_searched_this_task=session.has_searched_web,
         )
         session.record(
@@ -827,21 +863,26 @@ def _note_payload_gaps(
         )
 
 
-def _knowledge_question_for(adopter: AdopterFacts, animal: AnimalFacts) -> str:
+def _knowledge_question_for(
+    adopter: AdopterFacts, animal: AnimalFacts, breed: str | None = None
+) -> str:
     """Compose the question put to the knowledge base.
 
     Built from the pairing's actual characteristics, so retrieval is about
-    this specific match rather than a generic query.
+    this specific match rather than a generic query. The breed leads when
+    there is one: "a calm other" names no animal at all, and a Greek tortoise
+    is what the guidance has to be about.
 
     Args:
         adopter: The adopter's facts.
         animal: The animal's facts.
+        breed: The recorded breed, if any.
 
     Returns:
         One plain-language question.
     """
     parts = [
-        f"A {animal.temperament.value.lower()} {animal.species.value.replace('_', ' ').lower()}",
+        f"A {animal.temperament.value.lower()} {_animal_noun(animal, breed)}",
         f"with {animal.activity_level.value.lower()} activity needs",
         f"joining a {adopter.home_type.value.lower()} home",
         f"with {adopter.daily_hours_available:g} hours available daily",
@@ -853,6 +894,87 @@ def _knowledge_question_for(adopter: AdopterFacts, animal: AnimalFacts) -> str:
     if animal.has_special_needs:
         parts.append("and the animal has special care needs")
     return ", ".join(parts) + "."
+
+
+def _animal_care_question_for(animal: AnimalFacts, breed: str | None) -> str:
+    """The question about the animal itself, for the guides and then the web.
+
+    Deliberately free of anything about the adopter: it may leave this
+    machine as a web query, and it must never read as a request for the
+    application's own records (spec section 13).
+
+    Args:
+        animal: The animal's facts.
+        breed: The recorded breed, if any.
+
+    Returns:
+        One short query naming the animal and what an adopter needs to know.
+    """
+    return f"{_animal_noun(animal, breed)} care needs, temperament, exercise and housing"
+
+
+def knowledge_covers_animal(
+    session: ReasoningSession, animal: AnimalFacts, breed: str | None
+) -> bool:
+    """Whether any retrieved passage is about this particular animal.
+
+    The breed is the subject when one is recorded, since breed-specific
+    needs - a Saluki's sprinting, a Holland Lop's diet - are exactly what a
+    general species guide does not say. Without a breed the species words
+    stand in, and for an unnamed OTHER any relevant passage has to do.
+
+    Args:
+        session: The task state, holding every relevant passage retrieved.
+        animal: The animal's facts.
+        breed: The recorded breed, if any.
+
+    Returns:
+        True when the curated guides named the animal.
+    """
+    if not session.retrieved:
+        return False
+    subject = _normalised(breed or _species_words(animal))
+    if not subject:
+        return True
+    # Whole words, so "pug" is not found inside "pugnacious"; a plural ending
+    # on the last word allowed, because guides write "Border Collies".
+    subject_pattern = re.compile(rf"\b{re.escape(subject)}(?:s|es)?\b")
+    return any(
+        subject_pattern.search(_normalised(f"{passage.chunk.heading} {passage.chunk.text}"))
+        for passage in session.retrieved
+    )
+
+
+def _animal_noun(animal: AnimalFacts, breed: str | None) -> str:
+    """"Saluki dog", "Greek Tortoise", or "cat" when no breed is known."""
+    species = _species_words(animal)
+    if not breed:
+        return species or "animal"
+    if animal.species is Species.OTHER or species in breed.lower():
+        return breed
+    return f"{breed} {species}"
+
+
+def _species_words(animal: AnimalFacts) -> str:
+    """The species in plain words; empty for OTHER, which names nothing."""
+    if animal.species is Species.OTHER:
+        return ""
+    return animal.species.value.replace("_", " ").lower()
+
+
+def _breed_of(animal_payload: dict[str, Any]) -> str | None:
+    """The recorded breed from the MCP payload, or None when blank."""
+    breed = str(animal_payload.get("breed") or "").strip()
+    return breed or None
+
+
+def _normalised(text: str) -> str:
+    """Lower-case, with punctuation and runs of space reduced to one space.
+
+    So "Hermann's Tortoise" in a record matches "hermann s tortoise" in a
+    guide however the apostrophe was typed.
+    """
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", text.lower()).split())
 
 
 def _describe(payload: dict[str, Any]) -> str:

@@ -694,3 +694,89 @@ class TestSourceReferencesAreNotBlindlyLinked:
 
         assert 'href="space-and-housing.md' not in body
         assert "space-and-housing.md#apartments" in body
+
+
+class TestTheFitGradeIsShown:
+    """Every ranked card and the analysis page carry the grade (spec section 8)."""
+
+    def test_find_my_pet_shows_a_grade_and_where_the_points_went(
+        self, adopter_client: FlaskClient, world: dict[str, str]
+    ) -> None:
+        """Proves the adopter sees a letter grade, not only a bare number.
+
+        The world's available animal is an eligible, imperfect match, so the
+        card must name at least one deduction.
+        """
+        body = adopter_client.get("/my/matches").get_data(as_text=True)
+
+        assert 'class="fit-card' in body
+        assert "Fit grade" in body
+        assert "Where the points went" in body
+
+    def test_the_applicant_ranking_shows_the_grade_too(
+        self,
+        staff_client: FlaskClient,
+        world: dict[str, str],
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        """Proves staff get the same grade on the screen where they decide."""
+        apply_for(session_factory, world["adopter_profile_id"], world["available_animal_id"])
+
+        body = staff_client.get(
+            f"/animals/{world['available_animal_id']}/adopters"
+        ).get_data(as_text=True)
+
+        assert 'class="fit-card' in body
+
+    def test_the_analysis_page_itemises_the_stored_breakdown(
+        self,
+        staff_client: FlaskClient,
+        world: dict[str, str],
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        """Proves the detail page grades the stored score and names each deduction.
+
+        82 with one criterion at 40 of 100 on a 30% weight: that criterion
+        cost 18 points, which is exactly what 82 is missing.
+        """
+        analysis_id = add_analysis_with_trace(
+            session_factory, world["adopter_profile_id"], world["available_animal_id"]
+        )
+        with session_factory() as session:
+            analysis = session.get(MatchAnalysis, analysis_id)
+            assert analysis is not None
+            analysis.criterion_scores = json.dumps(
+                [
+                    {"criterion": "living_environment", "score": 100, "weight": 0.7,
+                     "explanation": "Plenty of room."},
+                    {"criterion": "daily_availability", "score": 40, "weight": 0.3,
+                     "explanation": "Needs 4 hours a day; has 1."},
+                ]
+            )
+            session.commit()
+
+        body = staff_client.get(f"/analyses/{analysis_id}").get_data(as_text=True)
+
+        assert "Strong fit" in body
+        assert "\u221218" in body  # a true minus sign, as the page renders it
+        assert "Needs 4 hours a day; has 1." in body
+
+    def test_a_disqualified_pairing_shows_no_grade(
+        self,
+        staff_client: FlaskClient,
+        world: dict[str, str],
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        """Proves an ineligible pairing is never dressed up with a letter.
+
+        Negative case: a hard-constraint violation has no breakdown, and a
+        grade of F would suggest it merely scored badly.
+        """
+        profile_id = add_disqualified_adopter(session_factory)
+        animal_id = add_demanding_animal(session_factory)
+        apply_for(session_factory, profile_id, animal_id)
+
+        body = staff_client.get(f"/animals/{animal_id}/adopters").get_data(as_text=True)
+
+        assert "Not eligible" in body
+        assert 'class="fit-card' not in body

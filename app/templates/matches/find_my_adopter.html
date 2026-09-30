@@ -165,19 +165,9 @@
           </div>
 
           <div class="candidate__column">
-            <h4 class="panel-title">Heaviest criteria</h4>
-            <div class="mini-criteria">
-              {% for item in candidate.top_criteria %}
-              <div class="mini-criterion">
-                <span class="mini-criterion__name">{{ item.name }}</span>
-                <span class="mini-criterion__track">
-                  <span class="mini-criterion__fill is-{{ item.band }}"
-                        style="width: {{ item.score }}%"></span>
-                </span>
-                <span class="mini-criterion__value">{{ item.score }}</span>
-              </div>
-              {% endfor %}
-            </div>
+            {% if candidate.fit %}
+              {% with fit = candidate.fit, detailed = false %}{% include "matches/_fit_grade.html" %}{% endwith %}
+            {% endif %}
 
             {% if candidate.analysis and candidate.analysis.evidence_sources %}
               <h4 class="panel-title" style="margin-top: var(--space-4)">Sources used</h4>

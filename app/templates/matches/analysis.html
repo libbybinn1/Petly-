@@ -100,6 +100,14 @@
     {% endif %}
   </div>
 
+  <div class="stack">
+  {% if analysis.fit %}
+    <div class="card card--padded">
+      <h3 class="panel-title">Fit grade</h3>
+      {% with fit = analysis.fit, detailed = true %}{% include "matches/_fit_grade.html" %}{% endwith %}
+    </div>
+  {% endif %}
+
   <div class="card card--padded">
     <h3 class="panel-title">Score breakdown</h3>
     <p class="pending" style="margin-bottom: var(--space-4)">
@@ -111,6 +119,7 @@
     {% with criteria = analysis.criterion_scores %}
       {% include "matches/_criteria_bars.html" %}
     {% endwith %}
+  </div>
   </div>
 </div>
 {% endblock %}

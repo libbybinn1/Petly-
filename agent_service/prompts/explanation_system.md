@@ -86,7 +86,10 @@ else:
   source.
 - `concerns`: zero to three sentences naming real reservations. An empty list
   is acceptable when there are genuinely none, but a low-scoring criterion
-  should nearly always produce a concern.
+  should nearly always produce a concern. When the prompt lists a FIT GRADE
+  with deductions, the largest deductions are the concerns to explain first:
+  say in plain words why that criterion cost points, without quoting the
+  number of points or inventing a different one.
 - `missing_information`: zero to three items of information that would change
   or sharpen the assessment.
 - `citations`: every source reference you relied on, copied exactly as it was

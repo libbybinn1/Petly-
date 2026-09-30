@@ -151,8 +151,11 @@ than having to build the situation up first.
 1. Sign in as `dana@petmatch.org` in the second window.
 2. `/animals/manage` → find an animal with applicants → **View applicants**
    (`/animals/<id>/adopters`).
-3. Each row: a score ring, the criterion breakdown, the applicant's own
-   message, **Full analysis**, and **History**.
+3. Each row: a score ring, the **fit grade** (a letter, a verdict and
+   "where the points went"), the applicant's own message, **Full analysis**,
+   and **History**. *Say:* the deductions add up to exactly 100 minus the
+   score. Every missing point is attributed to a criterion, with the
+   scorer's own reason. It is arithmetic, not model output.
 4. *Say:* this is the **Animal→Adopter** direction. Daily availability weighs
    0.19 here and 0.13 the other way; species preference weighs 0.01 here and
    0.17 the other way. The two directions genuinely disagree, because spec §9
@@ -268,12 +271,16 @@ Do this last, with terminal 2 in view, and narrate the log.
      `"score": 9999` changes nothing.
    - **RAG.** `rag_search` against 104 chunks from 17 curated guides,
      retrieved semantically.
-   - **The web-search gate.** The log names the decision:
-     `REFUSED_RAG_SUFFICIENT` when the knowledge base answered,
-     `REFUSED_OWN_RECORDS` for a question about our own data,
-     `ALLOWED_KNOWLEDGE_GAP` when retrieval came back empty. *Say:* RAG
-     sufficiency wins — an external-sounding question still does not reach the
-     web if the curated corpus answered it.
+   - **The web-search gate.** First a `knowledge_coverage` step says whether
+     the curated guides name this animal. Then the gate names its decision:
+     `REFUSED_RAG_SUFFICIENT` when they do, `ALLOWED_KNOWLEDGE_GAP` when they
+     don't, and `REFUSED_OWN_RECORDS` for a question about our own data.
+     *Say:* RAG sufficiency still wins. Generic apartment advice does not
+     count as knowing about a Saluki.
+   - **To show both outcomes**, analyse two animals. The **Weimaraner** is not
+     in the guides, so the web is searched and a web source appears on the
+     analysis page with "Web search was used". The **Border Collie** is
+     covered by `species-dogs.md`, so the web stays shut.
    - **The loop.** The manifest of four tools goes to the model on every turn,
      and the model decides. An invented tool name is reported back rather than
      raised, because small models invent tool names and one bad turn should

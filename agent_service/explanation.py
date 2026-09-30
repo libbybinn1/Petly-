@@ -24,6 +24,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from app.domain.fit_grade import ScoredCriterion, build_fit_report
 from app.domain.matching import MatchScore
 
 from agent_service.reasoning_session import ReasoningSession
@@ -79,6 +80,7 @@ def build_explanation_prompt(
             f"Direction: {score.direction.value}. This number is final - explain "
             f"it, do not change it or restate it as a different number.",
             *_breakdown_section(score),
+            *_fit_grade_section(score),
             *_evidence_section(session),
             "",
             "You may call a tool to gather more evidence, or answer now. When you "
@@ -147,6 +149,43 @@ def _breakdown_section(score: MatchScore) -> list[str]:
             f"(weight {item.weight:.0%}) - {item.explanation}"
             for item in score.criterion_scores
         ],
+    ]
+
+
+def _fit_grade_section(score: MatchScore) -> list[str]:
+    """Write the fit grade and where its missing points went (spec section 8).
+
+    The model is handed the deductions as arithmetic already done, so its
+    concerns explain the points that were actually lost rather than a
+    reservation it chose; it never computes or changes them (rule R4).
+
+    Args:
+        score: The calculated score and its breakdown.
+
+    Returns:
+        The grade line and one line per deduction, or nothing when the
+        pairing was disqualified and has no breakdown to grade.
+    """
+    if score.is_disqualified:
+        return []
+
+    named: list[tuple[str, ScoredCriterion]] = [
+        (item.criterion.value, item) for item in score.criterion_scores
+    ]
+    report = build_fit_report(score.score, named)
+    if report.is_perfect:
+        return ["", f"FIT GRADE: {report.grade} ({report.verdict}). No points were deducted."]
+
+    return [
+        "",
+        f"FIT GRADE: {report.grade} ({report.verdict}). {report.points_lost} points "
+        f"were deducted from a perfect 100, largest first:",
+        *[
+            f"  - minus {deduction.points} for {deduction.criterion_name}: "
+            f"{deduction.explanation}"
+            for deduction in report.deductions
+        ],
+        "Your concerns should explain the largest deductions in plain words.",
     ]
 
 

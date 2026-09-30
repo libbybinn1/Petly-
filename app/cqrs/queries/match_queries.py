@@ -42,6 +42,7 @@ from app.domain.enums import (
     Species,
 )
 from app.domain.facts import adopter_facts_from_row, animal_facts_from_row
+from app.domain.fit_grade import FitReport, ScoredCriterion, build_fit_report
 from app.domain.matching import (
     AdopterFacts,
     AnimalFacts,
@@ -135,6 +136,29 @@ class CriterionSummary:
         return band_for(self.score)
 
 
+def _criterion_display_name(criterion: str) -> str:
+    """"daily_availability" as "Daily Availability", for every screen."""
+    return criterion.replace("_", " ").title()
+
+
+def fit_report_for(score: MatchScore) -> FitReport | None:
+    """Grade a live score and itemise its deductions (spec section 8).
+
+    Args:
+        score: The deterministic score, with its breakdown.
+
+    Returns:
+        The report, or None for a disqualified pairing, which has no
+        breakdown to itemise and shows its blocking reason instead.
+    """
+    if score.is_disqualified:
+        return None
+    named: list[tuple[str, ScoredCriterion]] = [
+        (_criterion_display_name(item.criterion.value), item) for item in score.criterion_scores
+    ]
+    return build_fit_report(score.score, named)
+
+
 def _heaviest_criteria(score: MatchScore, count: int) -> list[CriterionSummary]:
     """The `count` heaviest criteria of a score, for a compact summary.
 
@@ -147,9 +171,7 @@ def _heaviest_criteria(score: MatchScore, count: int) -> list[CriterionSummary]:
     """
     heaviest_first = sorted(score.criterion_scores, key=lambda item: -item.weight)
     return [
-        CriterionSummary(
-            name=item.criterion.value.replace("_", " ").title(), score=item.score
-        )
+        CriterionSummary(name=_criterion_display_name(item.criterion.value), score=item.score)
         for item in heaviest_first[:count]
     ]
 
@@ -311,6 +333,11 @@ class RankedCandidate:
         """The three heaviest criteria, for the compact summary on the card."""
         return _heaviest_criteria(self.score, TOP_CRITERIA_ON_A_CANDIDATE)
 
+    @property
+    def fit(self) -> FitReport | None:
+        """The grade and its itemised deductions, None when disqualified."""
+        return fit_report_for(self.score)
+
 
 @dataclass(frozen=True)
 class RankedAnimal:
@@ -366,6 +393,11 @@ class RankedAnimal:
         weights happen to be declared heaviest first.
         """
         return _heaviest_criteria(self.score, TOP_CRITERIA_ON_AN_ANIMAL_CARD)
+
+    @property
+    def fit(self) -> FitReport | None:
+        """The grade and its itemised deductions, None when disqualified."""
+        return fit_report_for(self.score)
 
 
 # --------------------------------------------------------------------------
@@ -731,6 +763,21 @@ class MatchAnalysisDetail:
         evidence for anything on screen.
         """
         return [source for source in self.evidence_sources if source.cited]
+
+    @property
+    def fit(self) -> FitReport | None:
+        """The stored score as a grade with its deductions (spec section 8).
+
+        Rebuilt from the stored breakdown rather than rescored, so the
+        screen explains the number the agent was given, even if the
+        profile has changed since.
+        """
+        if self.is_disqualified or not self.criterion_scores:
+            return None
+        named: list[tuple[str, ScoredCriterion]] = [
+            (_criterion_display_name(item.criterion), item) for item in self.criterion_scores
+        ]
+        return build_fit_report(self.score, named)
 
 
 class GetMatchAnalysisHandler(QueryHandler[MatchAnalysisDetail | None]):

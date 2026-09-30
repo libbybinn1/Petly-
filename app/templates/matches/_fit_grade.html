@@ -1,0 +1,57 @@
+{# The fit grade: a letter, a verdict, and where every missing point went.
+   Expects `fit` (a FitReport from app/domain/fit_grade.py) and optionally
+   `detailed` - true on the analysis screen, which lists every deduction
+   open; a ranking card lists the three largest and folds the rest away.
+
+   Everything here is arithmetic from the scorer (spec section 8). The view
+   decides nothing: the grade, the order and the rounding all arrive done,
+   and the deductions already add up to exactly 100 minus the score. #}
+{% set visible_count = fit.deductions|length if detailed else 3 %}
+<section class="fit-card fit-card--{{ fit.band }}"
+         aria-label="Fit grade {{ fit.grade }}: {{ fit.verdict }}, {{ fit.score }} out of 100">
+  <div class="fit-card__head">
+    <span class="fit-grade fit-grade--{{ fit.grade_modifier }}" aria-hidden="true">{{ fit.grade }}</span>
+    <div class="fit-card__summary">
+      <p class="fit-card__verdict">{{ fit.verdict }} <span class="fit-card__percent">{{ fit.score }}%</span></p>
+      <p class="fit-card__sub">
+        {% if fit.is_perfect %}
+          A perfect score: no criterion cost this match a single point.
+        {% else %}
+          {{ fit.points_lost }} point{{ '' if fit.points_lost == 1 else 's' }} short of a perfect match, every one itemised.
+        {% endif %}
+      </p>
+    </div>
+  </div>
+
+  {#- One bar, 100 points wide: what was kept, then each deduction as its
+      own segment, largest first, so the eye reads the story left to right. -#}
+  <div class="fit-meter" aria-hidden="true">
+    <span class="fit-meter__kept" style="width: {{ fit.score }}%"></span>
+    {% for deduction in fit.deductions %}
+      <span class="fit-meter__lost fit-meter__lost--{{ loop.index0 % 4 }}"
+            style="width: {{ deduction.points }}%"
+            title="{{ deduction.criterion_name }}: −{{ deduction.points }}"></span>
+    {% endfor %}
+  </div>
+
+  {% if fit.deductions %}
+    <h4 class="panel-title fit-card__title">Where the points went</h4>
+    <ol class="deductions">
+      {% for deduction in fit.deductions[:visible_count] %}
+        {% set colour_index = loop.index0 % 4 %}
+        {% include "matches/_fit_deduction.html" %}
+      {% endfor %}
+    </ol>
+    {% if fit.deductions|length > visible_count %}
+      <details class="deductions-more">
+        <summary>{{ fit.deductions|length - visible_count }} smaller deduction{{ '' if fit.deductions|length - visible_count == 1 else 's' }}</summary>
+        <ol class="deductions" start="{{ visible_count + 1 }}">
+          {% for deduction in fit.deductions[visible_count:] %}
+            {% set colour_index = (loop.index0 + visible_count) % 4 %}
+            {% include "matches/_fit_deduction.html" %}
+          {% endfor %}
+        </ol>
+      </details>
+    {% endif %}
+  {% endif %}
+</section>

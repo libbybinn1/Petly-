@@ -79,21 +79,12 @@
         </div>
 
         <div class="candidate__column">
-          <h4 class="panel-title">How this was scored</h4>
-          <div class="mini-criteria">
-            {#- The view model chooses which criteria matter and how each one
-                reads; slicing the breakdown here was a view deciding. -#}
-            {% for item in match.top_criteria %}
-            <div class="mini-criterion">
-              <span class="mini-criterion__name">{{ item.name }}</span>
-              <span class="mini-criterion__track">
-                <span class="mini-criterion__fill is-{{ item.band }}"
-                      style="width: {{ item.score }}%"></span>
-              </span>
-              <span class="mini-criterion__value">{{ item.score }}</span>
-            </div>
-            {% endfor %}
-          </div>
+          {#- The grade and its itemised deductions replace the bare bars:
+              the bars said how each criterion scored, the grade says what
+              that cost the match and why (spec section 8). -#}
+          {% if match.fit %}
+            {% with fit = match.fit, detailed = false %}{% include "matches/_fit_grade.html" %}{% endwith %}
+          {% endif %}
         </div>
       </div>
     </article>

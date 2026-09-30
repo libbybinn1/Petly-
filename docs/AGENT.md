@@ -343,10 +343,34 @@ project curated. That is spec §13's "RAG first, web second" read literally, and
 it is what CLAUDE.md R4 says: "Web search runs only when the curated knowledge
 base cannot answer."
 
-Both flags are live, which is what makes the policy load-bearing:
-`relevant_knowledge_found` is whether this task holds any retrieved passage at
-the moment of the call, and `already_searched_this_task` is set the moment the
-gate opens for the first time. One task gets one search.
+Both flags are live, which is what makes the policy load-bearing.
+`already_searched_this_task` is set the moment the gate opens for the first
+time, so one task gets one search. `relevant_knowledge_found` depends on who
+is asking:
+
+- **The opening search, which the agent makes itself.** Here it means *the
+  curated guides name this animal*. The agent makes two retrievals: one about
+  the pairing's situation, and one about the animal ("Saluki dog care needs,
+  temperament, exercise and housing"). It then asks
+  `knowledge_covers_animal` whether any retrieved passage names the breed as
+  whole words, or the species when no breed is recorded. The decision is
+  logged as a `knowledge_coverage` step in the trace.
+- **A search the model asks for.** Here it means any passage the task already
+  holds.
+
+Why the opening search needs the stricter test: a situational question always
+matches some generic apartment or exercise guidance. When any retrieved
+passage counted as an answer, the gate stayed shut for every pairing. This was
+measured on the real corpus. A Greek Tortoise's question read "a calm other…"
+and was refused as `REFUSED_RAG_SUFFICIENT` on the strength of the apartment
+guide. So was a Border Collie, whose breed the dog guide does cover. With the
+stricter test, a breed the 17 guides never mention (Saluki, Weimaraner, Shiba
+Inu, Holland Lop and others in the seed roster) opens the gate, while a
+covered one (Border Collie, Maine Coon, every exotic species in the roster)
+still keeps it shut.
+
+The animal question is the one that goes to the web. It names the animal and
+nothing about the adopter, because it leaves this machine.
 
 When the gate refuses, the model is told which rule refused it —
 `REFUSED_OWN_RECORDS`, `REFUSED_RAG_SUFFICIENT`, `REFUSED_ALREADY_SEARCHED`,

@@ -1862,3 +1862,63 @@ legend.field__label { padding: 0; }
 
 /* The paw standing in for a missing photograph in a table cell. */
 .table__thumb--empty { display: grid; place-items: center; }
+
+/* ------------------------------------------------------------------
+   Fit grade (matches/_fit_grade.html): a letter, a verdict, a 100-point
+   meter, and the itemised deductions. Colours are theme tokens only, so
+   dark mode needs no rules of its own.
+   ------------------------------------------------------------------ */
+.fit-card { display: flex; flex-direction: column; gap: var(--space-3); }
+.fit-card__head { display: flex; align-items: center; gap: var(--space-3); }
+.fit-grade {
+  flex: none; display: grid; place-items: center;
+  width: 52px; height: 52px; border-radius: var(--radius-md);
+  font-size: 1.45rem; font-weight: var(--weight-bold); letter-spacing: -0.02em;
+  background: var(--surface-sunken); color: var(--text-strong);
+  border: 2px solid var(--border-normal);
+}
+.fit-card--strong .fit-grade { background: var(--success-bg); color: var(--success-fg); border-color: var(--success-fg); }
+.fit-card--fair   .fit-grade { background: var(--warning-bg); color: var(--warning-fg); border-color: var(--warning-fg); }
+.fit-card--weak   .fit-grade { background: var(--danger-bg);  color: var(--danger-fg);  border-color: var(--danger-fg); }
+/* A+ earns a little ceremony: a soft glow, off under reduced motion. */
+.fit-grade--a-plus { box-shadow: 0 0 0 4px var(--success-bg); animation: fit-grade-pop 520ms cubic-bezier(0.34, 1.56, 0.64, 1); }
+@keyframes fit-grade-pop { from { transform: scale(0.6); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .fit-grade--a-plus { animation: none; } }
+
+.fit-card__summary { min-width: 0; }
+.fit-card__verdict { margin: 0; font-weight: var(--weight-semibold); color: var(--text-strong); }
+.fit-card__percent { color: var(--text-muted); font-weight: var(--weight-medium); margin-left: var(--space-1); }
+.fit-card__sub { margin: 2px 0 0; font-size: 0.84rem; color: var(--text-muted); }
+.fit-card__title { margin: var(--space-2) 0 0; }
+
+.fit-meter {
+  display: flex; height: 10px; border-radius: var(--radius-pill); overflow: hidden;
+  background: var(--surface-sunken); border: 1px solid var(--border-soft);
+}
+.fit-meter__kept { background: var(--success-fg); }
+.fit-card--fair .fit-meter__kept { background: var(--warning-fg); }
+.fit-card--weak .fit-meter__kept { background: var(--text-muted); }
+.fit-meter__lost { border-left: 2px solid var(--surface-card); }
+/* Four deduction colours, cycled; the same class tints each line's badge
+   so a segment and its explanation visibly belong together. */
+.fit-meter__lost--0 { background: var(--danger-fg); }
+.fit-meter__lost--1 { background: var(--warning-fg); }
+.fit-meter__lost--2 { background: var(--info-fg); }
+.fit-meter__lost--3 { background: var(--brand-tag-fg); }
+
+.deductions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.deduction { display: grid; grid-template-columns: 44px 1fr; gap: var(--space-2); align-items: start; }
+.deduction__points {
+  display: inline-grid; place-items: center; height: 24px; border-radius: var(--radius-pill);
+  font-size: 0.8rem; font-weight: var(--weight-bold); color: var(--surface-card);
+  font-variant-numeric: tabular-nums;
+}
+.deduction__body { display: flex; flex-direction: column; min-width: 0; }
+.deduction__name { font-size: 0.88rem; font-weight: var(--weight-semibold); color: var(--text-strong); }
+.deduction__criterion-score { font-weight: var(--weight-medium); color: var(--text-muted); font-size: 0.78rem; margin-left: var(--space-1); }
+.deduction__why { font-size: 0.84rem; color: var(--text-normal); overflow-wrap: anywhere; }
+.deductions-more > summary {
+  cursor: pointer; font-size: 0.84rem; color: var(--text-muted);
+  min-height: var(--tap-target); display: flex; align-items: center;
+}
+.deductions-more[open] > summary { margin-bottom: var(--space-2); }

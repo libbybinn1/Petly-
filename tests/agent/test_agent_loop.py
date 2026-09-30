@@ -111,13 +111,21 @@ class FakeKnowledgeBase:
 
 
 def make_chunk(citation_document: str = "space-and-housing.md") -> RetrievedChunk:
-    """Build one retrieved chunk for tests."""
+    """Build one retrieved chunk for tests.
+
+    It names the test animal's breed, so by default the curated guides
+    *cover* the animal and the web gate stays shut (spec section 13). A test
+    about a knowledge gap builds its own chunk that does not.
+    """
     return RetrievedChunk(
         chunk=KnowledgeChunk(
             chunk_id="c1",
             document_name=citation_document,
             heading="Space: Apartments",
-            text="Apartments suit small animals; large breeds need outdoor access.",
+            text=(
+                "Apartments suit small animals; large breeds need outdoor access. "
+                "A Border Collie needs hours of daily work."
+            ),
         ),
         distance=120.0,
     )
