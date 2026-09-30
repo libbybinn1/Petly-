@@ -60,11 +60,19 @@ set PY=C:\Users\libbyb\venvs\petmatch\Scripts\python.exe
 # 3. embed the knowledge base into the vector database
 %PY% scripts\ingest_knowledge.py
 
-# 4. start the web application
-%PY% run.py                        # http://127.0.0.1:5000
+# 4. start everything: Ollama, the web application and the agent worker
+%PY% scripts\start_all.py          # http://127.0.0.1:5000
 
-# 5. in a second terminal, start the independent agent process
-%PY% -m agent_service
+# 5. stop it all again when you are done
+%PY% scripts\stop_all.py
+```
+
+Steps 4 and 5 can still be done by hand, one process per terminal, which is
+what `start_all.py` does for you:
+
+```bash
+%PY% run.py                        # http://127.0.0.1:5000
+%PY% -m agent_service              # in a second terminal
 ```
 
 > **Step 2 replaces all data and takes 9–12 minutes.** `db.py fresh` drops
@@ -83,6 +91,37 @@ set PY=C:\Users\libbyb\venvs\petmatch\Scripts\python.exe
 `scripts/db.py` takes one command: `check`, `create`, `reset`, `seed`,
 `fresh`, `tables` or `events`. There is no `migrate` — the schema is built
 from the SQLAlchemy metadata, and there is no Alembic directory.
+
+### Ollama does not start itself, by design
+
+The Ollama shortcut has been removed from the Windows Startup folder. CPU-only
+inference is the heaviest thing this project does — a loaded model holds
+several gigabytes and saturates the processor while it generates — and there
+is no reason for it to be doing that at login on a laptop that is also running
+an IDE and a browser. `scripts/start_all.py` starts it on demand instead.
+
+To put it back, copy the shortcut from
+`%LOCALAPPDATA%\Ollama\Ollama.lnk.autostart-disabled` into
+`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\`.
+
+### Always stop the servers you start
+
+The Flask development server and the agent worker are long-lived foreground
+processes, and closing a terminal or ending a debug session does not reliably
+stop them. Left behind they keep holding their port, so the next launch either
+cannot bind or — worse — the browser reaches a stale copy of the code and the
+demo shows behaviour that is no longer in the repository.
+
+`scripts/stop_all.py` clears them. It matches only processes launched from this
+directory or this project's virtual environment, so unrelated `run.py` scripts
+elsewhere on the machine are never touched; `tests/unit/test_process_control.py`
+holds that property in place.
+
+```bash
+%PY% scripts\stop_all.py --dry-run          # list, change nothing
+%PY% scripts\stop_all.py --include-ollama   # also free the model's memory
+%PY% scripts\start_all.py --restart         # stop whatever is running, then start
+```
 
 ### Recommended agent setting
 
