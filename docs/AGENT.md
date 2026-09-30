@@ -393,6 +393,17 @@ model call may sit in a request path (NFR-3.1). The job carries
 - The two boolean fields are `true` or `null`. `false` is never stored:
   nobody asks for an animal that is bad with children, so absence means "no
   constraint".
+
+The prompt (`agent_service/prompts/intent_system.md`) carries several worked
+examples rather than one, and two of them are vague descriptions ("a funny
+animal", "something cute and friendly") answered with an empty species list
+and null criteria. This is measured, not stylistic: with a single filled-in
+example, `qwen2.5:3b-instruct` copied it. "happy and friendly" came back as
+that example's rabbit/hamster/guinea-pig criteria word for word, and "a
+funny animal" became `BIRD`. With the vague examples in place both return no
+species, and "fast" maps to `HIGH` activity instead of `LOW`. One known
+residue: the 3B model still sometimes reads "nice", "sweet" or "happy" as a
+`CALM` temperament, despite a rule saying not to.
 - `interpretation` is capped at 200 characters.
 
 `agent_service/intent.py` owns both directions — `intent_to_payload` and
