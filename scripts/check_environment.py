@@ -28,7 +28,14 @@ truststore.inject_into_ssl()
 from dotenv import load_dotenv  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# A direct launch (`python scripts/check_environment.py`) puts `scripts/` on
+# sys.path, not the project root, so `app` is not importable until we add it.
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 load_dotenv(dotenv_path=PROJECT_ROOT / ".env")
+
+from app.config import SQL_SERVER_CLIENT_CHARSET  # noqa: E402
 
 
 @dataclass
@@ -67,8 +74,6 @@ def check_database() -> CheckResult:
     import pymssql
 
     try:
-        from app.config import SQL_SERVER_CLIENT_CHARSET
-
         connection = pymssql.connect(
             server=os.environ["DB_SERVER"],
             user=os.environ["DB_USER"],
