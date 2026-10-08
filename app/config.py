@@ -55,6 +55,13 @@ def _optional(variable_name: str, default: str) -> str:
     return os.environ.get(variable_name, "").strip() or default
 
 
+# FreeTDS on Windows ships a trivial iconv. The default UTF-8 client charset
+# cannot convert the TDS login packet for SQL Server 2014 and the handshake
+# fails with error 2402, reported as the generic 20002. CP1252 is the login
+# encoding that completes against Somee (docs/ARCHITECTURE.md §10).
+SQL_SERVER_CLIENT_CHARSET = "CP1252"
+
+
 @dataclass(frozen=True)
 class DatabaseConfiguration:
     """Connection settings for the cloud SQL Server database."""
@@ -70,10 +77,15 @@ class DatabaseConfiguration:
 
         Passwords routinely contain characters that are meaningful inside a
         URL, so both credentials are quoted rather than interpolated raw.
+        `charset` is required so pymssql's FreeTDS can finish the Somee login
+        (docs/ARCHITECTURE.md §10).
         """
         safe_user = quote_plus(self.user)
         safe_password = quote_plus(self.password)
-        return f"mssql+pymssql://{safe_user}:{safe_password}@{self.server}/{self.database}"
+        return (
+            f"mssql+pymssql://{safe_user}:{safe_password}@{self.server}/{self.database}"
+            f"?charset={SQL_SERVER_CLIENT_CHARSET}"
+        )
 
 
 @dataclass(frozen=True)

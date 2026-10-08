@@ -419,6 +419,7 @@ them. All of these are documented in the relevant `docs/` file too.
 | Symptom | Cause and remedy |
 |---|---|
 | A page hangs, then errors | Somee's free tier throttles or briefly refuses connections. Run `%PY% scripts\db.py check`. Reload; it usually clears within a minute. |
+| Flask or `pymssql` reports TDS 20002 | FreeTDS on Windows cannot convert the login packet as UTF-8. The app URL includes `charset=CP1252`. A hand-written `pymssql.connect` must pass the same `charset`. |
 | The agent logs a model error | Ollama is not running, or the model was evicted. Start it and let the first call reload the model. **The site keeps working** — that is worth saying out loud rather than apologising for. |
 | A form answers "That form has expired" | The CSRF token aged out with the session. Reload the page and submit again; this is the intended behaviour and a reasonable thing to show deliberately. |
 | An import error that differs on every run | The wrong interpreter. Use `C:\Users\libbyb\venvs\petmatch\Scripts\python.exe`; a virtual environment inside OneDrive corrupts itself. |

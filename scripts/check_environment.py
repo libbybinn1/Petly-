@@ -67,11 +67,14 @@ def check_database() -> CheckResult:
     import pymssql
 
     try:
+        from app.config import SQL_SERVER_CLIENT_CHARSET
+
         connection = pymssql.connect(
             server=os.environ["DB_SERVER"],
             user=os.environ["DB_USER"],
             password=os.environ["DB_PASSWORD"],
             database=os.environ["DB_NAME"],
+            charset=SQL_SERVER_CLIENT_CHARSET,
             timeout=30,
             login_timeout=30,
         )

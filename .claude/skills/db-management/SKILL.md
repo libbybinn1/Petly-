@@ -103,9 +103,15 @@ check them.
 
 ## Troubleshooting
 
+**TDS 20002 / "TDS server connection failed"** — the TCP port is often open and
+TLS succeeds; FreeTDS then fails converting the login packet (error 2402)
+because its Windows iconv cannot use the default UTF-8 client charset. The
+application URL and `check_environment.py` pass `charset=CP1252`. A raw
+`pymssql.connect(...)` without that argument will still fail on this machine.
+
 **Connection refused / timeout** — Somee's free tier throttles. Run `db.py check`.
-If TCP reaches port 1433 but login fails, the account may be sleeping; open the
-Somee control panel once to wake it.
+If TCP reaches port 1433 but login fails *after* the charset is set, the
+account may be sleeping; open the Somee control panel once to wake it.
 
 **"Login failed for user"** — confirm `.env` matches the Somee panel exactly. The
 password is case-sensitive.

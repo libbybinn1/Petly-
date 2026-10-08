@@ -581,7 +581,7 @@ proves the agent cannot even name the command.
 | Web framework | Flask 3.0 | Required by blueprint §9 |
 | Templating | Jinja2, server-rendered | Maps cleanly to the MVC View layer; no Node on this machine |
 | ORM | SQLAlchemy 2.0 | Typed, mature, dialect-portable |
-| DB driver | pymssql | No system ODBC driver needed |
+| DB driver | pymssql | No system ODBC driver needed. The SQLAlchemy URL sets `charset=CP1252` so FreeTDS on Windows can finish the SQL Server 2014 login (without it the handshake dies as TDS 20002). |
 | Cloud DB | Somee.com SQL Server 2014 | Provided; blueprint §11 requires cloud hosting |
 | Schema management | `Base.metadata.create_all` via `scripts/db.py` | One database, one developer; a migration history would be unpaid cost. No Alembic. |
 | CSRF | Flask-WTF `CSRFProtect` + `SameSite=Lax` | NFR-4.3; a hidden token on every POST form, and a cookie the browser will not attach cross-site |
