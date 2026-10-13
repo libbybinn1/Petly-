@@ -467,12 +467,15 @@ the same rules the model's original answer went through — a value that is not
 a real `Species` is dropped on the way in *and* on the way out. An analysis job
 writes its result to `match_analyses` instead and leaves `result_payload` null.
 
-Of the four job types, **`RANK_APPLICANT` and `INTERPRET_INTENT` are the two
-the application enqueues today.** `FIND_MY_PET` and `FIND_MORE_ADOPTERS` are
-handled by the worker but nothing enqueues them: both screens rank
-deterministically and synchronously, and the explanations they display are the
-ones written for applications. The enum values are kept because the worker
-maps them and the direction they imply is part of the contract.
+Of the four job types, the application enqueues three. `RANK_APPLICANT` is
+queued when an application is submitted or an invitation is sent.
+`INTERPRET_INTENT` is queued by natural-language search. `FIND_MY_PET` is
+queued by My matches, for each displayed animal that has no reusable
+`ADOPTER_TO_ANIMAL` analysis; that is the prose under "Why this animal could
+suit you". `FIND_MORE_ADOPTERS` is handled by the worker but nothing enqueues
+it: that screen ranks deterministically and shows analyses already written for
+the animal. The worker maps each type to a direction, and a screen waits only
+on the types that write the prose it displays.
 
 ---
 

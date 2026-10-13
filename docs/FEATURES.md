@@ -609,27 +609,32 @@ that I can start from who I am rather than what I can describe.
 
 **Main flow.** One page → every available animal is scored with the
 **Adopter→Animal** weights, deterministically and synchronously → ranked best
-first and shown immediately → each card links to the animal, and shows its
-explanation once the agent has written one.
+first and shown immediately → a `FIND_MY_PET` job is queued for each displayed
+animal that has no reusable adopter-side explanation → each card links to the
+animal, and shows that explanation once the agent has written it.
 
 **Alternative and error flows.** No profile → redirected to the profile form
 with an explanatory flash. A card with no analysis yet shows the shared
-pending block with how long it has waited. Disqualified animals are excluded
-from the ranking entirely.
+pending block with how long it has waited. Editing the profile immediately
+hides analyses older than the edit and shows that pending state until the
+replacement arrives, so old prose is never displayed beside a newly computed
+score. Disqualified animals are excluded from the ranking entirely.
 
 **Acceptance criteria.** The ranking appears without waiting for the model
 (NFR-3.2). Ranking really is ranked — scores descend. Ties break
 deterministically, so repeated ranking over identical data gives the same
 order.
 
-**API/Data changes.** `GET /my/matches`; `FindMyPetQuery`. No writes.
+**API/Data changes.** `GET /my/matches`; `FindMyPetQuery` ranks, then
+`EnqueueFindMyPetExplanationsCommand` inserts the missing `FIND_MY_PET` jobs.
 
 **UI changes.** `matches/find_my_pet.html`, `.score` ring, the pending block,
 and `data-analysis-status-url` for the poller.
 
-**Agent/Tool interaction.** Reads analyses the agent has already written,
-matched on direction so an adopter never sees the staff-side prose beside the
-adopter-side score. It does not enqueue work of its own.
+**Agent/Tool interaction.** Enqueues `FIND_MY_PET` only, and reads analyses in
+the `ADOPTER_TO_ANIMAL` direction, so an adopter never sees the staff-side
+prose beside the adopter-side score. A `RANK_APPLICANT` job for the same pair
+does not count as this screen's queue.
 
 **Tests.** `tests/api/test_feature_match_screens.py` (`TestThePollerIsWiredUp`,
 `TestThePendingBlock`), `tests/unit/test_matching.py` (`TestRanking`),

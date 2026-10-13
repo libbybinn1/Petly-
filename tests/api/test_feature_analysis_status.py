@@ -34,6 +34,7 @@ def add_job(
     animal_id: str | None = None,
     status: AnalysisJobStatus = AnalysisJobStatus.PENDING,
     minutes_ago: int = 1,
+    job_type: AnalysisJobType = AnalysisJobType.FIND_MY_PET,
 ) -> str:
     """Queue one analysis job and return its identifier."""
     job_id = new_identifier()
@@ -41,7 +42,7 @@ def add_job(
         session.add(
             AnalysisJob(
                 analysis_job_id=job_id,
-                job_type=AnalysisJobType.FIND_MY_PET.value,
+                job_type=job_type.value,
                 status=status.value,
                 adopter_profile_id=adopter_profile_id,
                 animal_id=animal_id,
@@ -272,11 +273,13 @@ class TestTheGeneration:
             session_factory,
             animal_id=world["available_animal_id"],
             status=AnalysisJobStatus.PENDING,
+            job_type=AnalysisJobType.RANK_APPLICANT,
         )
         add_job(
             session_factory,
             animal_id=world["adopted_animal_id"],
             status=AnalysisJobStatus.PENDING,
+            job_type=AnalysisJobType.RANK_APPLICANT,
         )
 
         payload = staff_client.get(
@@ -284,6 +287,48 @@ class TestTheGeneration:
         ).get_json()
 
         assert payload["pending"] == 1
+
+    def test_a_find_my_pet_job_is_not_the_staff_screens_queue(
+        self,
+        staff_client: FlaskClient,
+        world: dict[str, str],
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        """Proves an adopter explanation does not keep the staff page polling.
+
+        FIND_MY_PET writes the adopter-side prose. Counting it here would
+        make the applicant ranking wait for text it does not display.
+        """
+        add_job(
+            session_factory,
+            animal_id=world["available_animal_id"],
+            job_type=AnalysisJobType.FIND_MY_PET,
+        )
+
+        payload = staff_client.get(
+            f"/api/analysis-status?animal_id={world['available_animal_id']}"
+        ).get_json()
+
+        assert payload["pending"] == 0
+
+    def test_a_staff_job_is_not_the_adopters_queue(
+        self,
+        adopter_client: FlaskClient,
+        world: dict[str, str],
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        """Proves a RANK_APPLICANT job does not keep My matches polling."""
+        add_job(
+            session_factory,
+            adopter_profile_id=world["adopter_profile_id"],
+            job_type=AnalysisJobType.RANK_APPLICANT,
+        )
+
+        payload = adopter_client.get(
+            "/api/analysis-status?scope=my-matches"
+        ).get_json()
+
+        assert payload["pending"] == 0
 
     def test_the_response_names_no_records(
         self,

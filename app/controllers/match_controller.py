@@ -23,6 +23,7 @@ from werkzeug.wrappers import Response
 from app.controllers.helpers import ViewResult, get_bus, parse_checkbox
 from app.cqrs.commands.analysis_commands import (
     MAXIMUM_DESCRIPTION_LENGTH,
+    EnqueueFindMyPetExplanationsCommand,
     EnqueueIntentInterpretationCommand,
 )
 from app.cqrs.commands.application_commands import (
@@ -33,7 +34,11 @@ from app.cqrs.commands.application_commands import (
     ReverseApprovalCommand,
 )
 from app.cqrs.commands.invitation_commands import SendInvitationCommand
-from app.cqrs.queries.analysis_status_queries import GetAnalysisStatusQuery
+from app.cqrs.queries.analysis_status_queries import (
+    ADOPTER_MATCH_JOB_TYPES,
+    STAFF_MATCH_JOB_TYPES,
+    GetAnalysisStatusQuery,
+)
 from app.cqrs.queries.animal_queries import (
     DEFAULT_PAGE_SIZE,
     AnimalCard,
@@ -70,24 +75,37 @@ match_blueprint = Blueprint("matches", __name__)
 def find_my_pet() -> str | Response:
     """Rank available animals for the signed-in adopter (spec section 6.1).
 
-    Ranking is computed synchronously and appears immediately. Explanations
-    are written by the agent moments later, so some cards may show a pending
-    state on first load.
+    Ranking is computed synchronously and appears immediately. A FIND_MY_PET
+    job is queued for each animal that has no reusable adopter-side
+    explanation, and the agent writes that prose afterwards (NFR-3.2).
     """
     if not current_user.adopter_profile_id:
         flash("Complete your adoption profile to see personal matches.", "info")
         return redirect(url_for("personal.my_profile"))
 
     bus = get_bus()
-    matches = bus.dispatch_query(
-        FindMyPetQuery(adopter_profile_id=current_user.adopter_profile_id)
+    profile_id = current_user.adopter_profile_id
+    matches = bus.dispatch_query(FindMyPetQuery(adopter_profile_id=profile_id))
+    queued_count = bus.dispatch_command(
+        EnqueueFindMyPetExplanationsCommand(
+            adopter_profile_id=profile_id,
+            animal_ids=tuple(match.animal_id for match in matches),
+        )
     )
+    # The first ranking was computed before the jobs existed, so its queued
+    # labels would still say nothing is waiting. Re-rank only when this
+    # request actually inserted work; the scorer does no model call.
+    if queued_count:
+        matches = bus.dispatch_query(FindMyPetQuery(adopter_profile_id=profile_id))
     # Rendered into the page so the poller knows what it is looking at.
     # Without a baseline it compared the first answer against nothing, so a
     # page whose work had already finished polled every thirty seconds for
     # as long as the tab stayed open (docs/UX.md section 3).
     analysis_status = bus.dispatch_query(
-        GetAnalysisStatusQuery(adopter_profile_id=current_user.adopter_profile_id)
+        GetAnalysisStatusQuery(
+            adopter_profile_id=profile_id,
+            job_types=ADOPTER_MATCH_JOB_TYPES,
+        )
     )
 
     return render_template(
@@ -111,7 +129,9 @@ def find_my_adopter(animal_id: str) -> str:
     return render_template(
         "matches/find_my_adopter.html",
         ranking=ranking,
-        analysis_status=bus.dispatch_query(GetAnalysisStatusQuery(animal_id=animal_id)),
+        analysis_status=bus.dispatch_query(
+            GetAnalysisStatusQuery(animal_id=animal_id, job_types=STAFF_MATCH_JOB_TYPES)
+        ),
         mode="applicants",
     )
 
@@ -252,7 +272,9 @@ def find_more_adopters(animal_id: str) -> str:
     return render_template(
         "matches/find_my_adopter.html",
         ranking=ranking,
-        analysis_status=bus.dispatch_query(GetAnalysisStatusQuery(animal_id=animal_id)),
+        analysis_status=bus.dispatch_query(
+            GetAnalysisStatusQuery(animal_id=animal_id, job_types=STAFF_MATCH_JOB_TYPES)
+        ),
         mode="discovery",
     )
 
@@ -332,12 +354,15 @@ def analysis_status() -> Response:
 
     if scope == "my-matches":
         query = GetAnalysisStatusQuery(
-            adopter_profile_id=current_user.adopter_profile_id
+            adopter_profile_id=current_user.adopter_profile_id,
+            job_types=ADOPTER_MATCH_JOB_TYPES,
         )
     elif animal_id:
         if not current_user.is_staff:
             abort(403)
-        query = GetAnalysisStatusQuery(animal_id=animal_id)
+        query = GetAnalysisStatusQuery(
+            animal_id=animal_id, job_types=STAFF_MATCH_JOB_TYPES
+        )
     else:
         abort(400)
 

@@ -23,6 +23,10 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from agent_service.explanation import DETERMINISTIC_FALLBACK_MODEL
+from app.cqrs.commands.analysis_commands import (
+    DETERMINISTIC_FALLBACK_MODEL as COMMAND_FALLBACK_MODEL,
+)
 from app.domain.enums import (
     ActivityLevel,
     AnalysisJobStatus,
@@ -46,7 +50,7 @@ from app.infrastructure.models import (
     new_identifier,
 )
 from flask.testing import FlaskClient
-from sqlalchemy import event
+from sqlalchemy import event, select
 from sqlalchemy.orm import Session, sessionmaker
 from werkzeug.security import generate_password_hash
 
@@ -70,18 +74,67 @@ def queue_job(
     adopter_profile_id: str,
     animal_id: str,
     minutes_ago: int = 4,
+    job_type: AnalysisJobType = AnalysisJobType.RANK_APPLICANT,
 ) -> None:
     """Queue one unworked analysis job, as submitting an application does."""
     with session_factory() as session:
         session.add(
             AnalysisJob(
                 analysis_job_id=new_identifier(),
-                job_type=AnalysisJobType.RANK_APPLICANT.value,
+                job_type=job_type.value,
                 status=AnalysisJobStatus.PENDING.value,
                 adopter_profile_id=adopter_profile_id,
                 animal_id=animal_id,
                 attempt_count=0,
                 created_at=_naive_now() - timedelta(minutes=minutes_ago),
+            )
+        )
+        session.commit()
+
+
+def count_jobs(
+    session_factory: sessionmaker[Session],
+    *,
+    adopter_profile_id: str,
+    job_type: AnalysisJobType,
+) -> int:
+    """How many jobs of one type exist for one adopter."""
+    with session_factory() as session:
+        job_ids = session.execute(
+            select(AnalysisJob.analysis_job_id).where(
+                AnalysisJob.adopter_profile_id == adopter_profile_id,
+                AnalysisJob.job_type == job_type.value,
+            )
+        ).scalars().all()
+    return len(job_ids)
+
+
+def add_adopter_explanation(
+    session_factory: sessionmaker[Session],
+    adopter_profile_id: str,
+    animal_id: str,
+    *,
+    model_name: str = "qwen2.5:3b-instruct",
+    reason: str = "The household has room to spare.",
+) -> None:
+    """Store an adopter-side analysis newer than the records it describes."""
+    with session_factory() as session:
+        session.add(
+            MatchAnalysis(
+                match_analysis_id=new_identifier(),
+                direction=MatchDirection.ADOPTER_TO_ANIMAL.value,
+                adopter_profile_id=adopter_profile_id,
+                animal_id=animal_id,
+                score=82,
+                is_disqualified=False,
+                criterion_scores="[]",
+                reasons=json.dumps([reason]),
+                concerns="[]",
+                missing_information="[]",
+                evidence_sources="[]",
+                used_web_search=False,
+                model_name=model_name,
+                generated_at=_naive_now() + timedelta(minutes=1),
             )
         )
         session.commit()
@@ -210,19 +263,14 @@ class TestThePollerIsWiredUp:
         self,
         adopter_client: FlaskClient,
         world: dict[str, str],
-        session_factory: sessionmaker[Session],
     ) -> None:
         """Proves the adopter's page asks about the adopter's own matches.
 
-        The scope carries no identifier: the endpoint reads the profile from
-        the session, so this URL cannot be edited into somebody else's.
+        Opening the page queues a FIND_MY_PET explanation, which is what
+        makes the poller opt in. The scope carries no identifier: the
+        endpoint reads the profile from the session, so this URL cannot be
+        edited into somebody else's.
         """
-        queue_job(
-            session_factory,
-            adopter_profile_id=world["adopter_profile_id"],
-            animal_id=world["available_animal_id"],
-        )
-
         body = adopter_client.get("/my/matches").get_data(as_text=True)
 
         assert 'data-analysis-status-url="/api/analysis-status?scope=my-matches"' in body
@@ -233,7 +281,11 @@ class TestThePollerIsWiredUp:
         world: dict[str, str],
         session_factory: sessionmaker[Session],
     ) -> None:
-        """Proves the poller is given a baseline rather than starting blind."""
+        """Proves the poller is given a baseline rather than starting blind.
+
+        A staff ranking job for the same animal does not add to the count.
+        The one pending job is the FIND_MY_PET row this page just queued.
+        """
         queue_job(
             session_factory,
             adopter_profile_id=world["adopter_profile_id"],
@@ -246,14 +298,28 @@ class TestThePollerIsWiredUp:
         assert "data-analysis-generation=" in body
 
     def test_a_settled_page_does_not_poll_at_all(
-        self, adopter_client: FlaskClient, world: dict[str, str]
+        self,
+        adopter_client: FlaskClient,
+        world: dict[str, str],
+        session_factory: sessionmaker[Session],
     ) -> None:
         """Proves the opt-in is conditional, which is what stops the loop.
 
-        Negative half of the pair: with nothing queued there is nothing to
-        wait for, so the page should carry no poll URL for the script to
-        find.
+        Negative half of the pair: a reusable adopter-side explanation means
+        the page queues nothing, so there is no poll URL for the script to
+        find. A staff ranking job for the same pair does not change that.
         """
+        add_adopter_explanation(
+            session_factory,
+            world["adopter_profile_id"],
+            world["available_animal_id"],
+        )
+        queue_job(
+            session_factory,
+            adopter_profile_id=world["adopter_profile_id"],
+            animal_id=world["available_animal_id"],
+        )
+
         body = adopter_client.get("/my/matches").get_data(as_text=True)
 
         assert "data-analysis-status-url" not in body
@@ -336,7 +402,32 @@ class TestThePendingBlock:
         """Proves the wait is visible, which is what distinguishes slow from stuck.
 
         "Queued 4 minutes ago" is the difference between a visitor waiting
-        and a visitor concluding the feature is broken.
+        and a visitor concluding the feature is broken. The clock comes from
+        the FIND_MY_PET job, which is the explanation this screen shows.
+        """
+        queue_job(
+            session_factory,
+            adopter_profile_id=world["adopter_profile_id"],
+            animal_id=world["available_animal_id"],
+            minutes_ago=4,
+            job_type=AnalysisJobType.FIND_MY_PET,
+        )
+
+        body = adopter_client.get("/my/matches").get_data(as_text=True)
+
+        assert "Queued 4 minutes ago" in body
+
+    def test_a_staff_job_is_not_reported_as_the_adopters_queue(
+        self,
+        adopter_client: FlaskClient,
+        world: dict[str, str],
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        """Proves a RANK_APPLICANT job is not the explanation on this screen.
+
+        That job writes the staff-side analysis. The page queues its own
+        FIND_MY_PET job, so the card may say "just now", but it must not
+        borrow the staff job's "4 minutes ago".
         """
         queue_job(
             session_factory,
@@ -347,24 +438,9 @@ class TestThePendingBlock:
 
         body = adopter_client.get("/my/matches").get_data(as_text=True)
 
-        assert "Queued 4 minutes ago" in body
-
-    def test_no_queued_job_means_no_queued_label(
-        self,
-        adopter_client: FlaskClient,
-        world: dict[str, str],
-        session_factory: sessionmaker[Session],
-    ) -> None:
-        """Proves a card does not claim to be queued when nothing is.
-
-        The negative half: an explanation that was never asked for is a
-        different state from one that is on its way, and saying "Queued" for
-        it would be a plain untruth.
-        """
-        body = adopter_client.get("/my/matches").get_data(as_text=True)
-
         assert "pending-block" in body
-        assert "Queued " not in body
+        assert "Queued 4 minutes ago" not in body
+        assert "Queued just now" in body
 
     def test_the_applicant_ranking_shows_the_same_block(
         self,
@@ -384,6 +460,13 @@ class TestThePendingBlock:
             animal_id=world["available_animal_id"],
             minutes_ago=1,
         )
+        queue_job(
+            session_factory,
+            adopter_profile_id=world["adopter_profile_id"],
+            animal_id=world["available_animal_id"],
+            minutes_ago=0,
+            job_type=AnalysisJobType.FIND_MY_PET,
+        )
 
         body = staff_client.get(
             f"/animals/{world['available_animal_id']}/adopters"
@@ -391,6 +474,163 @@ class TestThePendingBlock:
 
         assert "pending-block" in body
         assert "Queued 1 minute ago" in body
+        assert "Queued just now" not in body
+
+
+class TestFindMyPetQueuesItsOwnExplanation:
+    """Opening My matches asks for the prose that screen displays."""
+
+    def test_the_page_queues_one_find_my_pet_job(
+        self,
+        adopter_client: FlaskClient,
+        world: dict[str, str],
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        """Proves a displayed animal with no explanation gets one job.
+
+        The ranking itself stays synchronous. The job is the only thing the
+        agent is asked to write for this screen.
+        """
+        adopter_client.get("/my/matches")
+
+        assert count_jobs(
+            session_factory,
+            adopter_profile_id=world["adopter_profile_id"],
+            job_type=AnalysisJobType.FIND_MY_PET,
+        ) == 1
+
+    def test_a_second_visit_does_not_queue_another_job(
+        self,
+        adopter_client: FlaskClient,
+        world: dict[str, str],
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        """Proves refreshing the page does not multiply the agent's work.
+
+        The negative half: an outstanding FIND_MY_PET job is the request
+        already made, and a second row would run the model twice.
+        """
+        adopter_client.get("/my/matches")
+        adopter_client.get("/my/matches")
+
+        assert count_jobs(
+            session_factory,
+            adopter_profile_id=world["adopter_profile_id"],
+            job_type=AnalysisJobType.FIND_MY_PET,
+        ) == 1
+
+    def test_a_reusable_explanation_is_not_queued_again(
+        self,
+        adopter_client: FlaskClient,
+        world: dict[str, str],
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        """Proves a current model explanation is left alone.
+
+        Recomputing one on every visit would spend minutes of CPU on text
+        the page can already show.
+        """
+        add_adopter_explanation(
+            session_factory,
+            world["adopter_profile_id"],
+            world["available_animal_id"],
+        )
+
+        adopter_client.get("/my/matches")
+
+        assert count_jobs(
+            session_factory,
+            adopter_profile_id=world["adopter_profile_id"],
+            job_type=AnalysisJobType.FIND_MY_PET,
+        ) == 0
+
+    def test_a_deterministic_fallback_is_queued_again(
+        self,
+        adopter_client: FlaskClient,
+        world: dict[str, str],
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        """Proves fallback prose does not become the permanent explanation.
+
+        That text is what the scorer wrote because no model was available.
+        Leaving it in place would make the outage permanent for this pair.
+        """
+        assert COMMAND_FALLBACK_MODEL == DETERMINISTIC_FALLBACK_MODEL
+        add_adopter_explanation(
+            session_factory,
+            world["adopter_profile_id"],
+            world["available_animal_id"],
+            model_name=DETERMINISTIC_FALLBACK_MODEL,
+        )
+
+        adopter_client.get("/my/matches")
+
+        assert count_jobs(
+            session_factory,
+            adopter_profile_id=world["adopter_profile_id"],
+            job_type=AnalysisJobType.FIND_MY_PET,
+        ) == 1
+
+    def test_a_profile_change_hides_stale_prose_until_replacement_arrives(
+        self,
+        adopter_client: FlaskClient,
+        world: dict[str, str],
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        """Proves old city prose is never shown beside a freshly recomputed score.
+
+        The score uses the current profile on every request. The cached
+        explanation must disappear as soon as `updated_at` moves, then only
+        return after the worker writes prose newer than that profile.
+        """
+        old_reason = "The adopter is in Haifa."
+        new_reason = "The adopter is now in Ashdod."
+        add_adopter_explanation(
+            session_factory,
+            world["adopter_profile_id"],
+            world["available_animal_id"],
+            reason=old_reason,
+        )
+        with session_factory() as session:
+            profile = session.get(AdopterProfile, world["adopter_profile_id"])
+            assert profile is not None
+            profile.city = "Ashdod"
+            profile.updated_at = _naive_now() + timedelta(minutes=2)
+            session.commit()
+
+        waiting_body = adopter_client.get("/my/matches").get_data(as_text=True)
+
+        assert old_reason not in waiting_body
+        assert "pending-block" in waiting_body
+        assert "Queued just now" in waiting_body
+
+        with session_factory() as session:
+            analysis = session.execute(
+                select(MatchAnalysis).where(
+                    MatchAnalysis.adopter_profile_id == world["adopter_profile_id"],
+                    MatchAnalysis.animal_id == world["available_animal_id"],
+                    MatchAnalysis.direction == MatchDirection.ADOPTER_TO_ANIMAL.value,
+                )
+            ).scalar_one()
+            analysis.reasons = json.dumps([new_reason])
+            analysis.generated_at = _naive_now() + timedelta(minutes=3)
+            jobs = session.execute(
+                select(AnalysisJob).where(
+                    AnalysisJob.adopter_profile_id == world["adopter_profile_id"],
+                    AnalysisJob.animal_id == world["available_animal_id"],
+                    AnalysisJob.job_type == AnalysisJobType.FIND_MY_PET.value,
+                )
+            ).scalars().all()
+            for job in jobs:
+                job.status = AnalysisJobStatus.COMPLETED.value
+                job.completed_at = _naive_now() + timedelta(minutes=3)
+            session.commit()
+
+        refreshed_body = adopter_client.get("/my/matches").get_data(as_text=True)
+
+        assert old_reason not in refreshed_body
+        assert new_reason in refreshed_body
+        assert "pending-block" not in refreshed_body
 
 
 class TestExcludedCandidates:

@@ -36,6 +36,7 @@ from app.cqrs.queries.formatting import describe_relative_time, to_display_momen
 from app.domain.application_rules import ALLOWED_APPLICATION_TRANSITIONS
 from app.domain.enums import (
     AnalysisJobStatus,
+    AnalysisJobType,
     AnimalStatus,
     ApplicationStatus,
     MatchDirection,
@@ -884,6 +885,22 @@ def _to_excluded_candidate(
     )
 
 
+# A job the page is still waiting on. IN_PROGRESS counts because the wait is
+# the same from the screen's point of view.
+_OUTSTANDING_JOB_STATUSES = (
+    AnalysisJobStatus.PENDING.value,
+    AnalysisJobStatus.IN_PROGRESS.value,
+)
+
+# Each screen waits only on the jobs that write its own direction. A staff
+# ranking job must not show up as "Queued" under an adopter's explanation.
+_ADOPTER_EXPLANATION_JOBS = (AnalysisJobType.FIND_MY_PET.value,)
+_STAFF_EXPLANATION_JOBS = (
+    AnalysisJobType.RANK_APPLICANT.value,
+    AnalysisJobType.FIND_MORE_ADOPTERS.value,
+)
+
+
 def _queued_labels_for_animal(session: Session, animal_id: str) -> dict[str, str]:
     """How long each outstanding job for this animal has been waiting.
 
@@ -902,6 +919,7 @@ def _queued_labels_for_animal(session: Session, animal_id: str) -> dict[str, str
     rows = session.execute(
         select(AnalysisJob.adopter_profile_id, AnalysisJob.created_at)
         .where(AnalysisJob.animal_id == animal_id)
+        .where(AnalysisJob.job_type.in_(_STAFF_EXPLANATION_JOBS))
         .where(AnalysisJob.status.in_(_OUTSTANDING_JOB_STATUSES))
         .order_by(AnalysisJob.created_at)
     ).tuples().all()
@@ -928,6 +946,7 @@ def _queued_labels_for_adopter(
     rows = session.execute(
         select(AnalysisJob.animal_id, AnalysisJob.created_at)
         .where(AnalysisJob.adopter_profile_id == adopter_profile_id)
+        .where(AnalysisJob.job_type.in_(_ADOPTER_EXPLANATION_JOBS))
         .where(AnalysisJob.status.in_(_OUTSTANDING_JOB_STATUSES))
         .order_by(AnalysisJob.created_at)
     ).tuples().all()
@@ -936,14 +955,6 @@ def _queued_labels_for_adopter(
         for animal_id, created_at in rows
         if animal_id is not None
     }
-
-
-# A job the page is still waiting on. IN_PROGRESS counts because the wait is
-# the same from the screen's point of view.
-_OUTSTANDING_JOB_STATUSES = (
-    AnalysisJobStatus.PENDING.value,
-    AnalysisJobStatus.IN_PROGRESS.value,
-)
 
 
 @dataclass(frozen=True)
@@ -1051,7 +1062,7 @@ def _build_candidate(
 def _analyses_for_animal(
     session: Session, animal_id: str, direction: MatchDirection
 ) -> dict[str, StoredAnalysis]:
-    """Stored analyses for one animal in one direction, keyed by adopter.
+    """Current analyses for one animal in one direction, keyed by adopter.
 
     Fetched in one query rather than per candidate: ranking twenty applicants
     should not issue twenty round trips to a shared cloud database.
@@ -1061,6 +1072,10 @@ def _analyses_for_animal(
     lookup returned whichever row was written last - and the explanation on
     screen would then belong to a different number than the score beside it
     (FR-9.7). `ix_analyses_animal_direction` exists for exactly this filter.
+
+    An analysis older than either record is omitted. The score is recomputed
+    from current facts on every request, so showing prose written over older
+    facts beside it would make the explanation contradict the number.
 
     Args:
         session: A read-only session.
@@ -1073,9 +1088,16 @@ def _analyses_for_animal(
     rows = (
         session.execute(
             select(MatchAnalysis)
+            .join(
+                AdopterProfile,
+                AdopterProfile.adopter_profile_id == MatchAnalysis.adopter_profile_id,
+            )
+            .join(Animal, Animal.animal_id == MatchAnalysis.animal_id)
             .where(
                 MatchAnalysis.animal_id == animal_id,
                 MatchAnalysis.direction == direction.value,
+                MatchAnalysis.generated_at > AdopterProfile.updated_at,
+                MatchAnalysis.generated_at > Animal.updated_at,
             )
             .order_by(MatchAnalysis.generated_at)
         )
@@ -1089,7 +1111,12 @@ def _analyses_for_animal(
 def _analyses_for_adopter(
     session: Session, adopter_profile_id: str, direction: MatchDirection
 ) -> dict[str, StoredAnalysis]:
-    """Stored analyses for one adopter in one direction, keyed by animal.
+    """Current analyses for one adopter in one direction, keyed by animal.
+
+    Omits rows older than the adopter or animal they describe. The command
+    side uses the same freshness rule when deciding whether to enqueue new
+    prose, so a stale explanation becomes a truthful pending state while its
+    replacement is being written.
 
     Args:
         session: A read-only session.
@@ -1102,9 +1129,16 @@ def _analyses_for_adopter(
     rows = (
         session.execute(
             select(MatchAnalysis)
+            .join(
+                AdopterProfile,
+                AdopterProfile.adopter_profile_id == MatchAnalysis.adopter_profile_id,
+            )
+            .join(Animal, Animal.animal_id == MatchAnalysis.animal_id)
             .where(
                 MatchAnalysis.adopter_profile_id == adopter_profile_id,
                 MatchAnalysis.direction == direction.value,
+                MatchAnalysis.generated_at > AdopterProfile.updated_at,
+                MatchAnalysis.generated_at > Animal.updated_at,
             )
             .order_by(MatchAnalysis.generated_at)
         )

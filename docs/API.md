@@ -447,8 +447,8 @@ The only JSON endpoint. Exists so a page can poll without re-rendering itself.
 
 | Query parameter | Who | Meaning |
 |---|---|---|
-| `scope=my-matches` | Adopter | The signed-in adopter's own analyses, using their profile identifier **from the session** |
-| `animal_id=<id>` | Staff | One animal's analyses |
+| `scope=my-matches` | Adopter | The signed-in adopter's own `FIND_MY_PET` jobs, using their profile identifier **from the session** |
+| `animal_id=<id>` | Staff | One animal's `RANK_APPLICANT` and `FIND_MORE_ADOPTERS` jobs |
 
 ```json
 {"pending": 2, "completed": 11, "failed": 0,

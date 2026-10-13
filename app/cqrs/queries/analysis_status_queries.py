@@ -21,7 +21,7 @@ from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
 
 from app.cqrs.base import Query, QueryHandler
-from app.domain.enums import AnalysisJobStatus
+from app.domain.enums import AnalysisJobStatus, AnalysisJobType
 from app.infrastructure.clock import as_aware_utc
 from app.infrastructure.models import AnalysisJob, MatchAnalysis
 
@@ -32,6 +32,14 @@ SelectT = TypeVar("SelectT", bound=Select[Any])
 OUTSTANDING_STATUSES = (
     AnalysisJobStatus.PENDING.value,
     AnalysisJobStatus.IN_PROGRESS.value,
+)
+
+# The adopter screen explains ADOPTER_TO_ANIMAL pairings. A staff ranking
+# job for the same pair must not keep that page polling.
+ADOPTER_MATCH_JOB_TYPES = (AnalysisJobType.FIND_MY_PET.value,)
+STAFF_MATCH_JOB_TYPES = (
+    AnalysisJobType.RANK_APPLICANT.value,
+    AnalysisJobType.FIND_MORE_ADOPTERS.value,
 )
 
 
@@ -85,6 +93,9 @@ class GetAnalysisStatusQuery(Query):
 
     adopter_profile_id: str | None = None
     animal_id: str | None = None
+    # Empty means every job type in the scope. The match screens pass the
+    # types whose completion can change the prose on that screen.
+    job_types: tuple[str, ...] = ()
 
     @property
     def has_scope(self) -> bool:
@@ -135,6 +146,8 @@ def _narrow_to_scope(statement: SelectT, query: GetAnalysisStatusQuery) -> Selec
         )
     if query.animal_id is not None:
         statement = statement.where(AnalysisJob.animal_id == query.animal_id)
+    if query.job_types:
+        statement = statement.where(AnalysisJob.job_type.in_(query.job_types))
     return statement
 
 
