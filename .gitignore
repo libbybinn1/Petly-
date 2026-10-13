@@ -46,5 +46,5 @@ Thumbs.db
 desktop.ini
 .DS_Store
 .idea/
-.vscode/*
-!.vscode/settings.json
+.vscode/
+
