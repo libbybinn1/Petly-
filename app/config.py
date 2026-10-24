@@ -124,6 +124,14 @@ class Configuration:
     upload_directory: Path
     invitation_expiry_hours: int
 
+    #: How long an opted-in read query may be reused for, in seconds. Zero
+    #: disables the cache entirely and sends every query to the database.
+    #:
+    #: Defaulted so that the fixtures and tools which build this object by
+    #: hand run uncached, where repeatability matters more than speed. Only
+    #: `load_configuration` turns it on, from `QUERY_CACHE_SECONDS`.
+    query_cache_seconds: float = 0.0
+
     @property
     def sqlalchemy_url(self) -> str:
         """The database URL, honouring a local override when one is set.
@@ -164,4 +172,5 @@ def load_configuration() -> Configuration:
         rag_collection_name=_optional("RAG_COLLECTION_NAME", "petmatch_knowledge"),
         upload_directory=PROJECT_ROOT / "app" / "static" / "uploads",
         invitation_expiry_hours=int(_optional("INVITATION_EXPIRY_HOURS", "72")),
+        query_cache_seconds=float(_optional("QUERY_CACHE_SECONDS", "20")),
     )

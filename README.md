@@ -92,6 +92,28 @@ what `start_all.py` does for you:
 `fresh`, `tables` or `events`. There is no `migrate` — the schema is built
 from the SQLAlchemy metadata, and there is no Alembic directory.
 
+### Why pages take a moment, and what was done about it
+
+The database is on Somee, not on this machine. A round trip to it is around
+**250 ms**, and opening a connection takes about five seconds, so page speed is
+decided almost entirely by *how many times a page crosses the network* rather
+than by how much work it does.
+
+Three things followed from measuring that:
+
+| Change | Effect |
+|---|---|
+| One session per request, not one per dispatch | A page paid a pre-ping and a rollback round trip for each of its six sessions. `/my/notifications` went from **16 round trips to 5**. |
+| Batched the Find My Pet enqueue | It asked four questions per ranked animal. `/my/matches` went from **51 queries to 15**. |
+| A short read cache | Three queries asked on nearly every page are reused for `QUERY_CACHE_SECONDS`. Any write empties it. |
+
+`QUERY_CACHE_SECONDS=0` disables caching entirely if you would rather every
+page read through. See `docs/ARCHITECTURE.md` §3 for the reasoning and for what
+the shared session gives up.
+
+Expect wall-clock times to move around regardless: Somee is shared hosting, and
+the same query has been measured at both 200 ms and 800 ms within a few minutes.
+
 ### Ollama does not start itself, by design
 
 The Ollama shortcut has been removed from the Windows Startup folder. CPU-only

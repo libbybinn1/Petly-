@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from flask import Flask, render_template, request
+from flask import Flask, g, render_template, request
 from flask_login import LoginManager, current_user
 from flask_wtf.csrf import CSRFError, CSRFProtect
 from sqlalchemy import select
@@ -18,6 +18,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import Configuration, load_configuration
 from app.cqrs.base import MessageBus
+from app.cqrs.cache import QueryCache
 from app.cqrs.queries.personal_queries import CountUnreadNotificationsQuery
 from app.infrastructure.clock import aware_utc_now
 from app.infrastructure.database import create_database_engine, create_session_factory
@@ -77,9 +78,14 @@ def create_app(configuration: Configuration | None = None) -> Flask:
     session_factory = create_session_factory(engine)
     application.config["SESSION_FACTORY"] = session_factory
 
-    bus = MessageBus(session_factory)
+    bus = MessageBus(session_factory, _build_query_cache(settings))
     _register_handlers(bus, settings)
     application.config["BUS"] = bus
+
+    # Registered before any other request hook so that everything which
+    # follows - the expiry sweep, the user loader, the controllers and the
+    # template context processors - shares its one database connection.
+    _register_unit_of_work(application, bus)
 
     login_manager = LoginManager()
     login_manager.init_app(application)
@@ -88,8 +94,12 @@ def create_app(configuration: Configuration | None = None) -> Flask:
     login_manager.login_message_category = "info"
 
     def load_user(user_id: str) -> AuthenticatedUser | None:
-        """Rehydrate the signed-in account for each request."""
-        with session_factory() as session:
+        """Rehydrate the signed-in account for each request.
+
+        Reads through the bus so this lands on the request's shared session
+        instead of opening a connection of its own.
+        """
+        with bus.read_only_session() as session:
             user = session.execute(
                 select(User).where(User.user_id == user_id)
             ).scalar_one_or_none()
@@ -328,6 +338,89 @@ def _register_queries(bus: MessageBus) -> None:
 # minutes late is harmless; a sweep on every request would add a write
 # transaction to every page load against a throttled shared database.
 EXPIRY_SWEEP_INTERVAL = timedelta(minutes=5)
+
+
+def _build_query_cache(settings: Configuration) -> QueryCache | None:
+    """Build the read cache, or None when caching is switched off.
+
+    Only three query types are cached, and each earns it by being asked far
+    more often than its answer changes:
+
+    * `CountUnreadNotificationsQuery` renders the badge in the shared layout,
+      so it runs on literally every page.
+    * `SearchAnimalsQuery` answers both the landing page and the browse page,
+      from a roster that changes when staff edit it - which is a command, and
+      so empties the cache immediately.
+    * `GetAnimalDetailsQuery` is re-read on each visit to an animal, and is
+      edited through the same commands.
+
+    Nothing else is listed, and in particular the analysis-status query the
+    Find My Pet page polls is not: that endpoint exists precisely to notice a
+    change made by another process, and a cached answer would defeat it.
+
+    Args:
+        settings: Loaded configuration, holding the time-to-live.
+
+    Returns:
+        A configured cache, or None when `query_cache_seconds` is zero or
+        negative.
+    """
+    if settings.query_cache_seconds <= 0:
+        return None
+
+    from app.cqrs.queries.animal_queries import GetAnimalDetailsQuery, SearchAnimalsQuery
+    from app.cqrs.queries.personal_queries import CountUnreadNotificationsQuery
+
+    ttl_seconds = settings.query_cache_seconds
+    return QueryCache(
+        {
+            CountUnreadNotificationsQuery: ttl_seconds,
+            SearchAnimalsQuery: ttl_seconds,
+            GetAnimalDetailsQuery: ttl_seconds,
+        }
+    )
+
+
+def _register_unit_of_work(application: Flask, bus: MessageBus) -> None:
+    """Give each request one database session, shared by everything in it.
+
+    The database is remote and shared-hosted (docs/ARCHITECTURE.md §10). A
+    measured round trip is roughly a quarter of a second, and every session
+    costs two of them that have nothing to do with reading data: a pre-ping
+    when the connection is checked out and a rollback when it is closed. A
+    page that dispatched six times paid twelve such round trips before any
+    useful query ran.
+
+    Opening the scope here, ahead of every other hook, means the sweep, the
+    user loader, the controllers and the context processors all land on the
+    same connection and pay for it once.
+
+    Args:
+        application: The application to attach the hooks to.
+        bus: The bus whose dispatches should share a session.
+    """
+
+    @application.before_request
+    def open_unit_of_work() -> None:
+        """Start this request's shared session."""
+        if request.endpoint == "static":
+            return
+        scope = bus.unit_of_work()
+        scope.__enter__()
+        g.unit_of_work = scope
+
+    @application.teardown_request
+    def close_unit_of_work(error: BaseException | None) -> None:
+        """Close the shared session however the request ended.
+
+        `teardown_request` runs even when a hook or view raised, so the
+        connection is returned to the pool on the failure path too.
+        """
+        scope = g.pop("unit_of_work", None)
+        if scope is None:
+            return
+        traceback = error.__traceback__ if error is not None else None
+        scope.__exit__(type(error) if error is not None else None, error, traceback)
 
 
 def _register_expiry_sweep(application: Flask, bus: MessageBus) -> None:

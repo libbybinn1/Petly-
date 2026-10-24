@@ -222,12 +222,65 @@ a list.
 
 ### Where the session lives
 
-`MessageBus` opens a session per dispatch and owns the transaction. A command
-dispatch commits; a **query dispatch rolls back** (`app/cqrs/base.py`), which
-makes an accidental write in a read path impossible to persist rather than
-merely discouraged. The handler receives the session as an argument, so the
-handler is the layer that holds it — not the controller, and not a repository,
-because there is not one.
+`MessageBus` owns the session and the transaction. A command dispatch commits;
+a **query dispatch never does** (`app/cqrs/base.py`), which makes an accidental
+write in a read path impossible to persist rather than merely discouraged. The
+handler receives the session as an argument, so the handler is the layer that
+holds it — not the controller, and not a repository, because there is not one.
+
+#### One session per request, not one per dispatch
+
+Each web request opens a single session that every dispatch inside it shares.
+`MessageBus.unit_of_work()` holds it in a `ContextVar` — not a Flask global,
+because this module may not import a framework (R2) — and
+`app/__init__.py::_register_unit_of_work` opens the scope in a `before_request`
+hook registered ahead of all the others, closing it in `teardown_request` so a
+failed request still returns its connection.
+
+The reason is measured. The database is remote (§10) and a round trip to it
+costs roughly 250 ms. Every session cost two round trips that fetch nothing —
+a `pool_pre_ping` probe on checkout and a `ROLLBACK` on close — so a page that
+dispatched six times paid twelve of them before running a single useful query.
+Profiling `/my/notifications`, a page with four queries, found **more time in
+rollbacks than in the queries themselves**. Sharing the session took that page
+from sixteen round trips to five.
+
+Flask-Login's user loader cannot go through `dispatch_query`, because it is
+handed a user id rather than a query object. It reads through
+`MessageBus.read_only_session()` instead, which lends out the request's shared
+session, so it does not open a seventh connection per page.
+
+This costs one guarantee and replaces it with a stronger one. A private
+session could silently roll back a query handler that wrote; a shared one
+cannot, because the rollback would also discard commands committed earlier in
+the same request. `_reject_pending_writes` therefore inspects the session's
+in-memory pending state after every query and raises `QueryMutatedStateError`.
+The check costs no round trip, and a contract violation now fails loudly
+instead of being hidden.
+
+#### The read cache
+
+`app/cqrs/cache.py` keeps the answers to a few read queries for
+`QUERY_CACHE_SECONDS` (default 20; zero disables it). Two rules keep it
+honest:
+
+- **Opt in, never by default.** Only `CountUnreadNotificationsQuery`,
+  `SearchAnimalsQuery` and `GetAnimalDetailsQuery` are cached — each asked far
+  more often than its answer changes. The analysis-status query the Find My
+  Pet page polls is deliberately absent, because it exists to notice work the
+  agent finished in another process.
+- **Any write empties it.** The bus clears the whole cache after every command
+  that commits. Naming the queries each command affects would be a list that
+  goes wrong the first time somebody adds a handler and forgets; clearing
+  everything is slower in theory and correct without maintenance.
+
+The time-to-live still matters, because the agent is a separate OS process
+(R2) and its writes cannot clear this cache. It is the only bound on staleness
+from that direction, which is why it is seconds rather than minutes.
+
+`Configuration.query_cache_seconds` defaults to **zero**, so the fixtures and
+tools that build that object by hand run uncached; only `load_configuration`
+turns caching on.
 
 Two tests keep this honest:
 `test_query_modules_never_write` flags a `session.commit()`, a `session.add()`,
