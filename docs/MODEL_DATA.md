@@ -443,7 +443,7 @@ deleted animal would silently rewrite the queue.
 | Column | Type | Constraints |
 |---|---|---|
 | `analysis_job_id` | NVARCHAR(36) | PK |
-| `job_type` | NVARCHAR(40) | NOT NULL, CHECK IN ('RANK_APPLICANT','FIND_MY_PET','FIND_MORE_ADOPTERS','INTERPRET_INTENT') |
+| `job_type` | NVARCHAR(40) | NOT NULL, CHECK IN ('RANK_APPLICANT','FIND_MY_PET','FIND_MORE_ADOPTERS','INTERPRET_INTENT','SEMANTIC_ADOPTER_SEARCH') |
 | `status` | NVARCHAR(20) | NOT NULL, CHECK IN ('PENDING','IN_PROGRESS','COMPLETED','FAILED') |
 | `adopter_profile_id` / `animal_id` / `application_id` | NVARCHAR(36) | NULL, no FK |
 | `natural_language_query` | NVARCHAR(1000) | NULL |
@@ -467,12 +467,31 @@ the same rules the model's original answer went through — a value that is not
 a real `Species` is dropped on the way in *and* on the way out. An analysis job
 writes its result to `match_analyses` instead and leaves `result_payload` null.
 
-Of the four job types, the application enqueues three. `RANK_APPLICANT` is
+**A `SEMANTIC_ADOPTER_SEARCH` job answers on the same column.** It carries an
+`animal_id` and nothing else. The agent writes JSON with exactly the keys
+`matches` — a list of `{"adopter_profile_id": "...", "similarity": 0.8123}`,
+nearest first, at most 10, cosine similarity rounded to four places —
+`indexed_profile_count` and `embedding_model`. Encode and decode live together
+in `app/domain/semantic_profiles.py` (`semantic_search_to_payload`,
+`payload_to_semantic_search`); the decoder drops an entry with no identifier, a
+similarity that is not a finite number in [-1, 1], or a repeated adopter, and
+caps the list at 50. The job writes no `match_analyses` row and no event:
+similarity is shown beside the deterministic verdict, never as a score.
+
+**Adding a job type needs the live CHECK recreated.** `create` never alters an
+existing table, so a database built before `SEMANTIC_ADOPTER_SEARCH` existed
+refuses the new value. `scripts/db.py sync-job-type-check` drops whatever CHECK
+guards `job_type` and recreates `ck_analysis_jobs_job_type` from the ORM's own
+declaration, in one transaction, touching no rows. It is idempotent and SQL
+Server only.
+
+Of the five job types, the application enqueues four. `RANK_APPLICANT` is
 queued when an application is submitted or an invitation is sent.
 `INTERPRET_INTENT` is queued by natural-language search. `FIND_MY_PET` is
 queued by My matches, for each displayed animal that has no reusable
 `ADOPTER_TO_ANIMAL` analysis; that is the prose under "Why this animal could
-suit you". `FIND_MORE_ADOPTERS` is handled by the worker but nothing enqueues
+suit you". `SEMANTIC_ADOPTER_SEARCH` is queued by staff from the discovery screen.
+`FIND_MORE_ADOPTERS` is handled by the worker but nothing enqueues
 it: that screen ranks deterministically and shows analyses already written for
 the animal. The worker maps each type to a direction, and a screen waits only
 on the types that write the prose it displays.
@@ -602,15 +621,27 @@ concrete justification for event sourcing recorded in `ARCHITECTURE.md` §4.
 
 ## 5. Separation from the Vector Database
 
-The Vector DB (ChromaDB, local disk under `data/chroma/`) holds **only** the
-curated knowledge base: 17 care guides, species characteristics, compatibility
-guidance and organization policy, chunked into 104 passages. It contains **no**
-adopter or animal records.
+The Vector DB (ChromaDB, local disk under `data/chroma/`) holds two
+collections that never share vectors:
 
-Blueprint §11 requires this separation. Transactional data lives in SQL Server
-and reaches the agent through MCP tools, never through vector search — and the
-web-search gate refuses a query about our own records for the same reason
-(spec §13, rule 3).
+- **`petmatch_knowledge`** — the curated knowledge base: 17 care guides,
+  species characteristics, compatibility guidance and organization policy,
+  chunked into 104 passages. This is the evidence the agent cites. It contains
+  no adopter or animal records.
+- **`petmatch_adopter_profiles`** (`PROFILE_COLLECTION_NAME`) — one plain-
+  language "profile résumé" per *discoverable* adopter (complete profile,
+  opted in to proactive suggestions, active account), for semantic adopter
+  search (lecturer requirement 6). Built by `app/domain/semantic_profiles.py`
+  from household facts only — no name, no email. Metadata holds the
+  `adopter_profile_id` and a SHA-256 content hash (text plus embedding model)
+  so an unchanged profile is never re-embedded. Cosine space.
+
+The separation blueprint §11 asks for still holds where it matters. SQL Server
+remains the **authority**: the profile collection is a derived search index,
+re-synced on every search, and an adopter who opts out is deleted from it on
+the next sync. The agent still reads records for an analysis through MCP
+tools, never from vector search, and the web-search gate still refuses a
+query about our own records (spec §13, rule 3).
 
 ---
 

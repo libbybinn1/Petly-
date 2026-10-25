@@ -19,10 +19,29 @@ question testable: *did the agent correctly decide **not** to search?*
 
 from __future__ import annotations
 
+import logging
 import re
-from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
+
+from agent_service.tools.search_result import SearchResult
+from agent_service.tools.tavily_mcp import (
+    RemoteSearch,
+    describe_failure_without_secret,
+    search_tavily_over_mcp,
+)
+
+__all__ = [
+    "SearchDecision",
+    "SearchResult",
+    "StubSearchProvider",
+    "TavilyMcpSearchProvider",
+    "WebSearchProvider",
+    "build_search_provider",
+    "decide_whether_to_search",
+]
+
+logger = logging.getLogger(__name__)
 
 # Phrases that indicate the question is about the application's own records.
 # Those come from MCP tools; searching the web for them would be both useless
@@ -74,15 +93,6 @@ class SearchDecision(StrEnum):
     def is_allowed(self) -> bool:
         """Whether this decision permits a search."""
         return self.name.startswith("ALLOWED")
-
-
-@dataclass(frozen=True)
-class SearchResult:
-    """One external result the agent may cite."""
-
-    title: str
-    url: str
-    snippet: str
 
 
 class WebSearchProvider(Protocol):
@@ -162,36 +172,55 @@ def _needs_external_information(question: str) -> bool:
     )
 
 
-class TavilySearchProvider:
-    """Live web search through Tavily."""
+class TavilyMcpSearchProvider:
+    """Live web search consumed through Tavily's remote MCP server.
 
-    def __init__(self, api_key: str) -> None:
-        """Bind the provider to an API key."""
+    Requirement 9 of the course brief: external services are consumed via
+    the MCP protocol. The search runs as an MCP `tools/call` over Streamable
+    HTTP against Tavily's hosted server (docs/MCP.md section 9), not through
+    a vendor REST SDK. The wire details live in `tavily_mcp`; this class
+    only owns the spec section 13 failure policy.
+    """
+
+    def __init__(
+        self,
+        api_key: str,
+        remote_search: RemoteSearch | None = None,
+    ) -> None:
+        """Bind the provider to an API key.
+
+        Args:
+            api_key: The Tavily API key. Sent only as a bearer header.
+            remote_search: The function that performs the MCP round trip.
+                Defaults to the live Streamable HTTP client; tests pass a
+                fake so they never touch the network.
+        """
         self._api_key = api_key
+        self._remote_search = remote_search or search_tavily_over_mcp
+        self.last_failure: str | None = None
 
     def search(self, query: str, max_results: int = 3) -> list[SearchResult]:
-        """Query Tavily, returning an empty list on any failure.
+        """Query Tavily over MCP, returning an empty list on any failure.
 
-        A search failure is never fatal: the agent proceeds with the evidence
-        it already has and records the gap under missing information.
+        A search failure is never fatal (spec section 13): the agent proceeds
+        with the evidence it already has and records the gap under missing
+        information. The failure is kept in `last_failure` and logged, with
+        the API key scrubbed from both.
+
+        Args:
+            query: The search text.
+            max_results: The most results to return.
+
+        Returns:
+            The parsed results, or `[]` when the search failed.
         """
-        from tavily import TavilyClient
-
+        self.last_failure = None
         try:
-            response = TavilyClient(api_key=self._api_key).search(
-                query=query, max_results=max_results
-            )
-        except Exception:  # - any provider failure degrades to "no evidence"
+            return self._remote_search(self._api_key, query, max_results)
+        except Exception as error:  # - any provider failure degrades to "no evidence"
+            self.last_failure = describe_failure_without_secret(error, self._api_key)
+            logger.warning("Tavily MCP search failed: %s", self.last_failure)
             return []
-
-        return [
-            SearchResult(
-                title=str(item.get("title", "")),
-                url=str(item.get("url", "")),
-                snippet=str(item.get("content", ""))[:400],
-            )
-            for item in response.get("results", [])
-        ]
 
 
 class StubSearchProvider:
@@ -215,7 +244,14 @@ class StubSearchProvider:
 
 
 def build_search_provider(api_key: str) -> WebSearchProvider:
-    """Choose a live or stub provider depending on configuration."""
+    """Choose a live or stub provider depending on configuration (spec section 13).
+
+    Args:
+        api_key: The configured Tavily key; empty when none is set.
+
+    Returns:
+        The Tavily MCP provider when a key exists, else the offline stub.
+    """
     if api_key:
-        return TavilySearchProvider(api_key)
+        return TavilyMcpSearchProvider(api_key)
     return StubSearchProvider()

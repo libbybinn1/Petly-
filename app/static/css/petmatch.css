@@ -1922,3 +1922,20 @@ legend.field__label { padding: 0; }
   min-height: var(--tap-target); display: flex; align-items: center;
 }
 .deductions-more[open] > summary { margin-bottom: var(--space-2); }
+
+/* ----------------------------------------------------- semantic matches -- */
+
+/* Vector-search similarity on the discovery screen (docs/UX.md, Find More
+   Adopters). Info-coloured rather than banded on purpose: similarity is not
+   a score, and painting it green would read as "suitable". */
+.similarity { display: inline-grid; grid-template-columns: 90px 4ch; align-items: center; gap: var(--space-2); }
+.similarity__track {
+  height: 8px; border-radius: var(--radius-pill);
+  background: var(--surface-sunken); overflow: hidden; display: block;
+  border: 1px solid var(--border-soft);
+}
+.similarity__fill { height: 100%; border-radius: var(--radius-pill); display: block; background: var(--info-fg); }
+.similarity__value {
+  font-size: 0.82rem; font-weight: var(--weight-bold); color: var(--text-strong);
+  font-variant-numeric: tabular-nums; text-align: right;
+}

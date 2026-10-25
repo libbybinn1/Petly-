@@ -40,6 +40,7 @@ Status legend: **Done** · **Partial** · **Not built**
 | F-25 | Age-band filter | Done |
 | F-26 | Reasoning-trace display | Done |
 | F-27 | CSRF protection | Done |
+| F-28 | Semantic adopter search (vector search over profile résumés) | Done |
 
 ---
 
@@ -1270,3 +1271,54 @@ nothing wrong.
 
 **Tests.** `tests/unit/test_feature_csrf_tokens.py` — parses every template;
 `tests/api/test_qa_authorization.py` (`TestCrossSiteRequestForgery`).
+
+---
+
+## F-28 Semantic adopter search (vector search over profile résumés) — Done
+
+**User story.** As staff, I want to find adopters whose profile reads like a
+good home for this animal, so that someone the structured criteria rank low,
+but who sounds right, is still worth a look (lecturer requirement 6: résumés
+embedded in a vector database and searched to match a candidate to a job).
+
+**Preconditions.** Signed in as staff; the agent process is running with an
+Ollama embedding model; ideally `scripts/ingest_profiles.py` has been run once.
+
+**Main flow.** On Find More Adopters, staff press **Run semantic search** →
+`EnqueueSemanticAdopterSearchCommand` inserts a `SEMANTIC_ADOPTER_SEARCH` job
+and the page returns to `#semantic-matches`, waiting → the agent syncs the
+profile index (embedding only new or changed résumés, deleting opted-out
+ones), embeds the animal's facts and description, and stores the ten nearest
+non-applicant profiles with their cosine similarity → the panel lists them,
+each beside its rule-based score and an Eligible / Not eligible verdict.
+
+**Alternative and error flows.** A second press while a search is waiting
+reuses that job. An unknown animal → 404. An adopter → 403; anonymous →
+sign in. An agent or embedding failure → the job fails after its retries and
+the panel says so, leaving the deterministic ranking untouched. A job with no
+animal, for a missing animal, or on a worker with no index is parked with a
+reason. A corrupt payload renders as an empty result.
+
+**Acceptance criteria.** No embedding or vector query in a request (R4). The
+index covers exactly the Find More Adopters population. Names and emails are
+never embedded. Similarity never replaces the deterministic verdict: excluded
+adopters are flagged with the rule and offered no invitation. Unchanged
+profiles are not re-embedded.
+
+**API/Data changes.** `POST /animals/<animal_id>/discover/semantic`;
+`EnqueueSemanticAdopterSearchCommand`, `GetSemanticAdopterMatchesQuery`;
+`AnalysisJobType.SEMANTIC_ADOPTER_SEARCH`, so the live CHECK needs
+`scripts/db.py sync-job-type-check` (docs/MODEL_DATA.md §2.10); the
+`petmatch_adopter_profiles` Chroma collection (`PROFILE_COLLECTION_NAME`).
+
+**UI changes.** `app/templates/matches/_semantic_matches.html`, included by
+`matches/find_my_adopter.html` in `discovery` mode; similarity bar styles in
+`petmatch.css`.
+
+**Agent/Tool interaction.** Worker branch only, through
+`agent_service/rag/profile_index.py` and `agent_service/rag/profile_population.py`.
+No language model, no MCP tool, no web search.
+
+**Tests.** `tests/unit/test_semantic_profiles.py`,
+`tests/agent/test_semantic_adopter_search.py`,
+`tests/api/test_feature_semantic_adopter_search.py`.

@@ -29,7 +29,6 @@ chromadb==0.5.3
 ollama==0.3.1
 # 2.x renamed FastMCP to MCPServer; the server uses the 2.x API.
 mcp==2.2.0
-tavily-python==0.3.5
 
 # ---- HTTP client & Image handling ----
 requests==2.32.3

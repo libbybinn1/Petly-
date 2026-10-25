@@ -14,6 +14,9 @@ Commands:
     fresh    reset + seed
     tables   List project tables with row counts
     events   Show the most recent domain events
+    sync-job-type-check
+             Recreate the analysis_jobs.job_type CHECK from AnalysisJobType,
+             after a job type is added; touches no rows (SQL Server only)
 """
 
 from __future__ import annotations
@@ -33,8 +36,8 @@ from app.infrastructure.database import (  # noqa: E402
     create_database_engine,
     create_session_factory,
 )
-from app.infrastructure.models import DomainEvent  # noqa: E402
-from sqlalchemy import func, inspect, select, text  # noqa: E402
+from app.infrastructure.models import AnalysisJob, DomainEvent  # noqa: E402
+from sqlalchemy import CheckConstraint, func, inspect, select, text  # noqa: E402
 from sqlalchemy.engine import Engine  # noqa: E402
 
 EXPECTED_ARGUMENT_COUNT = 2  # script name plus one command
@@ -146,6 +149,82 @@ def command_events() -> int:
     return 0
 
 
+# The CHECK constraint `_enum_check("job_type", AnalysisJobType)` produces,
+# named by the table-prefixing convention in app/infrastructure/database.py.
+JOB_TYPE_CHECK_NAME = "ck_analysis_jobs_job_type"
+
+
+def job_type_check_expression() -> str:
+    """Return the job_type CHECK expression exactly as the ORM declares it.
+
+    Read off the model rather than rebuilt here, so the live constraint and
+    `AnalysisJobType` can only ever be brought into step, never into a third
+    shape (docs/MODEL_DATA.md section 2.10).
+
+    Raises:
+        LookupError: The model no longer declares the constraint.
+    """
+    for constraint in AnalysisJob.metadata.tables["analysis_jobs"].constraints:
+        if isinstance(constraint, CheckConstraint) and constraint.name == JOB_TYPE_CHECK_NAME:
+            return str(constraint.sqltext)
+    raise LookupError(f"analysis_jobs declares no {JOB_TYPE_CHECK_NAME} constraint")
+
+
+def job_type_check_statements() -> list[str]:
+    """Return the T-SQL that drops and recreates the job_type CHECK.
+
+    Idempotent: the first batch drops whatever CHECK currently guards
+    `job_type` - found by its conventional name *or* by a definition that
+    names the column (CHARINDEX rather than LIKE, so no `%` reaches the
+    pyformat driver), so a constraint created under an older name is not
+    left behind still refusing the new value - and the second adds the
+    current one. Running it twice changes nothing. Existing rows are
+    validated by the recreated constraint, which cannot fail while the enum
+    only grows.
+    """
+    drop_existing = f"""
+DECLARE @constraint_name sysname;
+SELECT TOP 1 @constraint_name = name FROM sys.check_constraints
+ WHERE parent_object_id = OBJECT_ID(N'analysis_jobs')
+   AND (name = N'{JOB_TYPE_CHECK_NAME}' OR CHARINDEX(N'[job_type]', definition) > 0);
+WHILE @constraint_name IS NOT NULL
+BEGIN
+    EXEC (N'ALTER TABLE [analysis_jobs] DROP CONSTRAINT [' + @constraint_name + N']');
+    SET @constraint_name = NULL;
+    SELECT TOP 1 @constraint_name = name FROM sys.check_constraints
+     WHERE parent_object_id = OBJECT_ID(N'analysis_jobs')
+       AND (name = N'{JOB_TYPE_CHECK_NAME}' OR CHARINDEX(N'[job_type]', definition) > 0);
+END
+"""
+    return [
+        drop_existing.strip(),
+        f"ALTER TABLE [analysis_jobs] ADD CONSTRAINT [{JOB_TYPE_CHECK_NAME}] "
+        f"CHECK ({job_type_check_expression()})",
+    ]
+
+
+def command_sync_job_type_check() -> int:
+    """Bring the live job_type CHECK constraint into step with the enum.
+
+    Adding a member to `AnalysisJobType` (SEMANTIC_ADOPTER_SEARCH was the
+    first after the schema was built) leaves an existing database refusing
+    the new value, because `create` never alters a table that exists. This
+    replaces only that constraint, in one transaction, without the data loss
+    of `reset`. SQLite cannot alter a constraint, and a SQLite database is
+    rebuilt from the metadata anyway, so it is refused there.
+    """
+    engine = _engine()
+    if engine.dialect.name != "mssql":
+        print(f"sync-job-type-check targets SQL Server; this database is {engine.dialect.name}")
+        return 1
+
+    with engine.begin() as connection:
+        for statement in job_type_check_statements():
+            connection.execute(text(statement))
+    print(f"recreated {JOB_TYPE_CHECK_NAME}: {job_type_check_expression()}")
+    return 0
+
+
 def command_seed() -> int:
     """Load demo data by delegating to the seed script."""
     from scripts.seed import run_seed
@@ -167,6 +246,7 @@ COMMANDS = {
     "fresh": command_fresh,
     "tables": command_tables,
     "events": command_events,
+    "sync-job-type-check": command_sync_job_type_check,
 }
 
 

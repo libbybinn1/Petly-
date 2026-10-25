@@ -44,9 +44,9 @@ is enforced by review rather than by a test, it says so.
                          │  rag/       ChromaDB    │
                          │  tools/     web + stdio │
                          └──────┬───────────┬──────┘
-                                │ stdio     │ HTTPS
+                                │ stdio     │ MCP over HTTPS
                      ┌──────────▼──────┐  ┌─▼──────────┐
-                     │  MCP SERVER     │  │  Tavily    │
+                     │  MCP SERVER     │  │  Tavily MCP│
                      │  (process 3)    │  │  Web Search│
                      │ get_adopter_... │  └────────────┘
                      │ get_animal_...  │
@@ -536,9 +536,11 @@ agent is a polling process rather than an inline call.
 
 ## 6. RAG and the Vector Database
 
-The Vector DB holds the **curated knowledge base**, never transactional data.
-Adopter and animal records live in SQL Server and are reached through MCP
-tools.
+The Vector DB holds the **curated knowledge base** the agent cites, and — in
+a separate collection — a derived **search index of adopter profiles** for
+semantic adopter search (below). Adopter and animal records themselves live
+in SQL Server, which stays authoritative, and an analysis reaches them through
+MCP tools.
 
 ```
 knowledge/*.md                       (17 guides, 104 chunks)
@@ -558,6 +560,47 @@ retrieves it.
 Retrieval failure is not fatal: a stopped Ollama host or a corrupt store logs
 a warning and returns no evidence, so an embedding outage costs the prose and
 not the analysis.
+
+### Semantic adopter search (lecturer requirement 6)
+
+"Résumés embedded in a vector database, searched to match a candidate to a
+job": the candidate is an adopter, the job is an animal, the résumé is the
+adopter profile. It mirrors the asynchronous `INTERPRET_INTENT` pattern
+exactly, so the web tier never touches Chroma or an embedding model (R4).
+
+```
+staff: POST /animals/<id>/discover/semantic
+  → EnqueueSemanticAdopterSearchCommand        (returns the job id only)
+  → analysis_jobs row: SEMANTIC_ADOPTER_SEARCH, animal_id
+agent worker (agent_service/worker.py)
+  → read discoverable profiles                 (agent_service/rag/profile_population.py)
+  → build_adopter_profile_text per profile     (app/domain/semantic_profiles.py)
+  → ProfileIndex.sync: hash each text; embed only new or changed ones;
+    delete profiles no longer discoverable     (agent_service/rag/profile_index.py)
+  → embed the animal's facts + own description, cosine top 10,
+    applicants excluded
+  → result_payload JSON {matches, indexed_profile_count, embedding_model}
+web tier: GET /animals/<id>/discover
+  → GetSemanticAdopterMatchesQuery decodes the payload and attaches, per
+    match, the deterministic score and eligibility verdict
+```
+
+- **Separate collection** (`petmatch_adopter_profiles`, cosine space) in the
+  same Chroma directory; the knowledge collection keeps squared L2. Vectors
+  are always passed explicitly, as for the knowledge base.
+- **Same population as Find More Adopters**: complete, opted in, active.
+  The agent restates the three filters rather than importing the query
+  handler (R2), and `tests/agent/test_semantic_adopter_search.py` pins the
+  two selections to each other.
+- **Similarity is a lead, not a verdict.** No score, no `MatchAnalysis`, no
+  event. Each match is shown with the rule-based score and, if excluded, the
+  rule that excludes it; only an eligible match offers an invitation, and the
+  invitation command re-checks eligibility anyway.
+- **Unchanged profiles are never re-embedded**: the metadata hash covers the
+  text and the embedding model, so a model change re-embeds everything.
+  `scripts/ingest_profiles.py` pre-builds the index after a seed.
+- An embedding failure here is **raised**, unlike knowledge retrieval: the
+  search is the job, so the worker's retry is the right response.
 
 ## 7. Web search policy
 
@@ -580,7 +623,9 @@ it so it can re-plan.
 ## 8. MCP
 
 Two local tools over stdio, per blueprint §8 and spec §14:
-`get_adopter_profile` and `get_animal_profile`. Full detail in `docs/MCP.md`.
+`get_adopter_profile` and `get_animal_profile`. Web search is consumed the
+same way, as an MCP client of Tavily's hosted server over Streamable HTTP
+(course requirement 9). Full detail in `docs/MCP.md`.
 
 The architectural point: **the agent does not own the application's data.** It
 requests it through tools, exactly as it would any external service. The tool
@@ -641,7 +686,7 @@ proves the agent cannot even name the command.
 | LLM | Ollama, `qwen2.5:3b-instruct` | Local, free, no API key, adequate tool calling and JSON |
 | Embeddings | nomic-embed-text via Ollama | Reuses the Ollama runtime; avoids a 2.5 GB PyTorch dependency |
 | Vector DB | ChromaDB | Lightweight, local, persistent |
-| Web search | Tavily | Built for agents; clean ranked results; degrades to an offline stub with no key |
-| MCP | Official `mcp` Python SDK | stdio transport as blueprint §8 requires |
+| Web search | Tavily, consumed through its hosted MCP server (Streamable HTTP) | Built for agents; clean ranked results; MCP satisfies course requirement 9; degrades to an offline stub with no key |
+| MCP | Official `mcp` Python SDK | stdio server for the two local tools (blueprint §8); Streamable HTTP client for Tavily |
 | Tests | pytest + Playwright (Python) | Playwright's Python binding needs no Node |
 | TLS | truststore | Corporate Palo Alto proxy re-signs HTTPS; Python must use the Windows trust store. Injected at import time in `app/config.py` and again in `agent_service/__main__.py`. |

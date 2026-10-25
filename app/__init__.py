@@ -167,6 +167,8 @@ def _register_commands(bus: MessageBus, settings: Configuration) -> None:
         EnqueueFindMyPetExplanationsHandler,
         EnqueueIntentInterpretationCommand,
         EnqueueIntentInterpretationHandler,
+        EnqueueSemanticAdopterSearchCommand,
+        EnqueueSemanticAdopterSearchHandler,
     )
     from app.cqrs.commands.animal_commands import (
         ChangeAnimalStatusCommand,
@@ -216,6 +218,9 @@ def _register_commands(bus: MessageBus, settings: Configuration) -> None:
     )
     bus.register_command(
         EnqueueFindMyPetExplanationsCommand, EnqueueFindMyPetExplanationsHandler()
+    )
+    bus.register_command(
+        EnqueueSemanticAdopterSearchCommand, EnqueueSemanticAdopterSearchHandler()
     )
     bus.register_command(SubmitApplicationCommand, SubmitApplicationHandler())
     bus.register_command(WithdrawApplicationCommand, WithdrawApplicationHandler())
@@ -310,6 +315,10 @@ def _register_queries(bus: MessageBus) -> None:
         ListMyInvitationsQuery,
     )
     from app.cqrs.queries.profile_queries import GetMyProfileHandler, GetMyProfileQuery
+    from app.cqrs.queries.semantic_queries import (
+        GetSemanticAdopterMatchesHandler,
+        GetSemanticAdopterMatchesQuery,
+    )
 
     bus.register_query(GetAccountForSignInQuery, GetAccountForSignInHandler())
     bus.register_query(EmailIsRegisteredQuery, EmailIsRegisteredHandler())
@@ -322,6 +331,9 @@ def _register_queries(bus: MessageBus) -> None:
     bus.register_query(FindMyPetQuery, FindMyPetHandler())
     bus.register_query(FindMyPetWithIntentQuery, FindMyPetWithIntentHandler())
     bus.register_query(GetIntentJobQuery, GetIntentJobHandler())
+    bus.register_query(
+        GetSemanticAdopterMatchesQuery, GetSemanticAdopterMatchesHandler()
+    )
     bus.register_query(GetMatchAnalysisQuery, GetMatchAnalysisHandler())
     bus.register_query(ListMyNotificationsQuery, ListMyNotificationsHandler())
     bus.register_query(GetDashboardSummaryQuery, GetDashboardSummaryHandler())

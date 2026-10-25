@@ -436,6 +436,25 @@ Candidates failing an eligibility rule are listed separately with the reason
 they were excluded, rather than being silently dropped. **404** unknown
 animal.
 
+The page also renders the newest semantic adopter search for the animal
+(`GetSemanticAdopterMatchesQuery`), in one of four states: none yet, waiting
+(PENDING or IN_PROGRESS, with a `<meta http-equiv="refresh" content="8">`),
+failed, or ready. Ready rows carry the cosine similarity *and* the
+deterministic verdict — the rule-based score and, for an excluded adopter,
+the rule that excludes them. A completed job whose payload cannot be decoded
+renders as an empty result, not a 500.
+
+### `POST /animals/<animal_id>/discover/semantic` — **Staff**
+Queues a vector search of embedded adopter profiles for the animal (lecturer
+requirement 6) by dispatching `EnqueueSemanticAdopterSearchCommand`, which
+inserts one `SEMANTIC_ADOPTER_SEARCH` job and returns only its identifier. A
+job already waiting for the same animal is reused rather than duplicated. No
+embedding happens in the request (rule R4): the agent process does it.
+
+No form fields beyond `csrf_token`. **302** to
+`/animals/<animal_id>/discover#semantic-matches` · **404** unknown animal ·
+**403** adopter · **302 → /login** anonymous.
+
 ### `GET /analyses/<match_analysis_id>` — **Staff**
 One stored analysis in full: score, per-criterion breakdown, reasons,
 concerns, missing information, the reasoning trace, and the evidence sources

@@ -132,6 +132,13 @@ class Configuration:
     #: `load_configuration` turns it on, from `QUERY_CACHE_SECONDS`.
     query_cache_seconds: float = 0.0
 
+    #: The Chroma collection holding adopter profile résumés for semantic
+    #: adopter search (lecturer requirement 6). Separate from the knowledge
+    #: collection: one is cited evidence, the other a search index over
+    #: records SQL Server stays authoritative for. Defaulted for the same
+    #: reason as the cache setting above.
+    profile_collection_name: str = "petmatch_adopter_profiles"
+
     @property
     def sqlalchemy_url(self) -> str:
         """The database URL, honouring a local override when one is set.
@@ -173,4 +180,7 @@ def load_configuration() -> Configuration:
         upload_directory=PROJECT_ROOT / "app" / "static" / "uploads",
         invitation_expiry_hours=int(_optional("INVITATION_EXPIRY_HOURS", "72")),
         query_cache_seconds=float(_optional("QUERY_CACHE_SECONDS", "20")),
+        profile_collection_name=_optional(
+            "PROFILE_COLLECTION_NAME", "petmatch_adopter_profiles"
+        ),
     )

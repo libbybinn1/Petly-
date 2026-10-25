@@ -3,6 +3,12 @@
 {% block title %}{{ 'Find more adopters' if is_discovery else 'Ranked applicants' }} — {{ ranking.animal_name }}{% endblock %}
 
 {% block content %}
+{#- While a semantic search is queued the page reloads itself, as the describe
+    page does: there is no endpoint to poll for it and nothing to show until
+    the agent answers. Slower than the describe page's four seconds because
+    this screen carries invitation forms a reload should not interrupt often. -#}
+{% if is_discovery and semantic and semantic.is_waiting %}<meta http-equiv="refresh" content="8">{% endif %}
+
 <p style="margin-bottom: var(--space-4)">
   <a href="{{ url_for('animals.details', animal_id=ranking.animal_id) }}">&larr; Back to {{ ranking.animal_name }}</a>
 </p>
@@ -21,6 +27,7 @@
   </div>
   <div style="display:flex; gap: var(--space-2); flex-wrap: wrap">
     {% if is_discovery %}
+      <a class="btn btn--ghost btn--small" href="#semantic-matches">Semantic matches</a>
       <a class="btn btn--secondary btn--small" href="{{ url_for('matches.find_my_adopter', animal_id=ranking.animal_id) }}">See applicants</a>
     {% else %}
       <a class="btn btn--primary btn--small" href="{{ url_for('matches.find_more_adopters', animal_id=ranking.animal_id) }}">Find more adopters</a>
@@ -235,5 +242,9 @@
     {{ 'candidate was' if ranking.excluded_count == 1 else 'candidates were' }}
     excluded by a hard eligibility rule.
   </p>
+{% endif %}
+
+{% if is_discovery %}
+  {% include "matches/_semantic_matches.html" %}
 {% endif %}
 {% endblock %}

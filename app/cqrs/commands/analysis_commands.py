@@ -25,6 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.cqrs.base import Command, CommandHandler
+from app.cqrs.commands.application_commands import RecordNotFoundError
 from app.domain.enums import AnalysisJobStatus, AnalysisJobType, MatchDirection
 from app.infrastructure.clock import utc_now
 from app.infrastructure.models import (
@@ -96,6 +97,70 @@ class EnqueueIntentInterpretationHandler(CommandHandler[str]):
                 status=AnalysisJobStatus.PENDING.value,
                 adopter_profile_id=command.adopter_profile_id,
                 natural_language_query=command.natural_language_query,
+                attempt_count=0,
+                created_at=utc_now(),
+            )
+        )
+        return job_id
+
+
+@dataclass(frozen=True)
+class EnqueueSemanticAdopterSearchCommand(Command):
+    """Ask the agent for a vector search of adopter profiles (requirement 6).
+
+    Staff press "Run semantic search" on the discovery screen. Embedding the
+    animal and searching the profile index needs an embedding model, which
+    the web tier never calls (rule R4), so this queues a
+    `SEMANTIC_ADOPTER_SEARCH` job and the page reads the answer back later.
+
+    Attributes:
+        animal_id: The animal to find similar adopters for.
+    """
+
+    animal_id: str
+
+
+class EnqueueSemanticAdopterSearchHandler(CommandHandler[str]):
+    """Inserts one SEMANTIC_ADOPTER_SEARCH job, or reuses an outstanding one."""
+
+    def handle(self, command: Command, session: Session) -> str:
+        """Queue the search, unless one for this animal is already waiting.
+
+        A second press while the first search is still queued returns the
+        same job rather than adding another: both would answer the same
+        question, and the agent works through the queue one job at a time.
+
+        Returns:
+            The identifier of the job that will answer. Not the job row and
+            not the matches, which do not exist yet.
+
+        Raises:
+            RecordNotFoundError: No such animal.
+        """
+        assert isinstance(command, EnqueueSemanticAdopterSearchCommand)
+
+        if session.get(Animal, command.animal_id) is None:
+            raise RecordNotFoundError(f"animal {command.animal_id} does not exist")
+
+        outstanding_job_id = session.execute(
+            select(AnalysisJob.analysis_job_id)
+            .where(
+                AnalysisJob.animal_id == command.animal_id,
+                AnalysisJob.job_type == AnalysisJobType.SEMANTIC_ADOPTER_SEARCH.value,
+                AnalysisJob.status.in_(_OUTSTANDING_JOB_STATUSES),
+            )
+            .limit(1)
+        ).scalar_one_or_none()
+        if outstanding_job_id is not None:
+            return outstanding_job_id
+
+        job_id = new_identifier()
+        session.add(
+            AnalysisJob(
+                analysis_job_id=job_id,
+                job_type=AnalysisJobType.SEMANTIC_ADOPTER_SEARCH.value,
+                status=AnalysisJobStatus.PENDING.value,
+                animal_id=command.animal_id,
                 attempt_count=0,
                 created_at=utc_now(),
             )

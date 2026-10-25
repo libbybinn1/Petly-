@@ -102,3 +102,42 @@ def test_environment_script_makes_the_application_package_importable() -> None:
     completed = _run_as_a_script_under_scripts(probe)
 
     assert completed.returncode == 0, completed.stderr + completed.stdout
+
+
+def test_web_search_check_reports_a_failure_without_the_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Proves the Tavily MCP check fails cleanly and never prints the key.
+
+    The search itself is replaced, so no network is touched; the point is
+    that the failure text shown on the console has the key scrubbed out.
+    """
+    from agent_service.tools import tavily_mcp
+    from scripts import check_environment
+
+    fake_key = "tvly-dev-NOT-A-REAL-KEY"
+
+    def failing_search(api_key: str, query: str, max_results: int) -> list[object]:
+        raise ConnectionError(f"https://mcp.tavily.com/mcp/?tavilyApiKey={api_key} refused")
+
+    monkeypatch.setenv("TAVILY_API_KEY", fake_key)
+    monkeypatch.setattr(tavily_mcp, "search_tavily_over_mcp", failing_search)
+
+    result = check_environment.check_web_search()
+
+    assert result.passed is False
+    assert fake_key not in result.detail
+
+
+def test_web_search_check_fails_when_no_key_is_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Proves a missing TAVILY_API_KEY is reported rather than attempted."""
+    from scripts import check_environment
+
+    monkeypatch.setenv("TAVILY_API_KEY", "")
+
+    result = check_environment.check_web_search()
+
+    assert result.passed is False
+    assert "TAVILY_API_KEY" in result.detail

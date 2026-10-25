@@ -176,20 +176,26 @@ def check_vector_database() -> CheckResult:
 
 
 def check_web_search() -> CheckResult:
-    """Confirm Tavily authenticates and returns results through the corporate proxy."""
-    from tavily import TavilyClient
+    """Confirm Tavily's MCP server authenticates and searches through the corporate proxy.
 
-    api_key = os.environ.get("TAVILY_API_KEY", "")
+    Uses the same MCP client the agent uses (docs/MCP.md section 9), and
+    reports failures with the API key scrubbed out.
+    """
+    from agent_service.tools.tavily_mcp import (
+        describe_failure_without_secret,
+        search_tavily_over_mcp,
+    )
+
+    api_key = os.environ.get("TAVILY_API_KEY", "").strip()
     if not api_key:
         return CheckResult("Web search", False, "TAVILY_API_KEY is not set in .env")
 
     try:
-        response = TavilyClient(api_key=api_key).search(query="dog adoption", max_results=1)
+        results = search_tavily_over_mcp(api_key, "dog adoption", 1)
     except Exception as error:
-        return CheckResult("Web search", False, f"{type(error).__name__}: {error}")
+        return CheckResult("Web search", False, describe_failure_without_secret(error, api_key))
 
-    result_count = len(response.get("results", []))
-    return CheckResult("Web search", True, f"Tavily returned {result_count} result(s)")
+    return CheckResult("Web search", True, f"Tavily MCP returned {len(results)} result(s)")
 
 
 ALL_CHECKS = (

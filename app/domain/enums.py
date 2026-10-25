@@ -152,6 +152,9 @@ class AnalysisJobType(StrEnum):
     FIND_MY_PET = "FIND_MY_PET"
     FIND_MORE_ADOPTERS = "FIND_MORE_ADOPTERS"
     INTERPRET_INTENT = "INTERPRET_INTENT"
+    # Vector search of embedded adopter profiles against one animal
+    # (lecturer requirement 6). Answers on the job row, like INTERPRET_INTENT.
+    SEMANTIC_ADOPTER_SEARCH = "SEMANTIC_ADOPTER_SEARCH"
 
 
 class AnalysisJobStatus(StrEnum):

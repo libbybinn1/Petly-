@@ -25,6 +25,7 @@ from app.cqrs.commands.analysis_commands import (
     MAXIMUM_DESCRIPTION_LENGTH,
     EnqueueFindMyPetExplanationsCommand,
     EnqueueIntentInterpretationCommand,
+    EnqueueSemanticAdopterSearchCommand,
 )
 from app.cqrs.commands.application_commands import (
     ApproveApplicationCommand,
@@ -58,6 +59,7 @@ from app.cqrs.queries.match_queries import (
     GetMatchAnalysisQuery,
     RankApplicantsQuery,
 )
+from app.cqrs.queries.semantic_queries import GetSemanticAdopterMatchesQuery
 from app.domain.application_rules import (
     ApplicationNotAllowedError,
     IllegalTransitionError,
@@ -263,6 +265,11 @@ def find_more_adopters(animal_id: str) -> str:
     Deliberately distinct from ranking applicants: this searches the opted-in
     population, and only candidates passing every eligibility rule in spec
     section 10 are considered.
+
+    Also shows the newest semantic adopter search for the animal, if staff
+    ran one: waiting, failed, or its vector-search matches beside each
+    one's deterministic verdict (lecturer requirement 6). Reading it is a
+    query; nothing here embeds or searches (rule R4).
     """
     bus = get_bus()
     ranking = bus.dispatch_query(FindMoreAdoptersQuery(animal_id=animal_id))
@@ -275,7 +282,37 @@ def find_more_adopters(animal_id: str) -> str:
         analysis_status=bus.dispatch_query(
             GetAnalysisStatusQuery(animal_id=animal_id, job_types=STAFF_MATCH_JOB_TYPES)
         ),
+        semantic=bus.dispatch_query(GetSemanticAdopterMatchesQuery(animal_id=animal_id)),
         mode="discovery",
+    )
+
+
+@match_blueprint.route("/animals/<animal_id>/discover/semantic", methods=["POST"])
+@require_sign_in
+@require_staff()
+def queue_semantic_adopter_search(animal_id: str) -> Response:
+    """Queue a vector search of adopter profiles for one animal (requirement 6).
+
+    Embedding needs a model, and a model call never happens in a request
+    (rule R4), so this enqueues a `SEMANTIC_ADOPTER_SEARCH` job and returns
+    to the discovery screen, which shows the search waiting and then its
+    matches. The command returns only the job identifier (rule R2).
+
+    Returns:
+        A redirect to the discovery screen's semantic panel.
+    """
+    try:
+        get_bus().dispatch_command(EnqueueSemanticAdopterSearchCommand(animal_id=animal_id))
+    except RecordNotFoundError:
+        abort(404)
+
+    flash(
+        "Semantic search queued. The agent embeds the profiles and the results "
+        "appear below when it finishes.",
+        "success",
+    )
+    return redirect(
+        url_for("matches.find_more_adopters", animal_id=animal_id, _anchor="semantic-matches")
     )
 
 

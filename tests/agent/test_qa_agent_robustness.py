@@ -29,7 +29,7 @@ from agent_service.tools.mcp_tools import McpToolClient
 from agent_service.tools.web_search import (
     SearchResult,
     StubSearchProvider,
-    TavilySearchProvider,
+    TavilyMcpSearchProvider,
     build_search_provider,
 )
 from agent_service.worker import MAX_JOB_ATTEMPTS, AgentWorker
@@ -308,7 +308,9 @@ class TestToolAndProviderFailures:
     def test_an_absent_tavily_key_yields_the_offline_stub(self) -> None:
         """Proves the system runs with no web-search credentials configured."""
         assert isinstance(build_search_provider(""), StubSearchProvider)
-        assert isinstance(build_search_provider("a-real-looking-key"), TavilySearchProvider)
+        assert isinstance(
+            build_search_provider("a-real-looking-key"), TavilyMcpSearchProvider
+        )
 
     def test_a_whitespace_only_key_is_treated_as_a_configured_key(self) -> None:
         """Documents that build_search_provider tests truthiness, not content.
@@ -317,9 +319,9 @@ class TestToolAndProviderFailures:
         through the supported entry point. It is recorded because the same
         truthiness test is repeated in `AgentConfiguration.has_web_search`,
         and a future caller constructing the provider directly would get a
-        live Tavily client from a blank key.
+        live Tavily MCP client from a blank key.
         """
-        assert isinstance(build_search_provider("   "), TavilySearchProvider)
+        assert isinstance(build_search_provider("   "), TavilyMcpSearchProvider)
 
     def test_an_empty_knowledge_base_does_not_stop_an_analysis(self) -> None:
         """Proves an unseeded or empty Chroma collection degrades gracefully."""

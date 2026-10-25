@@ -276,6 +276,7 @@ direct POST as much as on a page load.
 | Find My Pet | `/my/matches` | → sign in | yes | **403** |
 | Find My Adopter | `/animals/<id>/adopters` | → sign in | **403** | yes |
 | Find More Adopters | `/animals/<id>/discover` | → sign in | **403** | yes |
+| Run a semantic adopter search (POST) | `/animals/<id>/discover/semantic` | → sign in | **403** | yes |
 | Send an invitation (POST) | `/animals/<id>/invite` | → sign in | **403** | yes |
 | Decide an application (POST) | `/applications/<id>/decide` | → sign in | **403** | yes |
 | Full match analysis | `/analyses/<id>` | → sign in | **403** | yes |
@@ -436,6 +437,20 @@ shared pending block until the agent answers and then shows results: plain
 cards for an intent-only search, cards carrying a score when the profile was
 fused in. The interpretation is printed above the results in the adopter's
 terms, so a reading that missed the point is visible rather than mysterious.
+
+### Find More Adopters: semantic matches (lecturer requirement 6)
+Below the deterministic ranking, a **Semantic matches (vector search)** card
+with a *Run semantic search* button. The button posts, the page comes back
+with the shared pending treatment (skeleton, "Queued … ago", Refresh) and a
+`<meta http-equiv="refresh" content="8">` — slower than the describe page's
+four seconds because this screen carries invitation forms. When the agent
+answers, a table lists the closest profiles: rank, name and city, a
+similarity bar with its two-decimal cosine value, the **rule-based score**,
+and an **Eligible / Not eligible** tag with the reason. Only an eligible row
+offers *Invite*. The bar is info-coloured on purpose: similarity is not a
+score, and painting it green would read as "suitable". A failed search shows
+a warning that leaves the deterministic list untouched. The heading's
+*Semantic matches* link jumps to the card (`#semantic-matches`).
 
 ### Event history (blueprint §10)
 A vertical timeline, oldest first, one entry per recorded event: what happened,

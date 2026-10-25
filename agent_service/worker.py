@@ -23,6 +23,7 @@ import json
 import logging
 import signal
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import timedelta
 from types import FrameType
@@ -35,6 +36,12 @@ from app.domain.enums import (
     AnalysisJobType,
     DomainEventType,
     MatchDirection,
+)
+from app.domain.semantic_profiles import (
+    DEFAULT_SEMANTIC_MATCH_COUNT,
+    SemanticAdopterMatch,
+    SemanticSearchOutcome,
+    semantic_search_to_payload,
 )
 from app.eventstore.store import EventStore
 from app.infrastructure.clock import utc_now
@@ -54,6 +61,12 @@ from agent_service.intent import IntentInterpreter, intent_to_payload
 from agent_service.llm_client import LanguageModel, OllamaLanguageModel
 from agent_service.loop import AnalysisOutcome, MatchAnalysisAgent, MissingRecordError
 from agent_service.rag.knowledge_base import EmbeddingClient, KnowledgeBase
+from agent_service.rag.profile_index import IndexSyncReport, ProfileDocument, ProfileIndex
+from agent_service.rag.profile_population import (
+    animal_query_text,
+    applicant_profile_ids,
+    discoverable_profile_documents,
+)
 from agent_service.tools.mcp_tools import McpToolClient
 from agent_service.tools.web_search import build_search_provider
 
@@ -95,6 +108,33 @@ class MatchAnalyser(Protocol):
         ...
 
 
+class AdopterProfileIndex(Protocol):
+    """The vector index a `SEMANTIC_ADOPTER_SEARCH` job depends on.
+
+    A protocol for the same reason as `MatchAnalyser`: a queue test drives
+    the worker with an index over a temporary directory and a deterministic
+    embedder, so no Ollama is needed to prove what the worker stores.
+    """
+
+    @property
+    def embedding_model(self) -> str:
+        """The embedding model the stored vectors were made with."""
+        ...
+
+    def sync(self, documents: Sequence[ProfileDocument]) -> IndexSyncReport:
+        """Make the index hold exactly these résumés."""
+        ...
+
+    def nearest(
+        self,
+        query_text: str,
+        result_count: int,
+        excluded_ids: frozenset[str] = frozenset(),
+    ) -> list[SemanticAdopterMatch]:
+        """Return the résumés nearest to a query text."""
+        ...
+
+
 @dataclass
 class WorkerStatistics:
     """Counters reported when the worker stops."""
@@ -114,6 +154,7 @@ class AgentWorker:
         session_factory: sessionmaker[Session],
         agent: MatchAnalyser,
         language_model: LanguageModel | None = None,
+        profile_index: AdopterProfileIndex | None = None,
     ) -> None:
         """Wire the worker to its queue, its agent and its model.
 
@@ -125,11 +166,15 @@ class AgentWorker:
                 model but no scoring. Optional so a queue test needs no
                 model at all; such a job is failed with a clear message
                 rather than silently mis-answered when none is configured.
+            profile_index: Used for `SEMANTIC_ADOPTER_SEARCH` jobs. Optional
+                for the same reason; such a job is parked with a reason
+                when none is configured.
         """
         self._configuration = configuration
         self._session_factory = session_factory
         self._agent = agent
         self._language_model = language_model
+        self._profile_index = profile_index
         self._should_stop = False
         self.statistics = WorkerStatistics()
 
@@ -299,6 +344,9 @@ class AgentWorker:
         if job_type is AnalysisJobType.INTERPRET_INTENT:
             self._interpret_intent(job)
             return
+        if job_type is AnalysisJobType.SEMANTIC_ADOPTER_SEARCH:
+            self._semantic_adopter_search(job)
+            return
 
         direction = DIRECTION_BY_JOB_TYPE.get(job_type)
         if direction is None or not job.adopter_profile_id or not job.animal_id:
@@ -343,6 +391,55 @@ class AgentWorker:
         self.statistics.completed += 1
         logger.info(
             "job %s interpreted intent: understood=%s", job.analysis_job_id, intent.understood
+        )
+
+    def _semantic_adopter_search(self, job: AnalysisJob) -> None:
+        """Rank discoverable adopters by résumé similarity to one animal.
+
+        Lecturer requirement 6. The index is brought up to date first, so a
+        profile edited or opted out since the last search is reflected -
+        only changed résumés are re-embedded. The animal's own description
+        is then embedded and the nearest résumés are stored on the job row
+        as JSON, exactly like an interpreted intent. No analysis, no event
+        and no score: the web tier shows these beside the deterministic
+        verdict, which alone decides eligibility (rule R4).
+
+        Args:
+            job: The claimed `SEMANTIC_ADOPTER_SEARCH` job.
+        """
+        if not job.animal_id:
+            self._skip(job, "a SEMANTIC_ADOPTER_SEARCH job needs an animal_id")
+            return
+
+        if self._profile_index is None:
+            self._skip(job, "no profile index is configured for semantic adopter search")
+            return
+
+        with self._session_factory() as session:
+            query_text = animal_query_text(session, job.animal_id)
+            documents = discoverable_profile_documents(session)
+            excluded_ids = applicant_profile_ids(session, job.animal_id)
+
+        if query_text is None:
+            self._skip(job, f"animal {job.animal_id} does not exist")
+            return
+
+        self._profile_index.sync(documents)
+        matches = self._profile_index.nearest(
+            query_text, DEFAULT_SEMANTIC_MATCH_COUNT, excluded_ids
+        )
+        outcome = SemanticSearchOutcome(
+            matches=tuple(matches),
+            indexed_profile_count=len(documents),
+            embedding_model=self._profile_index.embedding_model,
+        )
+        self._store_result(job.analysis_job_id, semantic_search_to_payload(outcome))
+        self.statistics.completed += 1
+        logger.info(
+            "job %s semantic adopter search: %s matches over %s profiles",
+            job.analysis_job_id,
+            len(matches),
+            len(documents),
         )
 
     def _skip(self, job: AnalysisJob, reason: str) -> None:
@@ -707,6 +804,23 @@ def build_agent(
     )
 
 
+def build_profile_index(configuration: Configuration) -> ProfileIndex:
+    """Assemble the adopter résumé index from configuration.
+
+    Uses the same embedding model and Chroma directory as the knowledge
+    base, in its own collection, so the two indexes never mix vectors.
+    """
+    return ProfileIndex(
+        persist_directory=configuration.chroma_persist_directory,
+        collection_name=configuration.profile_collection_name,
+        embedding_client=EmbeddingClient(
+            base_url=configuration.agent.ollama_base_url,
+            model_name=configuration.agent.embedding_model,
+        ),
+        embedding_model=configuration.agent.embedding_model,
+    )
+
+
 def main() -> int:
     """Start the worker and run until interrupted.
 
@@ -726,6 +840,7 @@ def main() -> int:
         session_factory,
         build_agent(configuration, language_model),
         build_intent_model(configuration),
+        build_profile_index(configuration),
     )
 
     def handle_signal(_signal_number: int, _frame: FrameType | None) -> None:
