@@ -34,13 +34,13 @@
 | **דרישה לא פונקציונאלית 3** | יש להגדיר Skill אחד ו-Rule אחד לכל הפחות | ✅ תואם (100%) | הוגדרו 3 סקילים אישיים (`clean-code`, `db-management`, `testing`) ו-5 חוקי פיתוח ברורים (`R1`–`R5`). | `CLAUDE.md`, `docs/SKILLS_AND_RULES.md` |
 | **דרישה לא פונקציונאלית 4** | הפיתוח יתבסס על שרת אפליקציה מבוסס Flask | ✅ תואם (100%) | המערכת פותחה כולה על גבי Flask 3.0.3 עם Blueprints ו-Jinja2. | `app/__init__.py`, `run.py` |
 | **דרישה לא פונקציונאלית 5** | מסד הנתונים יימצא בענן (לדוגמא Somee.com) | ✅ תואם (100%) | חיבור מלא ל-SQL Server 2014 בענן Somee.com באמצעות `pymssql` ו-SQLAlchemy. | `app/config.py`, `app/infrastructure/database.py` |
-| **דרישה לא פונקציונאלית 6** | קורות חיים יעברו הטמעה במסד נתונים וקטורי וניתן יהיה לבצע חיפוש סמנטי להתאמת מועמד למשרה | ⚠️ **פער פוטנציאלי** | ב-Petly הוטמעו ב-Vector DB מדריכי ידע עבור RAG, אך **פרופילי המאמצים לא הוטמעו כווקטורים ב-ChromaDB**. | `agent_service/rag/knowledge_base.py` |
+| **דרישה לא פונקציונאלית 6** | קורות חיים יעברו הטמעה במסד נתונים וקטורי וניתן יהיה לבצע חיפוש סמנטי להתאמת מועמד למשרה | ✅ תואם (נסגר 25.10) | פרופילי המאמצים ("קורות החיים") מוטמעים באוסף Chroma נפרד, ואיש צוות מריץ חיפוש סמנטי מתוך מסך גילוי המאמצים של חיה (משימת `SEMANTIC_ADOPTER_SEARCH`). החיפוש רץ בתהליך הסוכן, והתוצאות מוצגות לצד הזכאות הדטרמיניסטית. | `agent_service/rag/profile_index.py`, `app/cqrs/queries/semantic_queries.py` |
 | **דרישה לא פונקציונאלית 7** | שירותי שרת האפליקציה יאורגנו באמצעות תבניות CQRS/MVC | ✅ תואם ומצטיין (100%) | ארכיטקטורת CQRS אמיתית: `commands/` לשינוי נתונים ו-`queries/` לשליפות בלבד עם Rollback מובנה. | `app/cqrs/`, `app/controllers/` |
 | **דרישה לא פונקציונאלית 8** | שמירת הנתונים תעשה בשירות ענן ותממש תבנית Event Sourcing | ✅ תואם (100%) | קיים `EventStore` אמיתי (Append-Only) ושחזור מצב היסטורי (`projections.py`) מלא. | `app/eventstore/store.py`, `app/eventstore/projections.py` |
-| **דרישה לא פונקציונאלית 9** | שירותים חיצוניים פוטנציאלים ייצרכו באמצעות פרוטוקול MCP (כגון Tavily או Gmail) | ⚠️ **פער מהותי** | Tavily נצרך דרך ספריית Python SDK רגילה (REST) ולא כ-MCP Client. Gmail MCP לא קיים. | `agent_service/tools/web_search.py` |
-| **דרישה לא פונקציונאלית 10** | יש לפתח לפחות שני Tools באמצעות MCP - Studio | ⚠️ **אי-הבנה/פער** | פותחו שני כלים ב-FastMCP על גבי `stdio`. בתיעוד נכתב בטעות *"explicitly not Studio"*. | `mcp_server/server.py`, `docs/MCP.md` |
-| **דרישה לא פונקציונאלית 11** | סוכן הערכת מועמד יפותח באמצעות תשתית Deep Agent | ⚠️ **פער קריטי** | הסוכן פותח כמימוש עצמאי (custom loop) מול Ollama ולא באמצעות ספריית `deepagents`. | `agent_service/loop.py`, `requirements.txt` |
-| **דרישה לא פונקציונאלית 12** | את הקוד יש לנהל במסגרת GitHub Repo (או תשתית דומה) | ⚠️ **דגש תפעולי** | מוגדר Remote מול GitHub (`libbybinn1/Petly-`), אך יש לוודא שהקוד נדחף (push) בפועל. | `.git/config`, `docs/DEMO.md` |
+| **דרישה לא פונקציונאלית 9** | שירותים חיצוניים פוטנציאלים ייצרכו באמצעות פרוטוקול MCP (כגון Tavily או Gmail) | ✅ תואם (נסגר 25.10) | Tavily נצרך כעת דרך שרת ה-MCP המתארח שלו (Streamable HTTP) באמצעות לקוח MCP. ספריית ה-REST הוסרה. המפתח עובר בכותרת ואינו מופיע בכתובת או בלוג. Gmail הוא דוגמה בלבד ולא נדרש. | `agent_service/tools/tavily_mcp.py` |
+| **דרישה לא פונקציונאלית 10** | יש לפתח לפחות שני Tools באמצעות MCP - Studio | ✅ תואם (נסגר 25.10) | שני כלים ב-MCPServer על גבי `stdio`. הניסוח "not Studio" הוסר, ו-`docs/MCP.md` מציג את פקודת MCP Inspector להפעלת הכלים בממשק גרפי. | `mcp_server/server.py`, `docs/MCP.md` |
+| **דרישה לא פונקציונאלית 11** | סוכן הערכת מועמד יפותח באמצעות תשתית Deep Agent | ✅ תואם (נסגר 25.10) | לולאת ההנמקה של הסוכן רצה כעת ב-`deepagents.create_deep_agent` (גרסה 0.7.32) עם תכנון `write_todos`, RAG וחיפוש Tavily. הציון נשאר דטרמיניסטי. | `agent_service/deep_agent.py`, `agent_service/loop.py` |
+| **דרישה לא פונקציונאלית 12** | את הקוד יש לנהל במסגרת GitHub Repo (או תשתית דומה) | ✅ תואם | הקוד נדחף ל-`https://github.com/libbybinn1/Petly-`, ו-`main` מסונכרן עם `origin/main`. | `docs/DEMO.md` |
 
 ---
 
@@ -64,6 +64,8 @@
 ---
 
 ## 4. ניתוח מעמיק של הפערים והפתרונות (The Missing & Fixes Needed)
+
+> **עדכון 25.10:** כל הפערים בסעיף זה נסגרו בקוד. ראו סעיף 6. הניתוח שלהלן נשמר כתיעוד של מצב הקוד ב-18.10.
 
 להלן 4 הנקודות שבהן קיים פער מול לשון ה-PDF של המרצה, וההמלצה כיצד לטפל בהן לקראת הציון 100:
 
@@ -139,11 +141,14 @@
 
 | בדיקה | תוצאה |
 |---|---|
-| `scripts/verify_requirements.py` | 23/23 PASS |
-| בדיקות unit + agent | 686 עברו, 1 דולגה |
+| `scripts/verify_requirements.py` | 26/26 PASS (נוספו שלוש בדיקות: "Deep Agent framework", "External service over MCP", "Adopter profile vectors") |
+| בדיקות unit + agent + API של החיפוש הסמנטי | 778 עברו, 1 דולגה |
 | `ruff check` · `mypy --strict` | נקי |
+| פער 1 (Deep Agent) | **נסגר** — `agent_service/deep_agent.py` |
+| פער 2 (Tavily דרך MCP) | **נסגר** — `agent_service/tools/tavily_mcp.py` |
+| פער 3 (הניסוח "not Studio") | **נסגר** — `docs/MCP.md` |
+| פער 4 (הטמעת פרופילי מאמצים) | **נסגר** — `agent_service/rag/profile_index.py`. במסד הענן יש להריץ פעם אחת `scripts/db.py sync-job-type-check` |
 | פער 5 (GitHub) | **נסגר** — `main` מסונכרן עם `origin/main` |
-| פערים 1–4 (Deep Agent, Tavily/Gmail דרך MCP, הטמעת פרופילי מאמצים, הניסוח "not Studio") | **עדיין פתוחים** — לא חל שינוי בקוד |
 
 המסמכים המקוריים (PDF של המרצה ושני מסמכי ה-docx) הועברו ל-`docs/specifications/`.
 

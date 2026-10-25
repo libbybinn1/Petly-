@@ -26,9 +26,10 @@ README.md.
 | `fresh` | `reset` + `seed` in one step - the only safe way to reload |
 | `tables` | List project tables with row counts |
 | `events` | Show the most recent domain events (event-sourcing inspection) |
+| `sync-job-type-check` | Recreate the `analysis_jobs.job_type` CHECK from `AnalysisJobType`, in one transaction, touching no rows. Run once on an existing database after a job type is added |
 
 **There is no `migrate`, `revision` or `downgrade`, and there is no Alembic
-directory.** The schema is created from `Base.metadata`. One developer, one
+directory** - `sync-job-type-check` is the one targeted exception. The schema is created from `Base.metadata`. One developer, one
 database and a rebuild that takes a minute make a migration history a cost
 with no payer; `requirements.txt` still pins Alembic, and that pin is
 vestigial.

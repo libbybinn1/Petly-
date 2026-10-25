@@ -338,6 +338,12 @@ class OllamaLanguageModel:
                 f"Could not reach {self.name} at {self.base_url}: {error}"
             ) from error
 
+        # ollama 0.4+ answers with pydantic models rather than dicts. Dumped
+        # here, once, so everything downstream - tool-call parsing included -
+        # keeps reading plain mappings.
+        if hasattr(response, "model_dump"):
+            response = response.model_dump()
+
         if not isinstance(response, Mapping):
             raise MalformedModelOutputError(
                 f"{self.name} returned {type(response).__name__}, expected a mapping"

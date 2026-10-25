@@ -1059,16 +1059,34 @@ def check_data_entry() -> tuple[bool, str]:
     )
 
 
-def _loop_encloses_model_turns() -> bool:
-    """Whether agent_service/loop.py drives the model from a real loop, not one call."""
-    tree = parse_source("loop", _read("agent_service/loop.py"))
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.While | ast.For):
-            continue
-        for inner in ast.walk(node):
-            if isinstance(inner, ast.Call) and "turn" in dotted_name(inner.func).lower():
-                return True
-    return False
+def _calls_function(relative_path: str, function_name: str) -> bool:
+    """Whether a module really calls `function_name`, read with `ast`, not grepped."""
+    tree = parse_source(relative_path, _read(relative_path))
+    return any(
+        isinstance(node, ast.Call) and dotted_name(node.func).split(".")[-1] == function_name
+        for node in ast.walk(tree)
+    )
+
+
+def _pinned_requirement(package_name: str) -> str:
+    """The `name==version` line requirements.txt pins for a package, or ''."""
+    for line in _read("requirements.txt").splitlines():
+        if line.strip().lower().startswith(f"{package_name.lower()}=="):
+            return line.strip()
+    return ""
+
+
+def _modules_importing(top_level_package: str, *relative_directories: str) -> list[str]:
+    """Every module under the directories that imports `top_level_package`."""
+    importers: list[str] = []
+    for path in python_files_under(*relative_directories):
+        tree = parse_source(project_relative(path), path.read_text(encoding="utf-8"))
+        if any(
+            module == top_level_package or module.startswith(f"{top_level_package}.")
+            for module, _line in imported_modules(tree)
+        ):
+            importers.append(project_relative(path))
+    return importers
 
 
 def _model_is_offered_tools() -> bool:
@@ -1083,8 +1101,9 @@ def _model_is_offered_tools() -> bool:
 def check_agent_process() -> tuple[bool, str]:
     """Blueprint 4.5/6/9.3: the agent is an independent process that chooses tools.
 
-    Four claims: its own entry point, no import from the web tier, a real
-    loop around the model's turns, and a tool manifest actually offered.
+    Three claims: its own entry point, no import from the web tier, and a
+    tool manifest actually offered. That the model is driven by a real
+    multi-step loop is `check_deep_agent`'s claim.
     """
     problems: list[str] = []
     if not (PROJECT_ROOT / "agent_service" / "__main__.py").is_file():
@@ -1093,8 +1112,6 @@ def check_agent_process() -> tuple[bool, str]:
     isolation = apply_rule(agent_isolation_violations, "agent_service", "mcp_server")
     problems.extend(str(violation) for violation in isolation)
 
-    if not _loop_encloses_model_turns():
-        problems.append("agent_service/loop.py has no loop around the model turns")
     if not _model_is_offered_tools():
         problems.append("agent_service/llm_client.py never passes tools= to the model")
     if not _defines_the_tool_manifest_builder():
@@ -1103,8 +1120,87 @@ def check_agent_process() -> tuple[bool, str]:
     return _verdict(
         problems,
         "runs as `python -m agent_service`; imports no module above "
-        "app.domain/config/infrastructure/eventstore; loop.py drives the "
-        "model from a while loop and llm_client.py offers it a tool manifest",
+        "app.domain/config/infrastructure/eventstore; llm_client.py offers "
+        "the model a tool manifest",
+    )
+
+
+def check_deep_agent() -> tuple[bool, str]:
+    """Lecturer requirement 11: the assessment agent is built on Deep Agent.
+
+    Three claims: `deepagents` is pinned, `agent_service/deep_agent.py`
+    really calls `create_deep_agent`, and the analysis in loop.py runs
+    through it rather than through a loop of its own.
+    """
+    pin = _pinned_requirement("deepagents")
+    problems: list[str] = []
+    if not pin:
+        problems.append("requirements.txt does not pin deepagents")
+    if not _calls_function("agent_service/deep_agent.py", "create_deep_agent"):
+        problems.append("agent_service/deep_agent.py never calls create_deep_agent")
+    if not _calls_function("agent_service/loop.py", "run_deep_agent"):
+        problems.append("agent_service/loop.py does not run the analysis through run_deep_agent")
+
+    return _verdict(
+        problems,
+        f"{pin}; deep_agent.py builds the agent with create_deep_agent and "
+        f"loop.py runs every analysis through run_deep_agent",
+    )
+
+
+def check_external_mcp() -> tuple[bool, str]:
+    """Lecturer requirement 9: an external service is consumed over MCP.
+
+    Tavily must be reached through an MCP client session over Streamable
+    HTTP, and no module may still reach it through its REST SDK.
+    """
+    tavily_module = "agent_service/tools/tavily_mcp.py"
+    problems: list[str] = []
+    if not _calls_function(tavily_module, "streamable_http_client"):
+        problems.append(f"{tavily_module} opens no Streamable HTTP MCP connection")
+    if not _calls_function(tavily_module, "call_tool"):
+        problems.append(f"{tavily_module} never calls an MCP tool")
+    rest_importers = _modules_importing("tavily", "agent_service", "app", "scripts")
+    problems.extend(f"{module} still imports the Tavily REST SDK" for module in rest_importers)
+    if _pinned_requirement("tavily-python"):
+        problems.append("requirements.txt still pins tavily-python")
+
+    return _verdict(
+        problems,
+        "web search reaches Tavily's MCP server over Streamable HTTP "
+        "(tavily_mcp.py: streamable_http_client + call_tool); no module "
+        "imports the REST SDK",
+    )
+
+
+def check_profile_vectors() -> tuple[bool, str]:
+    """Lecturer requirement 6: adopter "resumes" embedded and searched semantically.
+
+    Verifies the job type, the vector index with its sync and nearest-match
+    surface, the worker branch and the ingestion script, without opening
+    Chroma or Ollama; the agent suite proves the search itself.
+    """
+    from agent_service.rag.profile_index import ProfileIndex
+    from app.domain.enums import AnalysisJobType
+
+    problems: list[str] = []
+    if "SEMANTIC_ADOPTER_SEARCH" not in AnalysisJobType.__members__:
+        problems.append("AnalysisJobType has no SEMANTIC_ADOPTER_SEARCH")
+    problems.extend(
+        f"ProfileIndex has no {method}()"
+        for method in ("sync", "nearest")
+        if not hasattr(ProfileIndex, method)
+    )
+    if "SEMANTIC_ADOPTER_SEARCH" not in _read("agent_service/worker.py"):
+        problems.append("agent_service/worker.py does not handle SEMANTIC_ADOPTER_SEARCH")
+    if not (PROJECT_ROOT / "scripts" / "ingest_profiles.py").is_file():
+        problems.append("scripts/ingest_profiles.py is missing")
+
+    return _verdict(
+        problems,
+        "adopter profile resumes are embedded into their own Chroma collection "
+        "(ProfileIndex.sync) and searched by nearest vector for an animal "
+        "(SEMANTIC_ADOPTER_SEARCH); scripts/ingest_profiles.py present",
     )
 
 
@@ -1861,8 +1957,11 @@ ALL_CHECKS = (
     Check("4.4 Dashboard", check_dashboard),
     Check("4.5 Data entry forms", check_data_entry),
     Check("AI agent, own process", check_agent_process),
+    Check("Deep Agent framework", check_deep_agent),
     Check("Web search", check_web_search),
+    Check("External service over MCP", check_external_mcp),
     Check("Vector DB + RAG", check_rag),
+    Check("Adopter profile vectors", check_profile_vectors),
     Check("Two local MCP tools (stdio)", check_mcp_tools),
     Check("MVC + CQRS", check_mvc_and_cqrs),
     Check("Controller boundary", check_controller_boundary),

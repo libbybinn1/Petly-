@@ -1,8 +1,10 @@
-"""The agent's reason-act-observe loop.
+"""One analysis task, end to end, around the Deep Agent reasoning loop.
 
 Course blueprint section 6 requires a real agent rather than a single model
-call: it plans, selects tools, observes results and revises its plan. This
-module implements that cycle for one analysis task.
+call: it plans, selects tools, observes results and revises its plan.
+Requirement 11 of the course brief asks for that agent to be built on the
+Deep Agent infrastructure. This module owns the task; the reasoning itself
+runs in `deepagents.create_deep_agent` (see `agent_service.deep_agent`).
 
 How one task runs:
 
@@ -12,12 +14,12 @@ How one task runs:
    observations. They are not negotiable: an explanation must never be
    written over records the agent could not read, and the score has to exist
    whatever the model does.
-2. **The bounded reason-act loop.** The model receives the facts, the score,
-   every observation so far and a tool manifest, and answers with *either* a
-   tool call or its final explanation. A tool call is dispatched, its result
-   is appended as an observation, and the model is asked again - at most
-   `max_reasoning_steps` times. The model chooses; nothing here chooses for
-   it (blueprint section 6.2).
+2. **The deep agent.** The model receives the facts, the score, every
+   observation so far and a tool manifest - the project's four tools plus the
+   Deep Agent planning tool `write_todos` - and answers with *either* a tool
+   call or its final explanation. The deep agent runs the call, feeds the
+   result back and asks again, at most `max_reasoning_steps` times. The model
+   chooses; nothing here chooses for it (blueprint section 6.2).
 3. **Grounding.** The answer is checked against the evidence actually
    retrieved before any of it is stored (see `agent_service.explanation`).
 
@@ -36,6 +38,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -49,7 +52,14 @@ from app.domain.facts import (
 )
 from app.domain.matching import AdopterFacts, AnimalFacts, MatchScore, calculate_match_score
 from app.infrastructure.clock import aware_utc_now
+from langchain_core.tools import BaseTool
 
+from agent_service.deep_agent import (
+    PLANNING_TOOL,
+    DeepAgentTask,
+    as_agent_tool,
+    run_deep_agent,
+)
 from agent_service.explanation import (
     DETERMINISTIC_FALLBACK_MODEL,
     build_evidence,
@@ -59,15 +69,7 @@ from agent_service.explanation import (
     merge_missing_information,
     shorten,
 )
-from agent_service.llm_client import (
-    ChatMessage,
-    LanguageModel,
-    LanguageModelUnavailableError,
-    MalformedModelOutputError,
-    ToolCallRequest,
-    ToolSchema,
-    next_model_turn,
-)
+from agent_service.llm_client import LanguageModel
 from agent_service.rag.knowledge_base import KnowledgeRetriever
 from agent_service.reasoning_session import ReasoningSession, ReasoningStep
 from agent_service.tools.mcp_tools import ProfileLookup, ToolAdvertiser, ToolDefinition
@@ -75,9 +77,7 @@ from agent_service.tools.web_search import WebSearchProvider, decide_whether_to_
 
 PROMPT_DIRECTORY = Path(__file__).resolve().parent / "prompts"
 
-# Observations are fed back to a 3-billion-parameter model with a finite
-# context window, so each one is trimmed rather than pasted whole.
-MAX_OBSERVATION_CHARACTERS = 1200
+# Tool results are trimmed for the trace and for a small model's context.
 MAX_RECORD_PREVIEW_CHARACTERS = 800
 MAX_TRACE_DETAIL_CHARACTERS = 200
 MAX_QUERY_IN_TRACE_CHARACTERS = 120
@@ -431,7 +431,7 @@ class MatchAnalysisAgent:
         )
 
     def _fetch_record_again(
-        self, tool_name: str, arguments: dict[str, Any], session: ReasoningSession
+        self, tool_name: str, arguments: Mapping[str, object], session: ReasoningSession
     ) -> str:
         """Re-fetch a record because the model asked for it.
 
@@ -465,7 +465,7 @@ class MatchAnalysisAgent:
         return self._mcp_client.get_animal_profile(identifier)
 
     # ------------------------------------------------------------------
-    # The loop itself
+    # The deep agent
     # ------------------------------------------------------------------
 
     def _explain(
@@ -475,7 +475,11 @@ class MatchAnalysisAgent:
         score: MatchScore,
         session: ReasoningSession,
     ) -> dict[str, Any]:
-        """Run the reason-act loop and return the grounded explanation.
+        """Run the deep agent and return the grounded explanation.
+
+        Requirement 11 and blueprint section 6.2: the model plans with
+        `write_todos`, chooses its tools and observes their results inside
+        `deepagents.create_deep_agent` (see `agent_service.deep_agent`).
 
         Args:
             adopter_payload: The adopter record, as the tool returned it.
@@ -487,33 +491,32 @@ class MatchAnalysisAgent:
             The explanation fields, with `model_name` naming whoever wrote
             them - the model, or the deterministic fallback.
         """
-        manifest = self._announce_manifest(session)
-        messages: list[ChatMessage] = [
-            {"role": "system", "content": load_prompt("explanation_system.md")},
-            {
-                "role": "user",
-                "content": build_explanation_prompt(
-                    adopter_payload, animal_payload, score, session
-                ),
-            },
-        ]
+        definitions = self._announce_manifest(session)
+        task = DeepAgentTask(
+            system_prompt=load_prompt("explanation_system.md"),
+            planning_prompt=load_prompt("planning_system.md"),
+            user_prompt=build_explanation_prompt(adopter_payload, animal_payload, score, session),
+            tools=[self._as_agent_tool(definition, session) for definition in definitions],
+            max_reasoning_steps=self._max_reasoning_steps,
+        )
 
-        answer = self._take_turns(messages, manifest, session)
+        answer = run_deep_agent(self._language_model, task, session)
         if answer is None:
             return deterministic_explanation(score)
         return ground_explanation(answer, score, session, self._language_model.model_name)
 
-    def _announce_manifest(self, session: ReasoningSession) -> list[ToolSchema]:
+    def _announce_manifest(self, session: ReasoningSession) -> list[ToolDefinition]:
         """Build this task's tool manifest and record what it holds.
 
         Args:
             session: The task state, which receives the observation.
 
         Returns:
-            The manifest in the form the model's API expects.
+            The project tools the model may choose from. The deep agent adds
+            its own planning tool, which the recorded manifest names too.
         """
         definitions, problem = build_tool_manifest(self._mcp_client)
-        detail = ", ".join(definition.name for definition in definitions) or "(none)"
+        detail = ", ".join([*(definition.name for definition in definitions), PLANNING_TOOL])
         if problem is not None:
             detail = f"{detail} (MCP manifest unavailable: {problem})"
             session.note_gap(
@@ -521,108 +524,55 @@ class MatchAnalysisAgent:
                 "offer its record tools to the model."
             )
         session.record("tool_manifest", detail)
-        return [_as_model_tool(definition) for definition in definitions]
+        return definitions
 
-    def _take_turns(
-        self,
-        messages: list[ChatMessage],
-        manifest: list[ToolSchema],
-        session: ReasoningSession,
-    ) -> dict[str, Any] | None:
-        """Ask the model for its next move until it answers or the cap is hit.
-
-        This is what the step cap actually bounds (blueprint section 6.2):
-        each iteration is one model decision plus at most one tool call, so
-        the loop terminates by construction.
+    def _as_agent_tool(self, definition: ToolDefinition, session: ReasoningSession) -> BaseTool:
+        """Wrap one project tool so a deep-agent call reaches `_dispatch`.
 
         Args:
-            messages: The conversation, extended in place as it runs.
-            manifest: The tools the model may choose from.
-            session: The task state.
+            definition: The tool as the manifest declares it.
+            session: The task state the tool records into.
 
         Returns:
-            The model's final answer, or None when it never produced one -
-            because the host was unreachable, the answer never parsed, or the
-            step budget ran out.
+            The tool in the form the deep agent offers to the model.
         """
-        step_count = 0
-        while step_count < self._max_reasoning_steps:
-            step_count += 1
-            try:
-                turn = next_model_turn(self._language_model, messages, manifest)
-            except LanguageModelUnavailableError as error:
-                session.record("model_unavailable", _trace_detail(error))
-                return None
-            except MalformedModelOutputError as error:
-                session.record("malformed_answer", _trace_detail(error))
-                return None
 
-            if turn.is_final:
-                answer = turn.final_content or {}
-                session.record("final_answer", f"step {step_count}: keys={sorted(answer)}")
-                return answer
+        def run_tool(arguments: dict[str, object]) -> str:
+            return self._dispatch(definition.name, arguments, session)
 
-            self._act_on(turn.tool_call, messages, session)
+        return as_agent_tool(definition, run_tool)
 
-        session.record("step_cap_reached", f"stopped after {step_count} step(s)")
-        session.note_gap(
-            f"The agent reached its {self._max_reasoning_steps}-step reasoning "
-            f"budget before writing an explanation."
-        )
-        return None
-
-    def _act_on(
-        self,
-        tool_call: ToolCallRequest | None,
-        messages: list[ChatMessage],
-        session: ReasoningSession,
-    ) -> None:
-        """Dispatch the tool the model chose and append the observation.
-
-        Args:
-            tool_call: The call the model asked for.
-            messages: The conversation, extended with the call and its result.
-            session: The task state.
-        """
-        if tool_call is None:
-            return
-
-        observation = self._dispatch(tool_call, session)
-        messages.append(
-            {
-                "role": "assistant",
-                "content": f"Calling {tool_call.tool_name}({tool_call.argument_summary}).",
-            }
-        )
-        messages.append(
-            {"role": "tool", "content": shorten(observation, MAX_OBSERVATION_CHARACTERS)}
-        )
-
-    def _dispatch(self, tool_call: ToolCallRequest, session: ReasoningSession) -> str:
+    def _dispatch(
+        self, tool_name: str, arguments: dict[str, object], session: ReasoningSession
+    ) -> str:
         """Route one model-chosen tool call to its implementation.
 
-        An unknown name is reported back rather than raised: a small model
-        occasionally invents a tool, and saying so is what lets it re-plan.
+        Every tool goes through the same methods the deterministic
+        prerequisites use, so the spec section 13 gate, the trace and the gap
+        notes behave identically whoever asked. A name with no
+        implementation - an MCP tool this agent does not know - is reported
+        back rather than raised, so the model can re-plan.
 
         Args:
-            tool_call: The call the model asked for.
+            tool_name: The tool the model named.
+            arguments: The arguments it chose.
             session: The task state.
 
         Returns:
             The observation to feed back to the model.
         """
-        if tool_call.tool_name == TOOL_RAG_SEARCH:
-            return self._search_knowledge(_query_argument(tool_call), session)
+        if tool_name == TOOL_RAG_SEARCH:
+            return self._search_knowledge(_query_argument(arguments), session)
 
-        if tool_call.tool_name == TOOL_WEB_SEARCH:
-            return self._search_web(_query_argument(tool_call), session)
+        if tool_name == TOOL_WEB_SEARCH:
+            return self._search_web(_query_argument(arguments), session)
 
-        if tool_call.tool_name in (MCP_ADOPTER_TOOL, MCP_ANIMAL_TOOL):
-            return self._fetch_record_again(tool_call.tool_name, tool_call.arguments, session)
+        if tool_name in (MCP_ADOPTER_TOOL, MCP_ANIMAL_TOOL):
+            return self._fetch_record_again(tool_name, arguments, session)
 
-        session.record("unknown_tool", tool_call.tool_name)
+        session.record("unknown_tool", tool_name)
         return (
-            f"There is no tool named {tool_call.tool_name}. Choose one of the tools "
+            f"There is no tool named {tool_name}. Choose one of the tools "
             f"you were given, or answer with your final JSON object."
         )
 
@@ -667,19 +617,7 @@ def _advertised_mcp_tools(mcp_client: ProfileLookup) -> tuple[list[ToolDefinitio
     return [item for item in advertised if isinstance(item, ToolDefinition)], None
 
 
-def _as_model_tool(definition: ToolDefinition) -> ToolSchema:
-    """Convert one definition into the shape a chat API expects."""
-    return {
-        "type": "function",
-        "function": {
-            "name": definition.name,
-            "description": definition.description,
-            "parameters": definition.input_schema,
-        },
-    }
-
-
-def _identifier_argument(arguments: dict[str, Any]) -> str:
+def _identifier_argument(arguments: Mapping[str, object]) -> str:
     """Read the record identifier an MCP tool call was made with.
 
     The declared names are tried first. Taking whatever happened to come out
@@ -710,7 +648,7 @@ def _identifier_argument(arguments: dict[str, Any]) -> str:
     return ""
 
 
-def _query_argument(tool_call: ToolCallRequest) -> str:
+def _query_argument(arguments: Mapping[str, object]) -> str:
     """Read the query a search tool was called with.
 
     Small models sometimes name the argument something else - `q`, `question`
@@ -718,24 +656,19 @@ def _query_argument(tool_call: ToolCallRequest) -> str:
     more useful than refusing a call that plainly meant to search.
 
     Args:
-        tool_call: The call the model asked for.
+        arguments: The arguments the model chose.
 
     Returns:
         The query, or an empty string when the call carried no text.
     """
-    named = tool_call.arguments.get("query")
+    named = arguments.get("query")
     if isinstance(named, str) and named.strip():
         return named.strip()
 
-    for value in tool_call.arguments.values():
+    for value in arguments.values():
         if isinstance(value, str) and value.strip():
             return value.strip()
     return ""
-
-
-def _trace_detail(error: Exception) -> str:
-    """Render one exception short enough to sit in the reasoning trace."""
-    return shorten(str(error), MAX_TRACE_DETAIL_CHARACTERS)
 
 
 def _observe_tool_failure(tool_name: str, error: Exception, session: ReasoningSession) -> str:

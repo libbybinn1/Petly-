@@ -43,7 +43,7 @@ they were convenient to install.
 | Skill | What it is for |
 |---|---|
 | **`clean-code`** | The style contract, applied to every Python file written here: Single Responsibility, descriptive unabbreviated names, guard clauses and early returns, extracted helpers, maximum nesting depth of three, strict typing, Google-convention docstrings. Carries a before/after example and a pre-commit checklist, so it is a thing to apply rather than a thing to agree with. |
-| **`db-management`** | One command surface for the database — `scripts/db.py check / create / reset / seed / fresh / tables / events` — plus the SQL Server 2014 constraints that shaped the schema, so they are not rediscovered painfully. It is the reason "no JSON type" appears in the model file as a comment rather than as a bug report. |
+| **`db-management`** | One command surface for the database — `scripts/db.py check / create / reset / seed / fresh / tables / events / sync-job-type-check` — plus the SQL Server 2014 constraints that shaped the schema, so they are not rediscovered painfully. It is the reason "no JSON type" appears in the model file as a comment rather than as a bug report. |
 | **`testing`** | How to run each suite by marker with the external interpreter, what each suite must prove, and two hard rules: never assert on generated text, and scoring tests never touch an LLM. It also records the symptom of using the wrong interpreter, which cost real time once. |
 
 `clean-code` is not advisory. Most of it is enforced mechanically by ruff:

@@ -124,6 +124,7 @@ Sources: course blueprint §4, §12, §13, §17; PetMatch spec §4–§25.
 | FR-9.7 | Every match MUST be presented with reasons and concerns, never a bare number. | MUST | `test_every_criterion_supplies_an_explanation`, `test_an_empty_reasons_list_falls_back_to_the_criterion_text` |
 | FR-9.8 | The eleven criteria of spec §8 MUST each be weighted in both directions, and each weight set MUST sum to 1. | MUST | `test_each_direction_sums_to_one`, `test_every_criterion_is_weighted_in_both_directions` |
 | FR-9.9 | Every eligible match MUST carry a fit grade (A+ to F) whose itemised deductions add up to exactly 100 minus the score, each with its criterion's explanation. A disqualified match MUST carry none. | MUST | `test_deductions_add_up_to_exactly_what_the_score_is_missing`, `test_the_grade_never_contradicts_the_band`, `test_a_disqualified_pairing_shows_no_grade` |
+| FR-9.10 | Adopter profiles (the brief's "résumés") MUST be embedded in a vector database, and staff MUST be able to run a semantic search matching adopters to an animal (lecturer requirement 6). The search runs in the agent process, never in a request, and its matches are shown beside the deterministic eligibility, never instead of it. | MUST | `test_the_nearest_profile_is_the_one_closest_in_meaning`, `test_an_unchanged_profile_is_not_embedded_again`, `test_ready_matches_show_similarity_beside_the_deterministic_verdict`, `test_an_adopter_is_refused`; `scripts/verify_requirements.py`, check "Adopter profile vectors" |
 
 ### FR-10 The agent
 
@@ -142,6 +143,8 @@ Sources: course blueprint §4, §12, §13, §17; PetMatch spec §4–§25.
 | FR-10.11 | The agent MUST choose its own tools rather than running a fixed script, and the loop MUST terminate by a real bound. | MUST | `test_the_manifest_is_sent_to_the_model_on_every_turn`, `test_a_scripted_rag_call_reaches_the_knowledge_base_with_its_query`, `test_the_step_cap_terminates_a_model_that_never_answers` |
 | FR-10.12 | The steps the agent took MUST be auditable after the fact. | MUST | `test_the_loop_stops_when_the_model_answers_and_records_every_step`, `test_the_reasoning_trace_is_stored_as_json`, `test_the_reasoning_trace_and_cited_markers_are_rendered` |
 | FR-10.13 | A job abandoned by a killed worker MUST return to the queue without an operator. | MUST | `test_a_stranded_job_returns_to_the_queue_and_runs`, `test_a_recently_claimed_job_is_left_alone` |
+| FR-10.14 | The assessment agent MUST be built on the Deep Agent infrastructure (lecturer requirement 11): its reasoning runs in `deepagents.create_deep_agent`, with `write_todos` planning. | MUST | `test_a_scripted_tool_call_travels_through_the_deep_agent_and_back`, `test_the_plan_the_model_writes_is_recorded_in_the_trace`, `test_the_step_cap_stops_a_model_that_only_calls_tools`; `scripts/verify_requirements.py`, check "Deep Agent framework" |
+| FR-10.15 | External services MUST be consumed over MCP (lecturer requirement 9): web search reaches Tavily's MCP server, and the API key MUST never appear in a URL, log or trace. | MUST | `test_a_recorded_structured_result_maps_onto_search_results`, `test_the_key_travels_as_a_header_never_in_the_url`, `test_any_failure_degrades_to_no_results`; `scripts/verify_requirements.py`, check "External service over MCP" |
 
 ### FR-11 MCP tools
 

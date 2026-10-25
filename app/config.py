@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 
 # The corporate network re-signs HTTPS with a Palo Alto "Forward Trust CA".
 # Python's bundled certificate list does not contain that root, so outbound
-# HTTPS (Tavily) fails verification unless we use the Windows trust store.
+# HTTPS (the Tavily MCP server) fails verification unless we use the Windows trust store.
 # This must run before any HTTPS client is constructed anywhere in the process.
 truststore.inject_into_ssl()
 

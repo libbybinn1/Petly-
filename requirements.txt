@@ -26,9 +26,16 @@ pydantic==2.13.5
 chromadb==0.5.3
 
 # ---- Agent: LLM + MCP + web search ----
-ollama==0.3.1
+# 0.4+ is required alongside deepagents: 0.3.x caps httpx below 0.28, which
+# deepagents' dependencies need, so a clean install could not resolve.
+ollama==0.6.1
 # 2.x renamed FastMCP to MCPServer; the server uses the 2.x API.
 mcp==2.2.0
+# Deep Agent infrastructure (course requirement 11): the reasoning loop is
+# deepagents.create_deep_agent on LangGraph. It drives the project's own
+# model through an adapter (agent_service/deep_agent.py), so no
+# langchain-ollama; the Anthropic/Google integrations it pulls in are unused.
+deepagents==0.7.32
 
 # ---- HTTP client & Image handling ----
 requests==2.32.3

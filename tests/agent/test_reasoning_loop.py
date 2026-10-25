@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from agent_service.deep_agent import PLANNING_TOOL
 from agent_service.explanation import DETERMINISTIC_FALLBACK_MODEL
 from agent_service.llm_client import (
     ChatMessage,
@@ -187,6 +188,9 @@ class TestToolSelectionIsTheModels:
 
         Without this the tool descriptions are documentation rather than a
         manifest: the audit found zero `tools=` payloads reaching the model.
+        The set is exact: the project's four tools plus the Deep Agent
+        planning tool, and none of the deepagents filesystem or sub-agent
+        tools the engine is configured to withhold.
         """
         model = StubLanguageModel(
             scripted_turns=[
@@ -205,6 +209,7 @@ class TestToolSelectionIsTheModels:
                 MCP_ANIMAL_TOOL,
                 TOOL_RAG_SEARCH,
                 TOOL_WEB_SEARCH,
+                PLANNING_TOOL,
             }
 
     def test_a_model_chosen_record_lookup_runs_through_mcp(self) -> None:

@@ -15,8 +15,11 @@ criteria and explains a match. A human staff member decides.
 
 Blueprint §6 is explicit that the agent must be a real component and not a
 single LLM call: it plans, chooses tools, observes results and revises its
-plan. PetMatch's agent does that in a bounded loop (§4 below), and runs as
-its own operating-system process.
+plan. Course requirement 11 asks for it to be built on the **Deep Agent**
+infrastructure. PetMatch's reasoning loop is LangChain's
+`deepagents.create_deep_agent` (version 0.7.32, on LangGraph), with its
+`write_todos` planning tool, bounded by a hard step cap (§4 below). The agent
+runs as its own operating-system process.
 
 ### The division of labour — the central design decision
 
@@ -101,7 +104,8 @@ counted as skipped, not scored on defaults.
 
 ## 4. The loop
 
-`agent_service/loop.py`. One task runs in three phases.
+`agent_service/loop.py` owns the task; `agent_service/deep_agent.py` owns the
+reasoning engine. One task runs in three phases.
 
 ### Phase 1 — deterministic prerequisites
 
@@ -122,33 +126,81 @@ any model is involved. Retrieval runs before the first model turn because
 RAG-first is the policy and because a model that answers immediately should
 still be answering over evidence.
 
-### Phase 2 — the bounded reason-act loop
+### Phase 2 — the Deep Agent
 
 ```
-while step_count < AGENT_MAX_REASONING_STEPS:
-    send: system prompt + facts + score + criterion breakdown + every observation
-          + the tool manifest
-    the model replies with EITHER a tool call OR its final JSON answer
-      tool call  ─▶ dispatch it, append the observation, loop
-      answer     ─▶ leave the loop
+create_deep_agent(model=LanguageModelChatAdapter, tools=[4 project tools],
+                  system_prompt=explanation_system.md,
+                  middleware=[TodoListMiddleware, ModelCallLimitMiddleware,
+                              ReasoningTraceMiddleware])
+agent.invoke(facts + score + criterion breakdown + every observation so far)
+  each model turn: the model replies with EITHER a tool call OR its final JSON
+    write_todos  ─▶ the plan is kept in the agent state and copied to the trace
+    project tool ─▶ MatchAnalysisAgent._dispatch, observation fed back, next turn
+    answer       ─▶ the graph ends
+  at most AGENT_MAX_REASONING_STEPS model turns
 ```
 
-The model chooses the tool and its arguments; nothing in the loop chooses for
-it (blueprint §6.2). One tool per turn, so every observation is attributable
-to the call that produced it.
+The model chooses the tool and its arguments; nothing in the engine chooses
+for it (blueprint §6.2). One tool per turn, so every observation is
+attributable to the call that produced it.
 
-The loop leaves for one of four reasons, and each has a defined result:
+**The adapter.** `LanguageModelChatAdapter` is a LangChain `BaseChatModel`
+that wraps the project's own `LanguageModel` protocol
+(`complete_with_tools(messages, tools) -> ModelTurn`). `bind_tools` converts
+LangChain tools into the `{"type": "function", ...}` schemas Ollama reads;
+`_generate` converts LangChain messages into `ChatMessage` dicts, calls
+`next_model_turn`, and converts the `ModelTurn` back into an `AIMessage` with
+one tool call, or with the final answer as JSON text. So `OllamaLanguageModel`
+is still the real model, and `StubLanguageModel(scripted_turns=...)` drives
+the deep agent offline in tests (CLAUDE.md R3). `langchain-ollama` is not
+used: it would be a second Ollama client with its own retry and JSON handling,
+and it could not be scripted.
 
-| Exit | Result |
-|---|---|
-| The model answered | Its answer, after the grounding check (§7) |
-| `AGENT_MAX_REASONING_STEPS` reached | Deterministic explanation, plus a `missing_information` line naming the budget |
-| `LanguageModelUnavailableError` | Deterministic explanation, `model_name = deterministic-fallback` |
-| `MalformedModelOutputError` after the bounded retries | Deterministic explanation, `model_name = deterministic-fallback` |
+**The tools** are the existing `MatchAnalysisAgent` methods, wrapped as
+LangChain tools (`as_agent_tool`) with each definition's own JSON schema. The
+spec §13 gate, the trace entries and the gap notes therefore behave exactly as
+they do in phase 1. The schema is not validated by LangChain, deliberately: the
+tools already accept a small model calling `rag_search` with `q` instead of
+`query`, and a validation error would waste a turn.
 
-An unknown tool name is *not* an exit: the model is told there is no such tool
-and asked again, because small models invent tool names and one bad turn
-should not cost the job.
+**Middleware in the stack, and why.** deepagents 0.7.32 assembles a default
+stack; a harness profile registered for the adapter's provider key
+(`petmatch`) slims it for a 3B model on a CPU, where every tool description is
+paid for on every turn (§14):
+
+| Middleware | Kept? | Why |
+|---|---|---|
+| `TodoListMiddleware` (`write_todos`) | **added** | The Deep Agent planning tool; its plan is copied into the trace. Its guidance is the short `prompts/planning_system.md`, not the library's much longer default |
+| `ModelCallLimitMiddleware(run_limit=AGENT_MAX_REASONING_STEPS)` | **added** | The step cap, counted exactly in model turns |
+| `ReasoningTraceMiddleware` | **added** | Records `write_todos` plans and invented tool names in the session trace |
+| `FilesystemMiddleware` | kept, tools hidden | deepagents treats it as protected scaffolding and will not remove it; all eight of its tools (`ls`, `read_file`, `write_file`, `edit_file`, `delete`, `glob`, `grep`, `execute`) are excluded. Nothing here reads files: records come from MCP, guidance from RAG |
+| `SubAgentMiddleware` and the `task` tool | **off** | The general-purpose sub-agent is disabled. A sub-agent is a second agent loop at 30–40 s a turn, and one pairing fits one context |
+| `SummarizationMiddleware` | **off** | The step cap keeps the conversation far below the context window, and a summary would be an extra model call outside the step budget |
+| `PatchToolCallsMiddleware`, `UnsupportedContentMiddleware` | kept | Housekeeping; no model calls, no prompt text |
+| Provider prompt caching | kept | No-ops for a non-Anthropic model |
+
+The model therefore sees five tools: the four project tools and `write_todos`.
+
+The run ends for one of four reasons, and each has a defined result and the
+same trace entry the hand-written loop it replaced used to write:
+
+| Exit | Trace entry | Result |
+|---|---|---|
+| The model answered | `final_answer` | Its answer, after the grounding check (§7) |
+| `AGENT_MAX_REASONING_STEPS` turns spent (the model-call limit raises) | `step_cap_reached` | Deterministic explanation, plus a `missing_information` line naming the budget |
+| `LanguageModelUnavailableError` raised inside the graph | `model_unavailable` | Deterministic explanation, `model_name = deterministic-fallback` |
+| `MalformedModelOutputError` after the bounded retries | `malformed_answer` | Deterministic explanation, `model_name = deterministic-fallback` |
+
+LangGraph's `recursion_limit` is derived from the same budget
+(`4 × steps + 8` supersteps; one turn and its tool call measure at 3) as a
+backstop: the model-call cap always fires first, and LangGraph's recursion
+error is treated as the step cap too. Planning spends a turn from the same budget.
+
+An unknown tool name — including a withheld built-in such as `write_file` or
+`task` — is *not* an exit: the model is told there is no such tool and asked
+again, because small models invent tool names and one bad turn should not
+cost the job.
 
 ### Phase 3 — grounding and persistence
 
@@ -159,8 +211,9 @@ with the deterministic gaps, and written with its reasoning trace (§8).
 
 ## 5. The tool manifest
 
-Four tools are offered, and the manifest is built per task at runtime
-(`build_tool_manifest`). Where each description comes from matters, because
+Four project tools are offered, built per task at runtime
+(`build_tool_manifest`), plus the Deep Agent planning tool. No tool can make
+or record an adoption decision (§15). Where each description comes from matters, because
 the description is the only thing the model reads when deciding:
 
 | Tool | Description written in | Transport | Read-only |
@@ -168,12 +221,14 @@ the description is the only thing the model reads when deciding:
 | `get_adopter_profile` | `mcp_server/server.py` docstring, read at runtime via `ClientSession.list_tools()` | MCP / stdio | yes |
 | `get_animal_profile` | `mcp_server/server.py` docstring, read at runtime | MCP / stdio | yes |
 | `rag_search` | `LOCAL_TOOL_DEFINITIONS` in `agent_service/loop.py` | in-process | yes |
-| `web_search` | `LOCAL_TOOL_DEFINITIONS` in `agent_service/loop.py` | HTTPS (Tavily) | yes |
+| `web_search` | `LOCAL_TOOL_DEFINITIONS` in `agent_service/loop.py` | MCP over Streamable HTTP (Tavily) | yes |
+| `write_todos` | `PLANNING_TOOL_DESCRIPTION` in `agent_service/deep_agent.py`; contributed by the deep agent's `TodoListMiddleware` | in-process, agent state only | yes — it writes only the plan |
 
 The MCP half is read from the server, not restated here, so docs/MCP.md §5 —
 "the docstring is the only thing the model sees" — is literally true. Each
 definition carries a name, that description and a JSON parameter schema, and
-is converted into the `tools=[{"type": "function", "function": {...}}]` shape
+is wrapped as a LangChain tool for the deep agent, then converted back by the
+adapter into the `tools=[{"type": "function", "function": {...}}]` shape
 Ollama's chat API expects.
 
 The definitions are cached on the client after the first successful listing:
@@ -275,8 +330,9 @@ and criterion scores the prompt supplied.
 Every step is recorded as `{step, action, detail}` and stored in
 `match_analyses.reasoning_trace` as JSON: both record fetches, the score, each
 retrieval with its query and result count, each gate decision with its reason,
-each tool failure, dropped citations, the manifest offered, and the final
-answer or the reason there was none.
+each tool failure, dropped citations, the manifest offered, the deep agent's
+plan (`write_todos`, each step with its status), any invented tool name
+(`unknown_tool`), and the final answer or the reason there was none.
 
 `app/templates/matches/analysis.html` renders it under "How the agent
 reasoned" when the view model exposes it. It is the audit artefact for
@@ -530,6 +586,30 @@ The design consequences, unchanged in direction and sharper in degree:
   observed behaviour of `qwen2.5:3b-instruct` is to answer on the first or
   second turn when the prerequisites already gathered evidence.
 
+### The Deep Agent engine — measured 2026-10-25
+
+Same machine and model, `AGENT_MAX_REASONING_STEPS=4`, a synthetic
+adopter/animal pair through a fake MCP client and the stub search provider
+(no database). The machine was loaded, so warm turns varied widely; the old
+hand-written loop was timed alternately on the same pairing for comparison.
+
+| Run | Model turns | Wall clock |
+|---|---|---|
+| Deep agent, cold model | 1 | 113 s, dominated by loading the model |
+| Deep agent, warm, curated evidence sufficient | 1 | 27–31 s |
+| Deep agent, warm, pairing with gaps (Saluki, hours not stated) | 1 | 36–80 s |
+| Old hand-written loop, warm, the same pairing with gaps | 1 | 37–82 s |
+
+The deep agent's own cost is small: building the graph and running its
+middleware takes under a second per analysis, and the prompt grows by about
+480 characters (the planning guidance) and the manifest by about 615 (the
+`write_todos` schema) — roughly 270 tokens, or ~3 s at the measured prompt
+rate. Model inference dominates every run. In each of these runs the model
+answered on its first turn without planning, which is what the planning
+prompt asks for when the evidence in the prompt is enough; even in a
+diagnostic run told to plan first, it answered directly. The planning path
+itself is proven offline by `tests/agent/test_deep_agent_engine.py`.
+
 Observed model behaviour worth recording: with the prerequisites' evidence in
 the prompt, the 3B model usually answers immediately rather than calling a
 tool — which is the correct decision and the one the manifest asks for. It
@@ -565,12 +645,13 @@ From spec §6.4 and blueprint §6.4. These are product requirements.
 | `OLLAMA_EMBED_MODEL` | `nomic-embed-text` | Embeddings |
 | `TAVILY_API_KEY` | — | Web search; absent falls back to an offline stub |
 | `AGENT_POLL_INTERVAL_SECONDS` | 3 | Queue poll interval |
-| `AGENT_MAX_REASONING_STEPS` | 8 | Loop cap; see §14 |
+| `AGENT_MAX_REASONING_STEPS` | 8 | The deep agent's model-turn cap, planning included; see §4 and §14 |
 | `CHROMA_PERSIST_DIR` | `data/chroma` | Vector store location |
 | `RAG_COLLECTION_NAME` | `petmatch_knowledge` | Collection name |
 
 Prompts and agent rules live in version-controlled files under
-`agent_service/prompts/`, per spec §16. `STRANDED_JOB_TIMEOUT_MINUTES` (15) is
+`agent_service/prompts/`, per spec §16: `explanation_system.md` is the deep
+agent's system prompt and `planning_system.md` its `write_todos` guidance. `STRANDED_JOB_TIMEOUT_MINUTES` (15) is
 a module constant in `agent_service/worker.py`; it belongs in configuration
 once `AgentConfiguration` has a field for it.
 
@@ -581,7 +662,8 @@ once `AgentConfiguration` has a field for it.
 | Module | Responsibility |
 |---|---|
 | `agent_service/worker.py` | The process: claim, reclaim, dispatch by job type, persist, cache |
-| `agent_service/loop.py` | One analysis: prerequisites, the manifest, the reason-act loop, tool dispatch |
+| `agent_service/loop.py` | One analysis: prerequisites, the manifest, tool dispatch, grounding |
+| `agent_service/deep_agent.py` | The Deep Agent engine: the chat-model adapter, the slimmed `create_deep_agent` stack, the step cap, trace recording |
 | `agent_service/explanation.py` | The prompt, the grounding check, the deterministic fallback |
 | `agent_service/reasoning_session.py` | One task's working set: trace, evidence, gaps, web-search flag |
 | `agent_service/llm_client.py` | Ollama access: JSON completion, tool-using turns, the offline stub |
