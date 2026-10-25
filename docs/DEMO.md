@@ -406,8 +406,8 @@ them. All of these are documented in the relevant `docs/` file too.
    implying otherwise.
 8. **Nesting depth 3 is a review rule, not a tool rule.** Ruff enforces
    `max-branches = 8`, which is related but not the same thing.
-9. **Nothing is pushed to GitHub yet.** The repository is local with a remote
-   configured; the push waits on the owner's sign-in (`PLANNING.md` §2 Q6).
+9. **The repository is on GitHub** at `https://github.com/libbybinn1/Petly-`;
+   make sure the lecturer can see it before the presentation.
 10. **The invitation's staff message is fixed text.** The route accepts a
     custom `staff_message`, but the discovery screen sends a hidden default;
     there is no control for staff to write their own.

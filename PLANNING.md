@@ -4,7 +4,7 @@
 
 **Method:** Specification-Driven Agentic Development (SDAD). Document first, then implement, then test, then verify against the spec. No feature starts before its spec section is written.
 
-**Source of truth:** `PetMatch_Final_Project_Specification_EN.docx` (product) + `Final_Project_Specification_and_Requirements_...docx` (course blueprint). Where the two disagree, the course blueprint wins — it states this explicitly in its §1.
+**Source of truth:** `docs/specifications/PetMatch_Final_Project_Specification_EN.docx` (product) + `docs/specifications/Final_Project_Specification_and_Requirements_Software_Engineering_in_the_AI_Era.docx` (course blueprint). Where the two disagree, the course blueprint wins — it states this explicitly in its §1.
 
 ---
 
@@ -114,7 +114,7 @@ architecture substantially.
 | Q3 | Web search | Tavily. Needed `truststore` to work behind the corporate TLS proxy. |
 | Q4 | Embeddings | `nomic-embed-text` via Ollama — one runtime, no PyTorch. |
 | Q5 | sh.skills | `mcp-builder` and `webapp-testing`, installed from the ecosystem's GitHub source while skills.sh itself was returning 503. |
-| Q6 | GitHub | A remote is configured on the local repository. The push itself is still pending the user's sign-in, so the history exists but is not yet on GitHub. |
+| Q6 | GitHub | Pushed to `https://github.com/libbybinn1/Petly-`; `main` tracks `origin/main`. |
 
 The original questions follow, kept because they record *why* each decision
 was open rather than assumed.

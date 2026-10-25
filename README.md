@@ -200,7 +200,7 @@ suite proves.
 | Path | What is in it |
 |---|---|
 | `app/controllers/` | Six Flask blueprints: home, auth, animals, matches, personal, dashboard |
-| `app/cqrs/` | `base.py` (the bus), `commands/` (18 handlers), `queries/` (19 handlers, and the view models) |
+| `app/cqrs/` | `base.py` (the bus), `commands/` (19 handlers), `queries/` (19 handlers, and the view models) |
 | `app/domain/` | Matching, application, invitation, profile and animal rules — no framework imports |
 | `app/eventstore/` | `store.py` (append-only) and `projections.py` (replay and rebuild) |
 | `app/infrastructure/` | SQLAlchemy models, engine, session factory |
@@ -209,6 +209,8 @@ suite proves.
 | `mcp_server/` | Local MCP tool server, spoken over stdio |
 | `knowledge/` | 17 curated guides embedded into the vector database |
 | `docs/` | The eleven specification documents, plus the demo runbook |
+| `docs/specifications/` | The source documents: the lecturer's requirements PDF, the course blueprint and the PetMatch product specification |
+| `docs/TEACHER_REQUIREMENTS_AUDIT.md` | The lecturer's requirements checked one by one against the code, with the open gaps |
 | `scripts/` | Database, seeding, ingestion, environment and verification tooling |
 | `tests/` | unit · integration · api · agent · e2e |
 | `.claude/skills/` | Five skills guiding the coding agent |

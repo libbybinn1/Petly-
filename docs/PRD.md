@@ -1,7 +1,7 @@
 # PRD — PetMatch
 
 **Product vision, scope, users and journeys.**
-Source: `PetMatch_Final_Project_Specification_EN.docx` §1–§7, §28–§31.
+Source: `docs/specifications/PetMatch_Final_Project_Specification_EN.docx` §1–§7, §28–§31.
 
 ---
 
