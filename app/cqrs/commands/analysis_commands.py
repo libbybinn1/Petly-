@@ -360,3 +360,138 @@ def _queue_find_my_pet_job(session: Session, adopter_profile_id: str, animal_id:
             created_at=utc_now(),
         )
     )
+
+
+@dataclass(frozen=True)
+class EnqueueFindMoreAdoptersExplanationsCommand(Command):
+    """Ask the agent to explain the adopters just ranked for one animal in discovery.
+
+    Find More Adopters scores deterministically. The prose under "Why this could work"
+    is written by the worker as an `ANIMAL_TO_ADOPTER` analysis under `FIND_MORE_ADOPTERS`.
+
+    Attributes:
+        animal_id: The animal whose discovery screen was opened.
+        adopter_profile_ids: The adopters on the page, in rank order. Pairs that
+            already have outstanding work, or a reusable analysis, are skipped.
+    """
+
+    animal_id: str
+    adopter_profile_ids: tuple[str, ...]
+
+
+class EnqueueFindMoreAdoptersExplanationsHandler(CommandHandler[int]):
+    """Inserts one FIND_MORE_ADOPTERS job per adopter that still needs an explanation."""
+
+    def handle(self, command: Command, session: Session) -> int:
+        """Queue the missing explanations and return how many were inserted."""
+        assert isinstance(command, EnqueueFindMoreAdoptersExplanationsCommand)
+
+        adopter_profile_ids = tuple(dict.fromkeys(command.adopter_profile_ids))
+        if not adopter_profile_ids:
+            return 0
+
+        needed = _adopter_ids_needing_explanation(
+            session, command.animal_id, adopter_profile_ids
+        )
+        for adopter_id in needed:
+            _queue_find_more_adopters_job(session, adopter_id, command.animal_id)
+        return len(needed)
+
+
+def _adopter_ids_needing_explanation(
+    session: Session, animal_id: str, adopter_profile_ids: tuple[str, ...]
+) -> list[str]:
+    """Decide which candidate adopters still need an explanation job."""
+    outstanding = _adopter_ids_with_outstanding_job(session, animal_id, adopter_profile_ids)
+    candidates = tuple(
+        adopter_id for adopter_id in adopter_profile_ids if adopter_id not in outstanding
+    )
+    if not candidates:
+        return []
+
+    reusable = _adopter_ids_with_reusable_analysis(session, animal_id, candidates)
+    return [adopter_id for adopter_id in candidates if adopter_id not in reusable]
+
+
+def _adopter_ids_with_outstanding_job(
+    session: Session, animal_id: str, adopter_profile_ids: tuple[str, ...]
+) -> set[str]:
+    """Which of these adopters the agent has already been asked about."""
+    rows = session.execute(
+        select(AnalysisJob.adopter_profile_id).where(
+            AnalysisJob.animal_id == animal_id,
+            AnalysisJob.adopter_profile_id.in_(adopter_profile_ids),
+            AnalysisJob.job_type.in_((
+                AnalysisJobType.FIND_MORE_ADOPTERS.value,
+                AnalysisJobType.RANK_APPLICANT.value,
+            )),
+            AnalysisJob.status.in_(_OUTSTANDING_JOB_STATUSES),
+        )
+    ).scalars()
+    return {adopter_id for adopter_id in rows if adopter_id is not None}
+
+
+def _adopter_ids_with_reusable_analysis(
+    session: Session, animal_id: str, adopter_profile_ids: tuple[str, ...]
+) -> set[str]:
+    """Which of these adopters already have an explanation worth keeping."""
+    animal = session.get(Animal, animal_id)
+    if animal is None:
+        return set()
+
+    newest_analyses = _newest_analysis_per_adopter(session, animal_id, adopter_profile_ids)
+    adopter_updated_at: dict[str, datetime] = dict(
+        session.execute(
+            select(AdopterProfile.adopter_profile_id, AdopterProfile.updated_at).where(
+                AdopterProfile.adopter_profile_id.in_(adopter_profile_ids)
+            )
+        )
+        .tuples()
+        .all()
+    )
+
+    return {
+        adopter_id
+        for adopter_id, analysis in newest_analyses.items()
+        if analysis.model_name != DETERMINISTIC_FALLBACK_MODEL
+        and adopter_id in adopter_updated_at
+        and analysis.generated_at > max(adopter_updated_at[adopter_id], animal.updated_at)
+    }
+
+
+def _newest_analysis_per_adopter(
+    session: Session, animal_id: str, adopter_profile_ids: tuple[str, ...]
+) -> dict[str, MatchAnalysis]:
+    """Read the most recent staff-side analysis for each adopter."""
+    analyses = session.execute(
+        select(MatchAnalysis)
+        .where(
+            MatchAnalysis.animal_id == animal_id,
+            MatchAnalysis.adopter_profile_id.in_(adopter_profile_ids),
+            MatchAnalysis.direction == MatchDirection.ANIMAL_TO_ADOPTER.value,
+        )
+        .order_by(MatchAnalysis.generated_at.desc())
+    ).scalars()
+
+    newest: dict[str, MatchAnalysis] = {}
+    for analysis in analyses:
+        newest.setdefault(analysis.adopter_profile_id, analysis)
+    return newest
+
+
+def _queue_find_more_adopters_job(
+    session: Session, adopter_profile_id: str, animal_id: str
+) -> None:
+    """Insert one pending Find More Adopters job for a single pairing."""
+    session.add(
+        AnalysisJob(
+            analysis_job_id=new_identifier(),
+            job_type=AnalysisJobType.FIND_MORE_ADOPTERS.value,
+            status=AnalysisJobStatus.PENDING.value,
+            adopter_profile_id=adopter_profile_id,
+            animal_id=animal_id,
+            attempt_count=0,
+            created_at=utc_now(),
+        )
+    )
+

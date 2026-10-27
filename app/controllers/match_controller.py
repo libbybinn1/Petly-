@@ -23,6 +23,7 @@ from werkzeug.wrappers import Response
 from app.controllers.helpers import ViewResult, get_bus, parse_checkbox
 from app.cqrs.commands.analysis_commands import (
     MAXIMUM_DESCRIPTION_LENGTH,
+    EnqueueFindMoreAdoptersExplanationsCommand,
     EnqueueFindMyPetExplanationsCommand,
     EnqueueIntentInterpretationCommand,
     EnqueueSemanticAdopterSearchCommand,
@@ -285,6 +286,54 @@ def find_more_adopters(animal_id: str) -> str:
         semantic=bus.dispatch_query(GetSemanticAdopterMatchesQuery(animal_id=animal_id)),
         mode="discovery",
     )
+
+
+@match_blueprint.route("/animals/<animal_id>/discover/explain", methods=["POST"])
+@match_blueprint.route("/animals/<animal_id>/explain", methods=["POST"])
+@require_sign_in
+@require_staff()
+def queue_discovery_explanations(animal_id: str) -> Response:
+    """Queue AI explanations for all suggested adopters or applicants for one animal."""
+    bus = get_bus()
+    return_to = request.form.get("return_to", "discovery")
+    if return_to == "applicants":
+        ranking = bus.dispatch_query(RankApplicantsQuery(animal_id=animal_id))
+    else:
+        ranking = bus.dispatch_query(FindMoreAdoptersQuery(animal_id=animal_id))
+    if ranking is not None and ranking.candidates:
+        adopter_ids = tuple(c.adopter_profile_id for c in ranking.candidates)
+        bus.dispatch_command(
+            EnqueueFindMoreAdoptersExplanationsCommand(
+                animal_id=animal_id,
+                adopter_profile_ids=adopter_ids,
+            )
+        )
+    if return_to == "applicants":
+        return redirect(url_for("matches.find_my_adopter", animal_id=animal_id))
+    return redirect(url_for("matches.find_more_adopters", animal_id=animal_id))
+
+
+@match_blueprint.route(
+    "/animals/<animal_id>/discover/explain/<adopter_profile_id>", methods=["POST"]
+)
+@match_blueprint.route(
+    "/animals/<animal_id>/explain/<adopter_profile_id>", methods=["POST"]
+)
+@require_sign_in
+@require_staff()
+def queue_candidate_explanation(animal_id: str, adopter_profile_id: str) -> Response:
+    """Queue an AI explanation for a single suggested adopter or applicant."""
+    bus = get_bus()
+    bus.dispatch_command(
+        EnqueueFindMoreAdoptersExplanationsCommand(
+            animal_id=animal_id,
+            adopter_profile_ids=(adopter_profile_id,),
+        )
+    )
+    return_to = request.form.get("return_to", "discovery")
+    if return_to == "applicants":
+        return redirect(url_for("matches.find_my_adopter", animal_id=animal_id))
+    return redirect(url_for("matches.find_more_adopters", animal_id=animal_id))
 
 
 @match_blueprint.route("/animals/<animal_id>/discover/semantic", methods=["POST"])

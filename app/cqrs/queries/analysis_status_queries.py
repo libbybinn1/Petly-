@@ -40,6 +40,7 @@ ADOPTER_MATCH_JOB_TYPES = (AnalysisJobType.FIND_MY_PET.value,)
 STAFF_MATCH_JOB_TYPES = (
     AnalysisJobType.RANK_APPLICANT.value,
     AnalysisJobType.FIND_MORE_ADOPTERS.value,
+    AnalysisJobType.SEMANTIC_ADOPTER_SEARCH.value,
 )
 
 
@@ -171,13 +172,23 @@ def _newest_analysis_epoch(session: Session, query: GetAnalysisStatusQuery) -> i
     if query.animal_id is not None:
         statement = statement.where(MatchAnalysis.animal_id == query.animal_id)
 
-    newest: datetime | None = session.execute(statement).scalar_one_or_none()
-    if newest is None:
+    analysis_newest: datetime | None = session.execute(statement).scalar_one_or_none()
+
+    # Completed jobs like SEMANTIC_ADOPTER_SEARCH write to AnalysisJob rather
+    # than MatchAnalysis. Including their completed_at advances generation on completion.
+    job_statement = _narrow_to_scope(
+        select(func.max(AnalysisJob.completed_at)).where(
+            AnalysisJob.status == AnalysisJobStatus.COMPLETED.value
+        ),
+        query,
+    )
+    job_newest: datetime | None = session.execute(job_statement).scalar_one_or_none()
+
+    candidates = [dt for dt in (analysis_newest, job_newest) if dt is not None]
+    if not candidates:
         return 0
-    # `.timestamp()` on a naive value reads it as *local* time, so the
-    # generation number jumped by the machine's UTC offset - and every
-    # poller saw one spurious change the first time it compared two
-    # answers across that boundary.
+
+    newest = max(candidates)
     return int(as_aware_utc(newest).timestamp())
 
 

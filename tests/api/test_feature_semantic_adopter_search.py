@@ -164,7 +164,7 @@ class TestThePanel:
         """Proves the panel and its button render before any search exists."""
         html = staff_client.get(discover_url(world["available_animal_id"])).get_data(as_text=True)
 
-        assert "Semantic matches (vector search)" in html
+        assert "Semantic Search" in html
         assert "No semantic search has been run" in html
         assert "Run semantic search" in html
 
@@ -180,7 +180,7 @@ class TestThePanel:
 
         html = staff_client.get(discover_url(animal_id)).get_data(as_text=True)
 
-        assert "The agent is embedding the opted-in profiles" in html
+        assert "Searching through adopter profiles" in html
         assert 'http-equiv="refresh"' in html
 
     def test_a_failed_search_says_so_and_keeps_the_ranking(

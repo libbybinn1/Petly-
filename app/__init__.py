@@ -165,6 +165,8 @@ def _register_commands(bus: MessageBus, settings: Configuration) -> None:
     from app.cqrs.commands.analysis_commands import (
         EnqueueFindMyPetExplanationsCommand,
         EnqueueFindMyPetExplanationsHandler,
+        EnqueueFindMoreAdoptersExplanationsCommand,
+        EnqueueFindMoreAdoptersExplanationsHandler,
         EnqueueIntentInterpretationCommand,
         EnqueueIntentInterpretationHandler,
         EnqueueSemanticAdopterSearchCommand,
@@ -218,6 +220,10 @@ def _register_commands(bus: MessageBus, settings: Configuration) -> None:
     )
     bus.register_command(
         EnqueueFindMyPetExplanationsCommand, EnqueueFindMyPetExplanationsHandler()
+    )
+    bus.register_command(
+        EnqueueFindMoreAdoptersExplanationsCommand,
+        EnqueueFindMoreAdoptersExplanationsHandler(),
     )
     bus.register_command(
         EnqueueSemanticAdopterSearchCommand, EnqueueSemanticAdopterSearchHandler()

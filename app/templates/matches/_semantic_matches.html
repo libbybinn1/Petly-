@@ -12,12 +12,10 @@
          aria-labelledby="semantic-matches-title">
   <div class="section-heading" style="margin-bottom: var(--space-3)">
     <div>
-      <h2 id="semantic-matches-title">Semantic matches (vector search)</h2>
+      <h2 id="semantic-matches-title">Semantic Search</h2>
       <p>
-        Adopter profiles are embedded as short plain-language résumés; this
-        search finds the ones closest in meaning to {{ ranking.animal_name }}'s
-        description. Similarity is a lead to look at, not a score: the
-        eligibility rules and the deterministic score still decide.
+        Find potential adopters whose lifestyle and home description best match
+        {{ ranking.animal_name }}'s personality and needs.
       </p>
     </div>
     <form method="post" action="{{ url_for('matches.queue_semantic_adopter_search', animal_id=ranking.animal_id) }}">
@@ -31,30 +29,32 @@
 
   {% if not semantic %}
     <p class="pending">
-      No semantic search has been run for {{ ranking.animal_name }} yet. It runs in
-      the agent process, so results appear on this page a little after you start it.
+      No semantic search has been run for {{ ranking.animal_name }} yet. Click the button above
+      to find matching adopters.
     </p>
 
   {% elif semantic.is_waiting %}
     <div class="pending-block">
       {% include "_skeleton.html" %}
       <p class="pending">
-        The agent is embedding the opted-in profiles and searching them. Only
-        profiles that changed since the last search are embedded again. This page
-        refreshes itself.
+        Searching through adopter profiles to find the best match for {{ ranking.animal_name }}...
+        This page refreshes automatically.
       </p>
       <p class="pending__meta">
         <svg class="icon" aria-hidden="true"><use href="#icon-clock"></use></svg>
         Queued {{ semantic.queued_at.relative_label }}
       </p>
       <a class="btn btn--ghost btn--small" href="{{ request.path }}#semantic-matches">Refresh</a>
+      <script>
+        setTimeout(function() {
+          window.location.replace("{{ request.path }}#semantic-matches");
+        }, 3500);
+      </script>
     </div>
 
   {% elif semantic.has_failed %}
     <div class="alert alert--warning" style="margin: 0">
-      The semantic search could not be completed — the agent or its embedding model
-      may not be running. The deterministic ranking above is unaffected. You can
-      run the search again once the agent is up.
+      The search could not be completed right now. Please try clicking the button to run the search again in a moment.
     </div>
 
   {% elif not semantic.matches %}
@@ -65,22 +65,20 @@
 
   {% else %}
     <p class="pending__meta" style="margin-bottom: var(--space-3)">
-      The {{ semantic.matches|length }} closest of {{ semantic.indexed_profile_count }}
-      opted-in profile{{ '' if semantic.indexed_profile_count == 1 else 's' }} ·
-      {{ semantic.eligible_count }} eligible under the rules ·
-      searched {{ semantic.searched_at.relative_label if semantic.searched_at else '' }}
-      {%- if semantic.embedding_model %} · {{ semantic.embedding_model }}{% endif %}
+      {{ semantic.matches|length }} potential match{{ 'es' if semantic.matches|length != 1 else '' }} found ·
+      {{ semantic.eligible_count }} eligible under adoption rules ·
+      Searched {{ semantic.searched_at.relative_label if semantic.searched_at else '' }}
     </p>
     <div class="table-wrap">
       <table class="table">
         <caption class="sr-only">
-          Adopters ranked by similarity of their profile to {{ ranking.animal_name }}
+          Adopters ranked by match to {{ ranking.animal_name }}
         </caption>
         <thead>
           <tr>
             <th scope="col">#</th>
             <th scope="col">Adopter</th>
-            <th scope="col">Similarity</th>
+            <th scope="col">Match</th>
             <th scope="col">Rule-based score</th>
             <th scope="col">Eligibility</th>
             <th scope="col"><span class="sr-only">Actions</span></th>
@@ -95,7 +93,7 @@
               {% if match.city %}<span class="table__sub">{{ match.city }}</span>{% endif %}
             </td>
             <td>
-              <span class="similarity" title="Cosine similarity {{ '%.3f'|format(match.similarity) }}">
+              <span class="similarity" title="Match {{ match.similarity_percent }}%">
                 <span class="similarity__track" aria-hidden="true">
                   <span class="similarity__fill" style="width: {{ match.similarity_percent }}%"></span>
                 </span>
@@ -136,8 +134,8 @@
       </table>
     </div>
     <p class="pending" style="margin-top: var(--space-3)">
-      Similarity compares wording, not suitability: a close profile can still be ruled
-      out by a hard constraint, and only a staff member decides an adoption.
+      Matches reflect how closely an adopter's description fits {{ ranking.animal_name }}.
+      Adoption decisions are always made by shelter staff.
     </p>
   {% endif %}
 </section>
